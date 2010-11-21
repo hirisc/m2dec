@@ -1,0 +1,60 @@
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual C++ Express 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "m2dec", "m2dec.vcproj", "{80E327AE-A6ED-406E-8AF3-5BC7BB231084}"
+	ProjectSection(ProjectDependencies) = postProject
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23} = {C48FB072-11DD-4FD8-87AA-D9D20637AC23}
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE} = {06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libm2dec", "libm2dec.vcproj", "{C48FB072-11DD-4FD8-87AA-D9D20637AC23}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libmpegdemux", "libmpegdemux.vcproj", "{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "openmax", "openmax.vcproj", "{04A5012C-8141-432D-B591-2BACBE332DD8}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "thrplayer", "thrplayer.vcproj", "{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}"
+	ProjectSection(ProjectDependencies) = postProject
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23} = {C48FB072-11DD-4FD8-87AA-D9D20637AC23}
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE} = {06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "h264dec", "h264dec.vcproj", "{26572B45-DC91-498E-8637-07DE48FF452B}"
+	ProjectSection(ProjectDependencies) = postProject
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23} = {C48FB072-11DD-4FD8-87AA-D9D20637AC23}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Debug|Win32.ActiveCfg = Debug|Win32
+		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Debug|Win32.Build.0 = Debug|Win32
+		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Release|Win32.ActiveCfg = Release|Win32
+		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Release|Win32.Build.0 = Release|Win32
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23}.Debug|Win32.ActiveCfg = Debug|Win32
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23}.Debug|Win32.Build.0 = Debug|Win32
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23}.Release|Win32.ActiveCfg = Release|Win32
+		{C48FB072-11DD-4FD8-87AA-D9D20637AC23}.Release|Win32.Build.0 = Release|Win32
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}.Debug|Win32.ActiveCfg = Debug|Win32
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}.Debug|Win32.Build.0 = Debug|Win32
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}.Release|Win32.ActiveCfg = Release|Win32
+		{06EF9CB4-4CC1-4CFE-AC1F-A88A055D60BE}.Release|Win32.Build.0 = Release|Win32
+		{04A5012C-8141-432D-B591-2BACBE332DD8}.Debug|Win32.ActiveCfg = Debug|Win32
+		{04A5012C-8141-432D-B591-2BACBE332DD8}.Debug|Win32.Build.0 = Debug|Win32
+		{04A5012C-8141-432D-B591-2BACBE332DD8}.Release|Win32.ActiveCfg = Release|Win32
+		{04A5012C-8141-432D-B591-2BACBE332DD8}.Release|Win32.Build.0 = Release|Win32
+		{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}.Debug|Win32.ActiveCfg = Debug|Win32
+		{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}.Debug|Win32.Build.0 = Debug|Win32
+		{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}.Release|Win32.ActiveCfg = Release|Win32
+		{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}.Release|Win32.Build.0 = Release|Win32
+		{26572B45-DC91-498E-8637-07DE48FF452B}.Debug|Win32.ActiveCfg = Debug|Win32
+		{26572B45-DC91-498E-8637-07DE48FF452B}.Debug|Win32.Build.0 = Debug|Win32
+		{26572B45-DC91-498E-8637-07DE48FF452B}.Release|Win32.ActiveCfg = Release|Win32
+		{26572B45-DC91-498E-8637-07DE48FF452B}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
