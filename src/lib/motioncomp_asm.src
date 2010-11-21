@@ -1,0 +1,415 @@
+;  Motion Compensation for MPEG-2.
+;  Copyright 2008 Takayuki Minegishi
+;
+;  Permission is hereby granted, free of charge, to any person
+;  obtaining a copy of this software and associated documentation
+;  files (the "Software"), to deal in the Software without
+;  restriction, including without limitation the rights to use, copy,
+;  modify, merge, publish, distribute, sublicense, and/or sell copies
+;  of the Software, and to permit persons to whom the Software is
+;  furnished to do so, subject to the following conditions:
+;  
+;  The above copyright notice and this permission notice shall be
+;  included in all copies or substantial portions of the Software.
+;  
+;  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+;  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+;  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+;  NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+;  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+;  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+;  DEALINGS IN THE SOFTWARE.
+;
+
+	.section	PM2D_FAST
+
+; void m2d_copy16xn(const uint8_t *src, uint8_t *dst, int stride, int height);
+; void m2d_bilinear16_vert_22_rnd(const uint8_t *src, uint8_t *dst, int stride, int height);
+; void m2d_bilinear16_horiz_22_rnd(const uint8_t *src, uint8_t *dst, int stride, int height);
+
+
+	.export	_m2d_copy16xn, _m2d_bilinear16_vert_22_rnd, _m2d_bilinear16_horiz_22_rnd
+	.export	_m2d_copy16xn_add, _m2d_bilinear16_vert_22_rnd_add, _m2d_bilinear16_horiz_22_rnd_add
+	.export	_m2d_bilinear_chroma_horiz_rnd, _m2d_bilinear_chroma_horiz_rnd_add
+
+	.align	4
+_m2d_copy16xn:
+	MOV	R4,R0
+	TST	#3,R0
+	BF/S	?UNALIGNED
+	SUB	R6,R5
+	MOV.L	@R4,R2
+?L01:
+	MOV.L	@(8,R4),R0
+	ADD	R6,R5
+	MOV.L	R2,@R5
+	DT	R7
+	MOV.L	@(4,R4),R2
+	MOV.L	@(12,R4),R1
+	MOV.L	R0,@(8,R5)
+	ADD	R6,R4
+	MOV.L	R2,@(4,R5)
+	MOV.L	@R4,R2
+	BF/S	?L01
+	MOV.L	R1,@(12,R5)
+	RTS
+?UNALIGNED:
+	ADD	#-12,R6
+?L02:
+	MOVUA.L	@R4+,R0
+	ADD	R6,R5
+	MOV	R0,R2
+	ADD	#12,R5
+	MOVUA.L	@R4+,R0
+	MOV.L	R2,@R5
+	MOV.L	R0,@(4,R5)
+	MOVUA.L	@R4+,R0
+	DT	R7
+	MOV.L	R0,@(8,R5)
+	MOVUA.L	@R4,R0
+	ADD	R6,R4
+	BF/S	?L02
+	MOV.L	R0,@(12,R5)
+	RTS
+	NOP
+
+;	uint32_t x = s1 ^ s2;
+;	return (s1 & s2) + ((x & ~X01) >> 1) + (x & X01);
+	.macro	AVERAGE	REGA,REGB
+	MOV	\REGA,R3
+	XOR	\REGB,\REGA	; x
+	AND	R3,\REGB
+	MOV	\REGA,R3
+	AND	R9,\REGA	; &= H'FEFEFEFE
+	AND	R8,R3	; &= H'01010101
+	SHLR	\REGA
+	ADD	R3,\REGB
+	ADD	\REGA,\REGB
+	.endm
+
+	.macro	AVERAG4	REGA,REGB,REGC
+	MOV	\REGA,R3
+	XOR	\REGB,\REGA	; x
+	AND	R3,\REGB
+	MOV	\REGA,R3
+	AND	R9,\REGA	; &= H'FEFEFEFE
+	AND	R8,R3	; &= H'01010101
+	SHLR	\REGA
+	ADD	R3,\REGB
+	MOV	\REGC,R3
+	ADD	\REGA,\REGB
+
+	XOR	\REGB,\REGC
+	AND	R3,\REGB
+	MOV	\REGC,R3
+	AND	R9,\REGC
+	AND	R8,R3
+	SHLR	\REGC
+	ADD	R3,\REGB
+	ADD	\REGB,\REGC
+	.endm
+
+
+_m2d_bilinear16_vert_22_rnd:
+	MOVUA.L	@R4+,R0
+	MOV.L	R8,@-R15
+	MOV	R0,R1
+	MOV.L	R9,@-R15
+	MOVUA.L	@R4+,R0
+	MOV.L	R10,@-R15
+	MOV.L	R11,@-R15
+	MOV	R0,R2
+	MOV.L	R12,@-R15
+	MOVUA.L	@R4+,R0
+	MOV.L	#H'01010101,R8
+	MOV	R0,R10
+	MOVUA.L	@R4,R0
+	ADD	R6,R4
+	MOV	R0,R11	; R1,R2,R10,R11 : top0, top1, top2, top3
+	ADD	#-12,R4
+	MOVUA.L	@R4+,R0
+	NOT	R8,R9	; R9: 0xfefefefe
+?L01:
+	MOV	R0,R12
+	AVERAGE	R1,R0
+	MOV	R12,R1	; R1: top0
+	MOV.L	R0,@R5
+
+	MOVUA.L	@R4+,R0
+	MOV	R0,R12
+	AVERAGE	R2,R0
+	MOV	R12,R2
+	MOV.L	R0,@(4,R5)
+
+	MOVUA.L	@R4+,R0
+	MOV	R0,R12
+	AVERAGE	R10,R0
+	MOV	R12,R10
+	MOV.L	R0,@(8,R5)
+
+	MOVUA.L	@R4,R0
+	ADD	#-12,R4
+	MOV	R0,R12
+	ADD	R6,R4	; src += stride
+	AVERAGE	R0,R11
+	MOVUA.L	@R4+,R0
+	DT	R7
+	MOV.L	R11,@(12,R5)
+	MOV	R12,R11
+	BF/S	?L01
+	ADD	R6,R5	; dst += stride
+
+	MOV.L	@R15+,R12
+	MOV.L	@R15+,R11
+	MOV.L	@R15+,R10
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+; Actually, this is same as luma horiz except for R3.
+;void m2d_bilinear_chroma_horiz_rnd(const uint8_t *src, uint8_t *dst, int stride, int height);
+
+_m2d_bilinear_chroma_horiz_rnd:
+	BRA	m2d_bilinear16_horiz_H01
+	MOV	#2,R2
+_m2d_bilinear16_horiz_22_rnd:
+	MOV	#1,R2
+m2d_bilinear16_horiz_H01:
+	ADD	R4,R2
+	MOVUA.L	@R4+,R0
+	MOV.L	R8,@-R15
+	MOV.L	R9,@-R15
+	MOV.L	#H'01010101,R8
+	ADD	#-12,R6
+	NOT	R8,R9	; R9: 0xfefefefe
+?L01:
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	AVERAGE	R0,R1
+	MOVUA.L	@R4+,R0
+	MOV.L	R1,@R5
+
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	AVERAGE	R0,R1
+	MOVUA.L	@R4+,R0
+	MOV.L	R1,@(4,R5)
+
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	AVERAGE	R0,R1
+	MOVUA.L	@R4,R0
+	MOV.L	R1,@(8,R5)
+
+	MOV	R0,R1
+	MOVUA.L	@R2,R0
+	AVERAGE	R0,R1
+	ADD	R6,R4	; src0 += stride
+	DT	R7
+	MOVUA.L	@R4+,R0
+	ADD	R6,R2	; src1 += stride
+	MOV.L	R1,@(12,R5)
+	ADD	R6,R5	; dst += stride
+	BF/S	?L01
+	ADD	#12,R5
+
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	.align	4
+_m2d_copy16xn_add:
+	MOV.L	R8,@-R15
+	MOV	R4,R0
+	MOV.L	R9,@-R15
+	TST	#3,R0
+	MOV.L	#H'01010101,R8
+	BF/S	?UNALIGNED
+	NOT	R8,R9
+	MOV.L	@R4,R2
+?L01:
+	MOV.L	@R5,R1
+	AVERAGE	R2,R1
+	MOV.L	R1,@R5
+
+	MOV.L	@(4,R4),R2
+	MOV.L	@(4,R5),R1
+	AVERAGE	R2,R1
+	MOV.L	R1,@(4,R5)
+
+	MOV.L	@(8,R4),R2
+	MOV.L	@(8,R5),R1
+	AVERAGE	R2,R1
+	MOV.L	R1,@(8,R5)
+
+	MOV.L	@(12,R4),R2
+	MOV.L	@(12,R5),R1
+	ADD	R6,R4
+	AVERAGE	R2,R1
+	MOV.L	@R4,R2
+	DT	R7
+	MOV.L	R1,@(12,R5)
+	BF/S	?L01
+	ADD	R6,R5
+
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+?UNALIGNED:
+	MOVUA.L	@R4+,R0
+?L02:
+	MOV.L	@R5,R1
+	AVERAGE	R0,R1
+	MOV.L	R1,@R5
+
+	MOVUA.L	@R4+,R0
+	MOV.L	@(4,R5),R1
+	AVERAGE	R0,R1
+	MOV.L	R1,@(4,R5)
+
+	MOVUA.L	@R4+,R0
+	MOV.L	@(8,R5),R1
+	AVERAGE	R0,R1
+	MOV.L	R1,@(8,R5)
+
+	MOVUA.L	@R4,R0
+	MOV.L	@(12,R5),R1
+	ADD	R6,R4
+	ADD	#-12,R4
+	AVERAGE	R0,R1
+	MOVUA.L	@R4+,R0
+	DT	R7
+	MOV.L	R1,@(12,R5)
+	BF/S	?L02
+	ADD	R6,R5
+
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+
+_m2d_bilinear16_vert_22_rnd_add:
+	MOVUA.L	@R4+,R0
+	MOV.L	R8,@-R15
+	MOV	R0,R1
+	MOV.L	R9,@-R15
+	MOVUA.L	@R4+,R0
+	MOV.L	R10,@-R15
+	MOV	R0,R2
+	MOVUA.L	@R4+,R0
+	MOV.L	R11,@-R15
+	MOV	R0,R10
+	MOVUA.L	@R4,R0
+	ADD	R6,R4
+	MOV.L	R12,@-R15
+	MOV	R0,R11	; R1,R2,R10,R11 : top0, top1, top2, top3
+	ADD	#-12,R4
+	MOVUA.L	@R4+,R0
+	MOV.L	#H'01010101,R8
+	MOV.L	R13,@-R15
+	NOT	R8,R9	; R9: 0xfefefefe
+?L01:
+	MOV	R0,R12
+	MOV.L	@R5,R13
+	AVERAG4	R0,R1,R13
+	MOVUA.L	@R4+,R0
+	MOV	R12,R1	; R1: top0
+	MOV.L	R13,@R5
+
+	MOV	R0,R12
+	MOV.L	@(4,R5),R13
+	AVERAG4	R0,R2,R13
+	MOVUA.L	@R4+,R0
+	MOV	R12,R2
+	MOV.L	R13,@(4,R5)
+
+	MOV	R0,R12
+	MOV.L	@(8,R5),R13
+	AVERAG4	R0,R10,R13
+	MOVUA.L	@R4,R0
+	MOV	R12,R10
+	MOV.L	R13,@(8,R5)
+
+	MOV	R0,R12
+	ADD	R6,R4
+	MOV.L	@(12,R5),R13
+	ADD	#-12,R4	; src += stride - 12
+	AVERAG4	R0,R11,R13
+	MOVUA.L	@R4+,R0
+	DT	R7
+	MOV	R12,R11
+	MOV.L	R13,@(12,R5)
+
+	BF/S	?L01
+	ADD	R6,R5	; dst += stride
+
+	MOV.L	@R15+,R13
+	MOV.L	@R15+,R12
+	MOV.L	@R15+,R11
+	MOV.L	@R15+,R10
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+
+_m2d_bilinear_chroma_horiz_rnd_add:
+	BRA	m2d_bilinear16_horizadd_H01
+	MOV	#2,R2
+_m2d_bilinear16_horiz_22_rnd_add:
+	MOV	#1,R2
+m2d_bilinear16_horizadd_H01:
+	ADD	R4,R2
+	MOVUA.L	@R4+,R0
+	MOV.L	R8,@-R15
+	MOV.L	R9,@-R15
+	MOV.L	#H'01010101,R8
+	ADD	#-12,R6
+	MOV.L	R10,@-R15
+	NOT	R8,R9	; R9: 0xfefefefe
+?L01:
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	MOV.L	@R5,R10
+	AVERAG4	R0,R1,R10
+	MOVUA.L	@R4+,R0
+	MOV.L	R10,@R5
+
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	MOV.L	@(4,R5),R10
+	AVERAG4	R0,R1,R10
+	MOVUA.L	@R4+,R0
+	MOV.L	R10,@(4,R5)
+
+	MOV	R0,R1
+	MOVUA.L	@R2+,R0
+	MOV.L	@(8,R5),R10
+	AVERAG4	R0,R1,R10
+	MOVUA.L	@R4,R0
+	MOV.L	R10,@(8,R5)
+
+	MOV	R0,R1
+	MOVUA.L	@R2,R0
+	ADD	R6,R4	; src0 += stride
+	MOV.L	@(12,R5),R10
+	ADD	R6,R2	; src1 += stride
+	AVERAG4	R0,R1,R10
+	MOVUA.L	@R4+,R0
+	DT	R7
+	MOV.L	R10,@(12,R5)
+	ADD	R6,R5	; dst += stride
+	BF/S	?L01
+	ADD	#12,R5
+
+	MOV.L	@R15+,R10
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+	.pool
+
+	.end

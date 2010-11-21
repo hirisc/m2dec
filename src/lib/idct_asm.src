@@ -1,0 +1,405 @@
+;  iDCT for MPEG-2 or WMV8.
+;  Copyright 2008 Takayuki Minegishi
+;
+;  Permission is hereby granted, free of charge, to any person
+;  obtaining a copy of this software and associated documentation
+;  files (the "Software"), to deal in the Software without
+;  restriction, including without limitation the rights to use, copy,
+;  modify, merge, publish, distribute, sublicense, and/or sell copies
+;  of the Software, and to permit persons to whom the Software is
+;  furnished to do so, subject to the following conditions:
+;  
+;  The above copyright notice and this permission notice shall be
+;  included in all copies or substantial portions of the Software.
+;  
+;  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+;  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+;  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+;  NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+;  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+;  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+;  DEALINGS IN THE SOFTWARE.
+;
+	.section	CM2D
+
+W1:	.equ	2841
+W2:	.equ	2676
+W3:	.equ	2408
+W5:	.equ	1609
+W6:	.equ	1108
+W7:	.equ	565
+
+_m2d_tw:
+	.data.w	W7
+	.data.w	(W1 - W7)
+	.data.w	-(W1 + W7)
+	.data.w	W3
+	.data.w	-(W3 - W5)
+	.data.w	-(W3 + W5)
+	.data.w	181
+	.data.w	W6
+	.data.w	(W2 - W6)
+	.data.w	-(W2 + W6)
+
+	.section	PM2D, CODE, ALIGN=4
+	.export	_m2d_prefetch_mb
+	.export	_m2d_clear_coef
+	.export	_m2d_idct_horizontal
+
+; void m2d_prefetch_mb(uint8_t *dst, int32_t dst_stride)
+	.align	4
+_m2d_prefetch_mb:
+	MOV	R4,R6
+	ADD	R5,R4
+	MOV.B	#(16/2 - 2),R7
+	ADD	R5,R5
+?LOOP:
+	ADD	R5,R6
+	PREF	@R4
+	DT	R7
+	PREF	@R6
+	BF/S	?LOOP
+	ADD	R5,R4
+
+	ADD	R5,R6
+	PREF	@R4
+	RTS
+	PREF	@R6
+
+; void m2d_clear_coef(sint16_t *dst, int idx)
+	.align	4
+_m2d_clear_coef:
+	TST	R5,R5
+	MOV	#0,R0
+	MOV	#10,R7
+	BF/S	?LOOP
+	MOV.W	R0,@(2,R4)
+	MOV.W	R0,@R4
+?LOOP:
+	MOV.L	R0,@(4,R4)
+	DT	R7
+	MOV.L	R0,@(8,R4)
+	ADD	#12,R4
+	BF/S	?LOOP
+	MOV.L	R0,@R4
+	RTS
+	MOV.L	R0,@(4,R4)
+
+
+	.macro	CALC_PAIR	REGA,REGB
+	MOV	\REGA,R3
+	OR	\REGB,R3
+	TST	R3,R3
+	BT	?SKIP\@
+	MOV	\REGA,R3
+	MOV.W	@R9+,R8
+	ADD	\REGB,R3
+	MULS.W	R8,R3
+	MOV.W	@R9+,R7
+	STS	MACL,R8
+	MULS.W	R7,\REGA
+	MOV.W	@R9+,R3
+	STS	MACL,\REGA
+	MULS.W	\REGB,R3
+	ADD	R8,\REGA
+	STS	MACL,\REGB
+	ADD	#-6,R9
+	ADD	R8,\REGB
+?SKIP\@:
+	ADD	#6,R9
+	.endm
+
+	.align	4
+; m2d_idct_horizontal(int16_t *coef, unsigned int sum_coef)
+_m2d_idct_horizontal:
+	MOV.L	R8,@-R15
+	MOV.L	R9,@-R15
+	MOV.L	R10,@-R15
+	MOV.L	R11,@-R15
+	MOV.L	R12,@-R15
+	MOV.L	R13,@-R15
+	MOV.B	#8,R1
+	MOV.L	R14,@-R15
+?LOOP:
+	SHLR	R5
+	MOV.W	@R4+,R10
+	BT	?FULL_CALC
+	TST	R10,R10
+	ADD	#-2,R4
+	BT	?NEXT
+	SHLL2	R10
+	SHLL	R10
+	EXTU.W	R10,R6
+	SHLL16	R10
+	OR	R6,R10
+	MOV.L	R10,@R4
+	MOV.L	R10,@(4,R4)
+	MOV.L	R10,@(8,R4)
+;	BRA	?NEXT
+	MOV.L	R10,@(12,R4)
+?NEXT:
+	DT	R1
+	BF/S	?LOOP
+	ADD	#16,R4
+	BRA	?END
+?FULL_CALC:
+;	x0 = 2048s0 - 2048s4 + 128
+;	x1 = 2048s0 + 2048s4 + 128
+;	x4 = W1s1 + W7s7;
+;	x5 = W7s1 - W1s7;
+;	x6 = W5s5 + W3s3
+;	x7 = W3s5 - W5s3
+;	x4 = x4 - x6 = (W7s7 + W1s1) - (W3s3 + W5s5);
+;	x6 = x4 + x6 = (W7s7 + W1s1) + (W3s3 + W5s5);
+;	x5 = x5 - x7 = (W7s1 - W1s7) - (W3s5 - W5s3);
+;	x7 = x5 + x7 = (W7s1 - W1s7) + (W3s5 - W5s3);
+;	x5 = (int32_t) ((x4 + x5) * 181 + 128) >> 8;
+;	x4 = (int32_t) ((x4 - x5) * 181 + 128) >> 8;
+;	x2 = W6s2 - W2s6;
+;	x3 = W2s2 + W6s6;
+;	x3 = x1 + x3 = (2048s0 + 2048s4 + 128) + (W6s6 + W2s2);
+;	x1 = x1 - x3 = (2048s0 + 2048s4 + 128) - (W6s6 + W2s2);
+;	x2 = x0 + x2 = (2048s0 - 2048s4 + 128) + (W6s2 - W2s6);
+;	x0 = x0 - x2 = (2048s0 - 2048s4 + 128) - (W6s2 - W2s6);
+;	src_coef[0] = (int32_t) ((x3 + x6) >> 8);
+;	src_coef[1] = (int32_t) ((x2 + x5) >> 8);
+;	src_coef[2] = (int32_t) ((x0 + x4) >> 8);
+;	src_coef[3] = (int32_t) ((x1 + x7) >> 8);
+;	src_coef[4] = (int32_t) ((x1 - x7) >> 8);
+;	src_coef[5] = (int32_t) ((x0 - x4) >> 8);
+;	src_coef[6] = (int32_t) ((x2 - x5) >> 8);
+;	src_coef[7] = (int32_t) ((x3 - x6) >> 8);
+	MOV.W	@R4+,R11
+				MOV.B	#11,R2
+	MOV.W	@(10,R4),R0	; coef[7]
+				MOV.B	#127,R6
+	MOV.W	@R4+,R12
+				ADD	#1,R6	; D'128
+	MOV.L	#_m2d_tw,R9
+				SHLD	R2,R10
+	CALC_PAIR	R11,R0	; x4, x5
+	MOV.W	@R4+,R13
+				ADD	R6,R10
+	MOV.W	@R4+,R14
+				SHLD	R2,R14
+				MOV	R10,R7
+				SUB	R14,R10	; x0 = s0-s4
+	MOV.W	@R4+,R2
+				ADD	R7,R14	; x1 = s0+s4
+	CALC_PAIR	R2,R13	; x6, x7
+	MOV	R11,R7
+	SUB	R2,R11		; x4 = x4 - x6
+	MOV	R0,R8
+	ADD	R7,R2		; x6 = x4 + x6
+	SUB	R13,R0		; x5 = x5 - x7
+	MOV.W	@R9+,R7
+	ADD	R8,R13		; x7 = x5 + x7
+	MOV	R0,R8
+	ADD	R11,R0
+	MUL.L	R7,R0
+	SUB	R8,R11
+	STS	MACL,R0
+	MUL.L	R7,R11
+	ADD	R6,R0
+	MOV.B	#-8,R8
+	STS	MACL,R11
+	SHAD	R8,R0		; x5
+	ADD	R6,R11
+	SHAD	R8,R11		; x4
+
+	MOV.W	@R4,R6
+	ADD	#4,R4
+	CALC_PAIR	R12,R6	; x3, x2
+	MOV	R14,R7
+	SUB	R12,R14		; x1 = x1 - x3
+	MOV	R10,R8
+	ADD	R7,R12		; x3 = x1 + x3
+	SUB	R6,R10		; x0 = x0 - x2
+				MOV	R12,R7
+	ADD	R8,R6		; x2 = x0 + x2
+	SUB	R2,R12
+				MOV	R6,R8
+	SHLR8	R12
+				MOV	R10,R9
+	SUB	R0,R6
+	MOV.W	R12,@-R4
+	SHLR8	R6
+				MOV	R14,R12
+	SUB	R11,R10
+	MOV.W	R6,@-R4
+	SHLR8	R10
+	SUB	R13,R14
+	MOV.W	R10,@-R4
+	SHLR8	R14
+	ADD	R12,R13		; d[3]
+	MOV.W	R14,@-R4
+	SHLR8	R13
+	ADD	R9,R11		; d[2]
+	MOV.W	R13,@-R4
+	SHLR8	R11
+	ADD	R8,R0		; d[1]
+	MOV.W	R11,@-R4
+	SHLR8	R0
+	ADD	R7,R2		; d[0]
+	MOV.W	R0,@-R4
+	SHLR8	R2
+	DT	R1
+	MOV.W	R2,@-R4
+	BT	?END
+	BRA	?LOOP
+;	BF/S	?LOOP
+	ADD	#16,R4
+?END:
+	MOV.L	@R15+,R14
+	MOV.L	@R15+,R13
+	MOV.L	@R15+,R12
+	MOV.L	@R15+,R11
+	MOV.L	@R15+,R10
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+	.align	4
+;void m2d_idct_intra_luma(uint8_t *dst_base, int32_t dst_stride, sint16_t *src_coef, uint32_t coef_exist)
+_m2d_idct_intra_luma:
+	MOV.L	R8,@-R15
+	MOV.L	R9,@-R15
+	MOV.L	R10,@-R15
+	MOV.L	R11,@-R15
+	MOV.L	R12,@-R15
+	MOV.L	R13,@-R15
+	MOV.L	R14,@-R15
+	STS.L	PR,@-R15
+
+	MOV.L	R6,@-R15
+	MOV.L	R5,@-R15
+	MOV.L	R4,@-R15
+	MOV	R6,R4
+	BSR	_m2d_idct_horizontal
+	MOV	R7,R5
+	MOV.L	@R15+,R6	; dst_base
+	MOV.L	@R15+,R5	; dst_stride
+	MOV.L	@R15+,R4	; src_coef
+
+	MOV.B	#8,R1
+?LOOP:
+;	x0 = 2048s0 - 2048s4 + 128
+;	x1 = 2048s0 + 2048s4 + 128
+;	x4 = W1s1 + W7s7;
+;	x5 = W7s1 - W1s7;
+;	x6 = W5s5 + W3s3
+;	x7 = W3s5 - W5s3
+;	x4 = x4 - x6 = (W7s7 + W1s1) - (W3s3 + W5s5);
+;	x6 = x4 + x6 = (W7s7 + W1s1) + (W3s3 + W5s5);
+;	x5 = x5 - x7 = (W7s1 - W1s7) - (W3s5 - W5s3);
+;	x7 = x5 + x7 = (W7s1 - W1s7) + (W3s5 - W5s3);
+;	x5 = (int32_t) ((x4 + x5) * 181 + 128) >> 8;
+;	x4 = (int32_t) ((x4 - x5) * 181 + 128) >> 8;
+;	x2 = W6s2 - W2s6;
+;	x3 = W2s2 + W6s6;
+;	x3 = x1 + x3 = (2048s0 + 2048s4 + 128) + (W6s6 + W2s2);
+;	x1 = x1 - x3 = (2048s0 + 2048s4 + 128) - (W6s6 + W2s2);
+;	x2 = x0 + x2 = (2048s0 - 2048s4 + 128) + (W6s2 - W2s6);
+;	x0 = x0 - x2 = (2048s0 - 2048s4 + 128) - (W6s2 - W2s6);
+;	src_coef[0] = (int32_t) ((x3 + x6) >> 8);
+;	src_coef[1] = (int32_t) ((x2 + x5) >> 8);
+;	src_coef[2] = (int32_t) ((x0 + x4) >> 8);
+;	src_coef[3] = (int32_t) ((x1 + x7) >> 8);
+;	src_coef[4] = (int32_t) ((x1 - x7) >> 8);
+;	src_coef[5] = (int32_t) ((x0 - x4) >> 8);
+;	src_coef[6] = (int32_t) ((x2 - x5) >> 8);
+;	src_coef[7] = (int32_t) ((x3 - x6) >> 8);
+	MOV.W	@R4+,R10
+	MOV.W	@R4+,R11
+				MOV.B	#11,R2
+	MOV.W	@(10,R4),R0	; coef[7]
+				MOV.B	#127,R6
+	MOV.W	@R4+,R12
+				ADD	#1,R6	; D'128
+	MOV.L	#_m2d_tw,R9
+				SHLD	R2,R10
+	CALC_PAIR	R11,R0	; x4, x5
+	MOV.W	@R4+,R13
+				ADD	R6,R10
+	MOV.W	@R4+,R14
+				SHLD	R2,R14
+				MOV	R10,R7
+				SUB	R14,R10	; x0 = s0-s4
+	MOV.W	@R4+,R2
+				ADD	R7,R14	; x1 = s0+s4
+	CALC_PAIR	R2,R13	; x6, x7
+	MOV	R11,R7
+	SUB	R2,R11		; x4 = x4 - x6
+	MOV	R0,R8
+	ADD	R7,R2		; x6 = x4 + x6
+	SUB	R13,R0		; x5 = x5 - x7
+	MOV.W	@R9+,R7
+	ADD	R8,R13		; x7 = x5 + x7
+	MOV	R0,R8
+	ADD	R11,R0
+	MUL.L	R7,R0
+	SUB	R8,R11
+	STS	MACL,R0
+	MUL.L	R7,R11
+	ADD	R6,R0
+	MOV.B	#-8,R8
+	STS	MACL,R11
+	SHAD	R8,R0		; x5
+	ADD	R6,R11
+	SHAD	R8,R11		; x4
+
+	MOV.W	@R4,R6
+	ADD	#4,R4
+	CALC_PAIR	R12,R6	; x3, x2
+	MOV	R14,R7
+	SUB	R12,R14		; x1 = x1 - x3
+	MOV	R10,R8
+	ADD	R7,R12		; x3 = x1 + x3
+	SUB	R6,R10		; x0 = x0 - x2
+				MOV	R12,R7
+	ADD	R8,R6		; x2 = x0 + x2
+	SUB	R2,R12
+				MOV	R6,R8
+	SHLR8	R12
+				MOV	R10,R9
+	SUB	R0,R6
+	MOV.W	R12,@-R4
+	SHLR8	R6
+				MOV	R14,R12
+	SUB	R11,R10
+	MOV.W	R6,@-R4
+	SHLR8	R10
+	SUB	R13,R14
+	MOV.W	R10,@-R4
+	SHLR8	R14
+	ADD	R12,R13		; d[3]
+	MOV.W	R14,@-R4
+	SHLR8	R13
+	ADD	R9,R11		; d[2]
+	MOV.W	R13,@-R4
+	SHLR8	R11
+	ADD	R8,R0		; d[1]
+	MOV.W	R11,@-R4
+	SHLR8	R0
+	ADD	R7,R2		; d[0]
+	MOV.W	R0,@-R4
+	SHLR8	R2
+	DT	R1
+	MOV.W	R2,@-R4
+	BT	?END
+	BRA	?LOOP
+;	BF/S	?LOOP
+	ADD	#16,R4
+?END:
+	LDS.L	@R15+,PR
+	MOV.L	@R15+,R14
+	MOV.L	@R15+,R13
+	MOV.L	@R15+,R12
+	MOV.L	@R15+,R11
+	MOV.L	@R15+,R10
+	MOV.L	@R15+,R9
+	RTS
+	MOV.L	@R15+,R8
+
+	.end
