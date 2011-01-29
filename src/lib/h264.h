@@ -46,8 +46,11 @@ enum {
 	SP_SLICE = 3,
 	SI_SLICE = 4,
 	MB_INxN = 0,
+	MB_I16x16 = 1,
 	MB_IPCM = 25,
 	MB_P16x16 = 26,
+	MB_P8x8 = 29,
+	MB_P8x8REF0 = 30,
 	MB_PSKIP = 31,
 	MB_BDIRECT16x16 = 32,
 	EXTENDED_SAR = 255
@@ -232,12 +235,12 @@ typedef struct {
 } h264d_frame_info_t;
 
 typedef struct {
-	int16_t mv[4][2];
 	int8_t type;
 	int8_t chroma_pred_mode;
 	int8_t cbp;
-	uint8_t cbf;
 	int8_t ref[2];
+	uint16_t cbf;
+	int16_t mv[2][4][2];
 } prev_mb_t;
 
 typedef struct {
@@ -273,7 +276,7 @@ typedef struct {
 	int32_t *top4x4coef;
 	prev_mb_t *left4x4inter;
 	prev_mb_t *top4x4inter;
-	uint32_t cbf;
+	uint32_t cbp, cbf;
 	deblock_info_t *deblock_curr;
 	deblock_info_t *deblock_base;
 	h264d_frame_info_t *frame;
