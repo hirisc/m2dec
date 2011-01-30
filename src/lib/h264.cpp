@@ -471,7 +471,7 @@ static inline uint16_t cbf_top(uint32_t cbf)
 
 static inline uint16_t cbf_left(uint32_t cbf)
 {
-	return ((cbf >> 16) & 0x600) | ((cbf >> 15) & 0x100) | ((cbf >> 14) & 0x80) | ((cbf >> 13) & 0x40) | ((cbf >> 12) & 0x30) | ((cbf >> 12) & 8) | ((cbf >> 11) & 4) | ((cbf >> 6) & 2) | ((cbf >> 5) & 1);
+	return ((cbf >> 16) & 0x600) | ((cbf >> 15) & 0x100) | ((cbf >> 14) & 0x80) | ((cbf >> 13) & 0x40) | ((cbf >> 12) & 0x38) | ((cbf >> 11) & 4) | ((cbf >> 6) & 2) | ((cbf >> 5) & 1);
 }
 
 static int increment_mb_pos(h264d_mb_current *mb)
@@ -486,6 +486,8 @@ static int increment_mb_pos(h264d_mb_current *mb)
 	mb->top4x4inter->cbf = cbf_top(mb->cbf);
 	mb->left4x4inter->cbp = mb->cbp;
 	mb->left4x4inter->cbf = cbf_left(mb->cbf);
+	mb->top4x4inter->chroma_pred_mode = mb->chroma_pred_mode;
+	mb->left4x4inter->chroma_pred_mode = mb->chroma_pred_mode;
 	mb->cbf = 0;
 	x = mb->x + 1;
 	mb->top4x4pred++;
@@ -2253,7 +2255,9 @@ static inline int mb_intra4x4(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 struct intra_chroma_pred_mode_cavlc {
 	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *cb, int avail) {
 		uint32_t pred_mode = ue_golomb(st);
-		return pred_mode <= 3 ? pred_mode : 0;
+		pred_mode = pred_mode <= 3 ? pred_mode : 0;
+		mb->chroma_pred_mode = pred_mode;
+		return pred_mode;
 	}
 };
 
@@ -7505,8 +7509,7 @@ struct intra_chroma_pred_mode_cabac {
 				pred_mode++;
 			}
 		}
-		mb->left4x4inter->chroma_pred_mode = pred_mode;
-		mb->top4x4inter->chroma_pred_mode = pred_mode;
+		mb->chroma_pred_mode = pred_mode;
 		return pred_mode;
 	}
 };
@@ -7532,7 +7535,7 @@ struct cbp_cabac {
 		cbp_b >>= 4;
 		inc = (cbp_a != 0) + (cbp_b != 0) * 2;
 		if (cabac_decode_decision(cb, st, 77 + inc)) {
-			inc = (cbp_a >> 1) + (cbp_b) & 2;
+			inc = (cbp_a >> 1) + (cbp_b & 2);
 			cbp = cbp + cabac_decode_decision(cb, st, 77 + 4 + inc) * 16 + 16;
 		}
 		return cbp;
@@ -7816,11 +7819,9 @@ static inline int get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int 
 	static const int16_t coeff_abs_level_offset[6] = {
 		227, 227 + 10, 227 + 20, 227 + 30, 227 + 39, 426
 	};
-	static const int8_t coeff_abs_level_ctx[8] = {
-		1, 2, 3, 4, 0, 0, 0, 0
-	};
-	static const int8_t coeff_abs_levelgt1_ctx[8] = {
-		5, 5, 5, 5, 6, 7, 8, 9
+	static const int8_t coeff_abs_level_ctx[2][8] = {
+		{1, 2, 3, 4, 0, 0, 0, 0},
+		{5, 5, 5, 5, 6, 7, 8, 9}
 	};
 	static const int8_t coeff_abs_level_transition[2][8] = {
 		{1, 2, 3, 3, 4, 5, 6, 7},
@@ -7830,7 +7831,7 @@ static inline int get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int 
 	int node_ctx = 0;
 	int mp = map_cnt;
 	do {
-		int ctx = abs_offset + coeff_abs_level_ctx[node_ctx];
+		int ctx = abs_offset + coeff_abs_level_ctx[0][node_ctx];
 		int abs_level;
 		int idx;
 		if (!cabac_decode_decision(cb, st, ctx)) {
@@ -7838,7 +7839,7 @@ static inline int get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int 
 			node_ctx = coeff_abs_level_transition[0][node_ctx];
 		} else {
 			abs_level = 2;
-			ctx = abs_offset + coeff_abs_levelgt1_ctx[node_ctx];
+			ctx = abs_offset + coeff_abs_level_ctx[1][node_ctx];
 			node_ctx = coeff_abs_level_transition[1][node_ctx];
 			while (abs_level < 15 && cabac_decode_decision(cb, st, ctx)) {
 				abs_level++;
