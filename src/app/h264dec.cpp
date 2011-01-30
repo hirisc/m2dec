@@ -190,6 +190,9 @@ int main(int argc, char *argv[])
 		luma_size = info.src_height * info.src_width;
 		data.write(luma, luma_size);
 		data.write(chroma, luma_size >> 1);
+		if (i == 1) {
+			break;
+		}
 	}
 	delete[] second_frame;
 	free_frames(mem, info.frame_num);

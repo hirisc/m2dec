@@ -264,6 +264,7 @@ typedef struct {
 	int8_t qp, qp_chroma;
 	int8_t lefttop_ref;
 	int8_t prev_qp_delta;
+	int8_t chroma_pred_mode;
 	int16_t x, y;
 	int16_t max_x, max_y;
 	int16_t firstline; /* # of first line of MBs */
