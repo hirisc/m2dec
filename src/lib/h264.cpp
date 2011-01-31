@@ -8,10 +8,6 @@
 #include "h264.h"
 #include "h264vld.h"
 
-#ifndef __RENESAS_VERSION__
-//using namespace std;
-#endif
-
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #define ABS(a) ((0 <= (a)) ? (a) : -(a))
 
@@ -31,21 +27,6 @@ static inline cache_t get_bits32(dec_bits *ths, int bit_len)
 	}
 }
 
-#if 0
-static uint32_t ue_golomb(dec_bits *stream)
-{
-	unsigned leading_zero_bits;
-
-	if (get_onebit_inline(stream)) {
-		return 0;
-	}
-	leading_zero_bits = 1;
-	while ((get_onebit_inline(stream) == 0) && (leading_zero_bits < 32)) {
-		leading_zero_bits++;
-	}
-	return get_bits32(stream, leading_zero_bits) - 1 + ((1 << (leading_zero_bits - 1)) << 1);
-}
-#else
 static uint32_t ue_golomb(dec_bits *str)
 {
 	int bits, rest;
@@ -76,7 +57,6 @@ static uint32_t ue_golomb(dec_bits *str)
 	} while (--i);
 	return 0;
 }
-#endif
 
 static int32_t se_golomb(dec_bits *stream)
 {
@@ -1190,7 +1170,7 @@ static inline void coeff_writeback(int *coeff, int total_coeff, const int8_t *ru
 	
 }
 
-struct residual_block_cavlc2 {
+struct residual_block_cavlc {
 	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask)
 	{
 		int level[16];
@@ -1270,87 +1250,6 @@ struct residual_block_cavlc2 {
 		return total_coeff <= 15 ? total_coeff : 15;
 	}
 };
-
-#if 1
-static int residual_block_cavlc(int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, uint32_t dc_mask)
-{
-	int level[16];
-	int8_t run[16];
-	int val;
-	int trailing_ones;
-	int total_coeff;
-	int zeros_left;
-
-	memset(coeff + (dc_mask >> 4), 0, sizeof(*coeff) * num_coeff);
-	if (num_coeff <= 4) {
-		val = m2d_dec_vld_unary(st, total_ones_nc_chroma_bit6, 6);
-	} else {
-		int nc = get_nC(na, nb);
-		if (nc < 2) {
-			val = m2d_dec_vld_unary(st, total_ones_nc02_bit6, 6);
-		} else if (nc < 4) {
-			val = m2d_dec_vld_unary(st, total_ones_nc24_bit6, 6);
-		} else if (nc < 8) {
-			val = m2d_dec_vld_unary(st, total_ones_nc48_bit6, 6);
-		} else {
-			val = m2d_dec_vld_unary(st, total_ones_nc8_bit6, 6);
-		}
-	}
-	trailing_ones = val >> 5;
-	total_coeff = val & 31;
-	if (total_coeff == 0) {
-		return 0;
-	}
-	int suffix_len = ((10 < total_coeff) && (trailing_ones < 3));
-	for (int i = 0; i < total_coeff; ++i) {
-		if (i < trailing_ones) {
-			level[i] = 1 - get_onebit_inline(st) * 2;
-		} else {
-			int lvl_prefix = level_prefix(st);
-			int lvl = lvl_prefix << suffix_len;
-			if (0 < suffix_len || 14 <= lvl_prefix) {
-				int size = suffix_len;
-				if (lvl_prefix == 14 && !size) {
-					size = 4;
-				} else if (lvl_prefix == 15) {
-					size = 12;
-				}
-				if (size) {
-					lvl += get_bits(st, size);
-				}
-			}
-			if (suffix_len == 0 && lvl_prefix == 15) {
-				lvl += 15;
-			}
-			if (i == trailing_ones && trailing_ones < 3) {
-				lvl += 2;
-			}
-			level[i] = lvl = ((lvl & 1) ? (-lvl - 1) : (lvl + 2)) >> 1;
-			suffix_len = suffix_len ? suffix_len : 1;
-			if (suffix_len < 6 && ((3 << (suffix_len - 1)) < ABS(lvl))) {
-				suffix_len++;
-			}
-		}
-	}
-	if (total_coeff < num_coeff) {
-		if (4 < num_coeff) {
-			zeros_left = total_zeros16(st, total_coeff);
-		} else {
-			zeros_left = total_zeros4(st, total_coeff);
-		}
-	} else {
-		zeros_left = 0;
-	}
-	for (int i = 0; i < total_coeff - 1; ++i) {
-		int r;
-		run[i] = r = (0 < zeros_left) ? run_before(st, zeros_left) : 0;
-		zeros_left -= r;
-	}
-	run[total_coeff - 1] = zeros_left;
-	coeff_writeback(coeff, total_coeff, run, level, qmat, dc_mask);
-	return total_coeff <= 15 ? total_coeff : 15;
-}
-#endif
 
 static void intra_chroma_dc_transform(const int *src, int *dst);
 static void ac4x4transform_dconly_chroma(uint8_t *dst, int dc, int stride);
@@ -2282,7 +2181,7 @@ struct qp_delta_cavlc {
 
 static int mb_intra4x4_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_intra4x4(mb, mbc, st, avail, intra4x4pred_mode_cavlc(), intra_chroma_pred_mode_cavlc(), cbp_intra_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_intra4x4(mb, mbc, st, avail, intra4x4pred_mode_cavlc(), intra_chroma_pred_mode_cavlc(), cbp_intra_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 } 
 
 static int mb_intra16x16pred_dc(uint8_t *dst, int stride, int avail)
@@ -2690,7 +2589,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 
 static int mb_intra16x16_dconly_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_intra16x16_dconly(mb, mbc, st, avail, intra_chroma_pred_mode_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_intra16x16_dconly(mb, mbc, st, avail, intra_chroma_pred_mode_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 
 }
 
@@ -2794,7 +2693,7 @@ static int mb_intra16x16_acdc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 
 static int mb_intra16x16_acdc_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_intra16x16_acdc(mb, mbc, st, avail, intra_chroma_pred_mode_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_intra16x16_acdc(mb, mbc, st, avail, intra_chroma_pred_mode_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 /** Sum of top of 4x4 block, NV12 chroma part.
@@ -5785,22 +5684,22 @@ struct ref_idx8x8_cavlc {
 
 static int mb_inter16x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static int mb_inter16x8_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static int mb_inter8x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x16(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_inter8x16(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static int mb_inter8x8_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_cavlc(), ref_idx8x8_cavlc(), sub_mbs_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc2());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_cavlc(), ref_idx8x8_cavlc(), sub_mbs_cavlc(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static const mb_code mb_decode[] = {
@@ -7925,7 +7824,7 @@ static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *c
 	int sum;
 	int inc;
 
-	sum = abs(mva) + abs(mvb);
+	sum = ABS(mva) + ABS(mvb);
 	if (sum < 3) {
 		inc = 0;
 	} else if (sum <= 32) {
