@@ -5470,8 +5470,8 @@ static void sub_mb8x4(h264d_mb_current *mb, dec_bits *st, int avail, int ref_idx
 		p->mv[1][y * 2][1] = mvdy;
 		p->mv[0][y * 2 + 1][0] = mvx;
 		p->mv[1][y * 2 + 1][0] = mvdx;
- 		p->mv[0][y * 2 + 1][1] = mvy;
- 		p->mv[1][y * 2 + 1][1] = mvdy;
+		p->mv[0][y * 2 + 1][1] = mvy;
+		p->mv[1][y * 2 + 1][1] = mvdy;
 		inter_pred8x8(mb, mv, 8, 4, ref_idx, (blk_idx & 1) * 8, ((blk_idx & 2) + y) * 4);
 	}
 }
