@@ -4363,7 +4363,7 @@ static int mb_inter16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st,
 	inter_pred8x8(mb, mv, 16, 16, ref_idx, 0, 0);
 	uint32_t left4x4 = mb->left4x4coef;
 	uint32_t top4x4 = *mb->top4x4coef;
-	cbp = CodedBlockPattern(mb, st, avail);
+	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
 		str_vert = residual_luma_inter(mb, cbp, st, avail, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
@@ -4567,7 +4567,7 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 
 	left4x4 = mb->left4x4coef;
 	top4x4 = *mb->top4x4coef;
-	cbp = CodedBlockPattern(mb, st, avail);
+	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
 		str_vert = residual_luma_inter(mb, cbp, st, avail, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
@@ -4757,7 +4757,7 @@ static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 
 	left4x4 = mb->left4x4coef;
 	top4x4 = *mb->top4x4coef;
-	cbp = CodedBlockPattern(mb, st, avail);
+	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
 		str_vert = residual_luma_inter(mb, cbp, st, avail, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
@@ -4951,7 +4951,7 @@ static inline void calc_mv8x8_sub8x4(h264d_mb_current *mb, int16_t *pmv, const i
 		mvd_a = pmb->mv[1][(blk_idx & 2) + y];
 	} else {
 		idx_map = 0;
-		mva = zero_mv;
+		mvd_a = mva = zero_mv;
 	}
 
 	if (y != 0) {
@@ -5578,7 +5578,7 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 		memset(ref_idx, 0, sizeof(ref_idx));
 	}
 	SubMb(mb, st, avail, sub_mb_type, ref_idx, curr_blk);
-	cbp = CodedBlockPattern(mb, st, avail);
+	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	left4x4 = mb->left4x4coef;
 	top4x4 = *mb->top4x4coef;
 	if (cbp) {
@@ -5867,14 +5867,14 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 		mb->lefttop_mv[1] = mb->top4x4inter->mv[0][3][1];
 		mb->top4x4inter->ref[0] = 0;
 		mb->top4x4inter->ref[1] = 0;
-		mb->top4x4inter->type = MB_PSKIP;
-		mb->top4x4inter->cbp = 0;
-		mb->top4x4inter->cbf = 0;
+//		mb->top4x4inter->type = MB_PSKIP;
+//		mb->top4x4inter->cbp = 0;
+//		mb->top4x4inter->cbf = 0;
 		mb->left4x4inter->ref[0] = 0;
 		mb->left4x4inter->ref[1] = 0;
-		mb->left4x4inter->type = MB_PSKIP;
-		mb->left4x4inter->cbp = 0;
-		mb->left4x4inter->cbf = 0;
+//		mb->left4x4inter->type = MB_PSKIP;
+//		mb->left4x4inter->cbp = 0;
+//		mb->left4x4inter->cbf = 0;
 		for (int i = 0; i < 4; ++i) {
 			mb->top4x4inter->mv[0][i][0] = mv[0];
 			mb->top4x4inter->mv[0][i][1] = mv[1];
@@ -5943,12 +5943,19 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 				if (skip_mbs(mb, skip_num, hdr->slice_type) < 0) {
 					break;
 				}
+				if (is_ae) {
+					printf("[%d, %d]\n", mb->x, mb->y);
+					if (mb->y >= 4) {
+						return 1;
+					}
+					continue;
+				}
 			}
 			if (!is_ae && !more_rbsp_data(st)) {
 				break;
 			}
 		}
-		if (is_ae && (mb->y < mb->max_y)) {
+		if (is_ae) {
 			macroblock_layer_cabac(mb, hdr->slice_type, st);
 		} else {
 			macroblock_layer(mb, hdr->slice_type, st);
@@ -7381,7 +7388,7 @@ static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type)
 	if ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP)) {
 		offset += 1;
 	}
-	return cabac_decode_decision(mb->cabac, st, offset) ^ 1;
+	return cabac_decode_decision(mb->cabac, st, offset);
 }
 
 struct intra4x4pred_mode_cabac {
