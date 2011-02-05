@@ -106,7 +106,6 @@ typedef struct {
 } vui_parameters_t;
 	
 typedef struct {
-	uint32_t id;
 	uint8_t profile_idc;
 	uint8_t level_idc;
 	uint8_t poc_type;
@@ -132,7 +131,6 @@ typedef struct {
 } h264d_sps;
 
 typedef struct {
-	uint32_t id;
 	unsigned entropy_coding_mode_flag : 1;
 	unsigned pic_order_present_flag : 1;
 	unsigned weighted_pred_flag : 1;
@@ -250,8 +248,8 @@ typedef struct {
 } deblock_info_t;
 
 typedef struct {
-	int range;
-	int offset;
+	uint32_t range;
+	uint32_t offset;
 	int8_t context[460];
 } h264d_cabac_t;
 
@@ -322,7 +320,7 @@ typedef struct {
 	h264d_slice_header slice_header_i;
 	h264d_mb_current mb_current;
 	h264d_pps pps_i[256];
-	h264d_sps sps_i[256];
+	h264d_sps sps_i[32];
 } h264d_context;
 
 

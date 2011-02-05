@@ -176,12 +176,18 @@ static void set_mb_size(h264d_mb_current *mb, int width, int height);
 
 static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 {
+	uint32_t sps_profile_idc, sps_constraint_set_flag;
+	uint32_t sps_level_idc, sps_id;
 	uint32_t tmp;
 
-	sps->profile_idc = get_bits(stream, 8);
-	sps->constraint_set_flag = get_bits(stream, 8);
-	sps->level_idc = get_bits(stream, 8);
-	READ_UE_RANGE(sps->id, stream, 255);
+	sps_profile_idc = get_bits(stream, 8);
+	sps_constraint_set_flag = get_bits(stream, 8);
+	sps_level_idc = get_bits(stream, 8);
+	READ_UE_RANGE(sps_id, stream, 31);
+	sps += sps_id;
+	sps->profile_idc = sps_profile_idc;
+	sps->constraint_set_flag = sps_constraint_set_flag;
+	sps->level_idc = sps_level_idc;
 	if ((80 <= sps->profile_idc) && (sps->profile_idc <= 83)) {
 	}
 	READ_UE_RANGE(tmp, stream, 27);
@@ -254,30 +260,12 @@ static int get_sei_message_size(dec_bits *stream)
 	return d + c;
 }
 
-static inline h264d_pps *find_pps(h264d_pps *pps, uint8_t pps_id)
-{
-	h264d_pps *p;
-	if (pps_id == 0) {
-		/* pps_id == 0 are always at [0] */
-		return pps;
-	}
-	for (p = pps + 1; p != pps + 255; ++p) {
-		if (p->id == pps_id) {
-			/* found */
-			break;
-		} else if (p->id == 0) {
-			/* not found, create new one */
-			break;
-		}
-	}
-	return p;
-}
-
 static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 {
-	uint8_t id = ue_golomb(stream);
-	pps = find_pps(pps, id);
-	pps->id = id;
+	uint8_t pps_id;
+
+	READ_UE_RANGE(pps_id, stream, 255);
+	pps += pps_id;
 	pps->seq_parameter_set_id = ue_golomb(stream);
 	pps->entropy_coding_mode_flag = get_onebit(stream);
 	pps->pic_order_present_flag = get_onebit(stream);
@@ -361,7 +349,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len)
 		}
 		nal_type = get_bits(st, 8) & 31;
 	} while (nal_type != SPS_NAL);
-	read_seq_parameter_set(h2d->sps, st);
+	read_seq_parameter_set(h2d->sps_i, st);
 	set_mb_size(&h2d->mb_current, h2d->sps->pic_width, h2d->sps->pic_height);
 	return 0;
 }
@@ -581,10 +569,10 @@ static int h2d_dispatch_one_nal(h264d_context *h2d, int code_type)
 		err = skip_sei(st);
 		break;
 	case SPS_NAL:
-		err = read_seq_parameter_set(h2d->sps, st);
+		err = read_seq_parameter_set(h2d->sps_i, st);
 		break;
 	case PPS_NAL:
-		err = read_pic_parameter_set(h2d->pps, st);
+		err = read_pic_parameter_set(h2d->pps_i, st);
 		break;
 	default:
 		err = 0;
@@ -739,8 +727,8 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 static int slice_header(h264d_context *h2d, dec_bits *st)
 {
 	h264d_slice_header *hdr = h2d->slice_header;
-	h264d_sps *sps = h2d->sps;
-	h264d_pps *pps = h2d->pps;
+	h264d_sps *sps;
+	h264d_pps *pps;
 	uint32_t prev_first_mb = hdr->first_mb_in_slice;
 	int slice_type;
 
@@ -754,7 +742,8 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	READ_UE_RANGE(slice_type, st, 9);
 	hdr->slice_type = slice_type_adjust(slice_type);
 	READ_UE_RANGE(hdr->pic_parameter_set_id, st, 255);
-	pps = find_pps(h2d->pps, hdr->pic_parameter_set_id);
+	pps = &h2d->pps_i[hdr->pic_parameter_set_id];
+	sps = &h2d->sps_i[pps->seq_parameter_set_id];
 	h2d->mb_current.pps = pps;
 	h2d->mb_current.is_constrained_intra = pps->constrained_intra_pred_flag;
 	hdr->frame_num = get_bits(st, sps->log2_max_frame_num);
