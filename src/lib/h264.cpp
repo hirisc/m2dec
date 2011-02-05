@@ -7136,8 +7136,8 @@ static const ctx_idx_mn_t ctx_idx_mn_IPB[4][460] = {
 		{-12, 71}, {-11, 63}, {-5, 70}, {-17, 75}, {-14, 72},
 		{-16, 67}, {-8, 53}, {-14, 59}, {-9, 52}, {-11, 68},
 		{9, -2}, {30, -10}, {31, -4}, {33, -1}, {33, 7},
-		{31, 12}, {37, 23}, {31, 38}, {20, 64},
- }
+		{31, 12}, {37, 23}, {31, 38}, {20, 64}
+	}
 };
 
 void init_cabac_context(h264d_cabac_t *cabac, int slice_qp, int idc)
@@ -7154,7 +7154,7 @@ void init_cabac_context(h264d_cabac_t *cabac, int slice_qp, int idc)
 		} else {
 			/* valMPS == 1 */
 			pre_state = (126 < pre_state) ? 126 : pre_state;
-			*ctx = (pre_state) - 64;
+			*ctx = (pre_state) - 64; /* 0..122 */
 		}
 		ctx++;
 		lut++;
