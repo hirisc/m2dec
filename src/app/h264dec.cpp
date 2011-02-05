@@ -183,14 +183,14 @@ int main(int argc, char *argv[])
 		int luma_size;
 
 		err = h264d_decode_picture(h2d);
-		if (err < 0) {
+		if (err == -1) {
 			break;
 		}
 		h246d_get_decoded_frame(h2d, &luma, &chroma);
 		luma_size = info.src_height * info.src_width;
 		data.write(luma, luma_size);
 		data.write(chroma, luma_size >> 1);
-		if (i == 1) {
+		if (err < 0) {
 			break;
 		}
 	}
