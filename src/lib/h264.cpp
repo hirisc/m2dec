@@ -537,7 +537,7 @@ int h264d_decode_picture(h264d_context *h2d)
 	if ((stream->jmp) && setjmp(*stream->jmp) != 0) {
 		return -1;
 	}
-//	h2d->pps->picture_coding_type = 0;
+	h2d->slice_header->first_mb_in_slice = UINT_MAX;
 	err = 0;
 	do {
 		if (0 <= (err = m2d_find_mpeg_data(stream))) {
@@ -604,11 +604,7 @@ static int read_slice(h264d_context *h2d, dec_bits *st)
 	if (err < 0) {
 		return err;
 	}
-	err = slice_data(h2d, st);
-	if (err < 0) {
-		return err;
-	}
-	return err;
+	return slice_data(h2d, st);
 }
 
 static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_ref_frames, int num_frames, int max_num_frames);
@@ -745,10 +741,13 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	h264d_slice_header *hdr = h2d->slice_header;
 	h264d_sps *sps = h2d->sps;
 	h264d_pps *pps = h2d->pps;
+	uint32_t prev_first_mb = hdr->first_mb_in_slice;
 	int slice_type;
 
-	hdr->first_mb_in_slice = ue_golomb(st);
-	if (hdr->first_mb_in_slice == 0) {
+	if ((hdr->first_mb_in_slice = ue_golomb(st)) <= prev_first_mb) {
+		if (prev_first_mb != UINT_MAX) {
+			return -2;
+		}
 		find_empty_frame(&h2d->mb_current);
 		memset(h2d->mb_current.deblock_base, 0, sizeof(deblock_info_t) * h2d->mb_current.max_x * h2d->mb_current.max_y);
 	}
@@ -5429,10 +5428,10 @@ static void sub_mb4x4(h264d_mb_current *mb, dec_bits *st, int avail, int ref_idx
 		mvy = mv[1] + mvdy;
 		mv[0] = mvx;
 		mv[1] = mvy;
-		p->mv[0][xy][0] = mv[0];
-		p->mv[0][xy][1] = mv[1];
-		p->mv[1][xy][0] = mv[0];
-		p->mv[1][xy][1] = mv[1];
+		p->mv[0][xy][0] = mvx;
+		p->mv[0][xy][1] = mvy;
+		p->mv[1][xy][0] = mvdx;
+		p->mv[1][xy][1] = mvdy;
 		inter_pred8x8(mb, mv, 4, 4, ref_idx, (blk_idx & 1) * 8 + (xy & 1) * 4, (blk_idx & 2) * 4 + (xy & 2) * 2);
 	}
 }
@@ -5822,7 +5821,7 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 	mb->left4x4pred = 0x22222222;
 	left4x4 = mb->left4x4coef;
 	mb->left4x4coef = 0;
-	mb->cbp = 0xf;
+	mb->cbp = 0;
 	mb->cbf = 0;
 	do {
 		deblock_info_t *deb;
@@ -5867,14 +5866,8 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 		mb->lefttop_mv[1] = mb->top4x4inter->mv[0][3][1];
 		mb->top4x4inter->ref[0] = 0;
 		mb->top4x4inter->ref[1] = 0;
-//		mb->top4x4inter->type = MB_PSKIP;
-//		mb->top4x4inter->cbp = 0;
-//		mb->top4x4inter->cbf = 0;
 		mb->left4x4inter->ref[0] = 0;
 		mb->left4x4inter->ref[1] = 0;
-//		mb->left4x4inter->type = MB_PSKIP;
-//		mb->left4x4inter->cbp = 0;
-//		mb->left4x4inter->cbf = 0;
 		for (int i = 0; i < 4; ++i) {
 			mb->top4x4inter->mv[0][i][0] = mv[0];
 			mb->top4x4inter->mv[0][i][1] = mv[1];
@@ -5944,10 +5937,6 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 					break;
 				}
 				if (is_ae) {
-					printf("[%d, %d]\n", mb->x, mb->y);
-					if (mb->y >= 4) {
-						return 1;
-					}
 					continue;
 				}
 			}
@@ -6689,6 +6678,7 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 		}
 		ref_pic_init_ip(hdr->reorder[0].ref_frames, hdr->frame_num, max_frame_num, h2d->sps->num_ref_frames);
 		hdr->prev_frame_num = hdr->frame_num;
+		hdr->first_mb_in_slice = mb->max_x * mb->max_x;
 	}
 	return is_filled;
 }
