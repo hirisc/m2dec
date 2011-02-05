@@ -167,8 +167,9 @@ int main(int argc, char *argv[])
 	h264d_get_info(h2d, &info);
 	fprintf(stderr,
 		"length: %ld\n"
-		"width x height x num: %d x %d x %d\n",
-		data.len_, info.src_width, info.src_height, info.frame_num);
+		"width x height x num: %d x %d x %d\n"
+		"Context Size: %ld\n",
+		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
 	info.frame_num = info.frame_num < 3 ? 3 : info.frame_num;
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
