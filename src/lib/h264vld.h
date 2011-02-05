@@ -1,19 +1,3 @@
-static const int8_t cabac_ctxindex0_10[11][2] = {
-	{20, -15}, {2, 54}, {3, 74}, {20, -15},
-	{2, 54}, {3, 74}, {-28, 127}, {-23, 104},
-	{-6, 53}, {-1, 54}, {7, 51}
-};
-
-static const int8_t cabac_ctxindex60_69[10][2] = {
-	{0, 41}, {0, 63}, {0, 63}, {0, 63},
-	{-9, 83}, {4, 86}, {0, 97}, {-7, 72},
-	{13, 41}, {3, 62}
-};
-
-static const int8_t cabac_ctxindex_intra399_401[3][2] = {
-	{0, 41}, {0, 63}, {0, 63},
-};
-
 
 /** This is generated from standard document using vldbuild.rb. */
 static const vlc_t total_ones_nc02_bit6[174] = {
