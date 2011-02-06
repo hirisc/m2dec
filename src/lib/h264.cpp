@@ -224,7 +224,7 @@ static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 			return err;
 		}
 	}
-	return 0;
+	return sps_id;
 }
 
 static int get_sei_message_size(dec_bits *stream);
@@ -263,10 +263,11 @@ static int get_sei_message_size(dec_bits *stream)
 static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 {
 	uint8_t pps_id;
+	int tmp;
 
 	READ_UE_RANGE(pps_id, stream, 255);
 	pps += pps_id;
-	pps->seq_parameter_set_id = ue_golomb(stream);
+	READ_UE_RANGE(pps->seq_parameter_set_id, stream, 31);
 	pps->entropy_coding_mode_flag = get_onebit(stream);
 	pps->pic_order_present_flag = get_onebit(stream);
 	if (0 < (pps->num_slice_groups_minus1 = ue_golomb(stream))) {
@@ -277,9 +278,11 @@ static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 	READ_UE_RANGE(pps->num_ref_idx_l1_active_minus1, stream, 31);
 	pps->weighted_pred_flag = get_onebit(stream);
 	pps->weighted_bipred_idc = get_bits(stream, 2);
-	pps->pic_init_qp = se_golomb(stream) + 26;
-	pps->pic_init_qs = se_golomb(stream) + 26;
-	pps->chroma_qp_index[0] = se_golomb(stream);
+	READ_SE_RANGE(tmp, stream, -26, 25);
+	pps->pic_init_qp = tmp + 26;
+	READ_SE_RANGE(tmp, stream, -26, 25);
+	pps->pic_init_qs = tmp + 26;
+	READ_SE_RANGE(pps->chroma_qp_index[0], stream, -12, 12);
 	pps->deblocking_filter_control_present_flag = get_onebit(stream);
 	pps->constrained_intra_pred_flag = get_onebit(stream);
 	pps->redundant_pic_cnt_present_flag = get_onebit(stream);
@@ -318,8 +321,6 @@ int h264d_init(h264d_context *h2d)
 		return -1;
 	}
 	memset(h2d, 0, sizeof(*h2d));
-	h2d->sps = &h2d->sps_i[0];
-	h2d->pps = &h2d->pps_i[0];
 	h2d->stream = &h2d->stream_i;
 	h2d->slice_header = &h2d->slice_header_i;
 	h2d->mb_current.frame = &h2d->mb_current.frame_i;
@@ -335,6 +336,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len)
 	dec_bits *st;
 	int nal_type;
 	int err;
+	int sps_id;
 
 	st = h2d->stream;
 	dec_bits_open(st, h264d_load_bytes_skip03);
@@ -349,18 +351,21 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len)
 		}
 		nal_type = get_bits(st, 8) & 31;
 	} while (nal_type != SPS_NAL);
-	read_seq_parameter_set(h2d->sps_i, st);
-	set_mb_size(&h2d->mb_current, h2d->sps->pic_width, h2d->sps->pic_height);
+	sps_id = read_seq_parameter_set(h2d->sps_i, st);
+	if (sps_id < 0) {
+		return sps_id;
+	}
+	set_mb_size(&h2d->mb_current, h2d->sps_i[sps_id].pic_width, h2d->sps_i[sps_id].pic_height);
 	return 0;
 }
 
 int h264d_get_info(h264d_context *h2d, h264d_info_t *info)
 {
 	int src_width;
-	if (!h2d || !info || !h2d->sps) {
+	if (!h2d || !info) {
 		return -1;
 	}
-	h264d_sps *sps = h2d->sps;
+	h264d_sps *sps = &h2d->sps_i[h2d->pps_i[h2d->slice_header->pic_parameter_set_id].seq_parameter_set_id];
 	info->src_width = src_width = sps->pic_width;
 	info->src_height = sps->pic_height;
 	info->disp_width = sps->pic_width;
@@ -516,6 +521,7 @@ static int h2d_dispatch_one_nal(h264d_context *h2d, int code_type);
 int h264d_decode_picture(h264d_context *h2d)
 {
 	dec_bits *stream;
+	int code_type;
 	int err;
 
 	if (!h2d) {
@@ -527,15 +533,16 @@ int h264d_decode_picture(h264d_context *h2d)
 	}
 	h2d->slice_header->first_mb_in_slice = UINT_MAX;
 	err = 0;
+	code_type = 0;
 	do {
 		if (0 <= (err = m2d_find_mpeg_data(stream))) {
-			int code_type = get_bits(stream, 8);
+			code_type = get_bits(stream, 8);
 			err = h2d_dispatch_one_nal(h2d, code_type);
 		} else {
 			break;
 		}
 		VC_CHECK;
-	} while (err == 0);
+	} while (err == 0 || (code_type == SPS_NAL && 0 < err));
 #ifdef DUMP_COEF
 	print_coefs();
 #endif
@@ -787,11 +794,11 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 			hdr->num_ref_idx_l0_active_minus1 = pps->num_ref_idx_l0_active_minus1;
 			hdr->num_ref_idx_l1_active_minus1 = pps->num_ref_idx_l1_active_minus1;
 		}
-		if (ref_pic_list_reordering(&hdr->reorder[0], st, h2d->sps->num_ref_frames, hdr->frame_num, 1 << h2d->sps->log2_max_frame_num)) {
+		if (ref_pic_list_reordering(&hdr->reorder[0], st, sps->num_ref_frames, hdr->frame_num, 1 << sps->log2_max_frame_num)) {
 			return -1;
 		}
 		if (hdr->slice_type == B_SLICE) {
-			if (ref_pic_list_reordering(&hdr->reorder[1], st, h2d->sps->num_ref_frames, hdr->frame_num, 1 << h2d->sps->log2_max_frame_num)) {
+			if (ref_pic_list_reordering(&hdr->reorder[1], st, sps->num_ref_frames, hdr->frame_num, 1 << sps->log2_max_frame_num)) {
 				return -1;
 			}
 			if (pps->weighted_bipred_idc == 1) {
@@ -5905,7 +5912,7 @@ static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type);
 static int slice_data(h264d_context *h2d, dec_bits *st)
 {
 	h264d_slice_header *hdr = h2d->slice_header;
-	h264d_pps *pps = h2d->pps;
+	h264d_pps *pps = &h2d->pps_i[hdr->pic_parameter_set_id];
 	h264d_mb_current *mb = &h2d->mb_current;
 	int mb_addr;
 	int is_ae = pps->entropy_coding_mode_flag;
@@ -6640,7 +6647,6 @@ static inline void sort_ref(h264d_ref_frame_t *refs, int num_elem, int frame_num
 
 static inline void ref_pic_init_ip(h264d_ref_frame_t *ref, int frame_num, int max_frame_num, int num_ref_frames)
 {
-//	sort(ref, ref + num_ref_frames, RefPicEvalGreater());
 	sort_ref(ref, num_ref_frames, frame_num, max_frame_num);
 	for (int i = num_ref_frames; i < 16; ++i) {
 		ref[i].in_use = 0;
@@ -6652,20 +6658,21 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 	h264d_slice_header *hdr;
 	int nal_id;
 	int is_filled = (mb->y >= mb->max_y);
-	int max_frame_num = 1 << h2d->sps->log2_max_frame_num;
 
 	hdr = h2d->slice_header;
 	if (is_filled) {
 		deblock_pb(mb);
+		h264d_sps *sps = &h2d->sps_i[h2d->pps_i[hdr->pic_parameter_set_id].seq_parameter_set_id];
+		int max_frame_num = 1 << sps->log2_max_frame_num;
+		int num_ref_frames = sps->num_ref_frames;
 		nal_id = h2d->id;
 		if (nal_id & 0x60) {
-			int num_ref_frames = h2d->sps->num_ref_frames;
 			post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, &h2d->mb_current, hdr->reorder[0].ref_frames);
 			if (hdr->slice_type == B_SLICE) {
 				post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, &h2d->mb_current, hdr->reorder[1].ref_frames);
 			}
 		}
-		ref_pic_init_ip(hdr->reorder[0].ref_frames, hdr->frame_num, max_frame_num, h2d->sps->num_ref_frames);
+		ref_pic_init_ip(hdr->reorder[0].ref_frames, hdr->frame_num, max_frame_num, num_ref_frames);
 		hdr->prev_frame_num = hdr->frame_num;
 		hdr->first_mb_in_slice = mb->max_x * mb->max_x;
 	}
