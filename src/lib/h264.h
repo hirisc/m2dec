@@ -310,10 +310,6 @@ typedef struct {
 
 typedef struct {
 	int id;
-	h264d_sps *sps;
-	h264d_pps *pps;
-	int pps_max;
-	int sps_max;
 	h264d_slice_header *slice_header;
 	dec_bits *stream;
 	dec_bits stream_i;
