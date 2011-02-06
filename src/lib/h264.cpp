@@ -673,23 +673,16 @@ static inline void find_empty_frame(h264d_mb_current *mb)
 	frm->curr_chroma = frm->frames[max_idx].chroma;
 }
 
-static const int8_t normAdjust[6][3] = {
-	{10, 16, 13},
-	{11, 18, 14},
-	{13, 20, 16},
-	{14, 23, 18},
-	{16, 25, 20},
-	{18, 29, 23}
-};
-
-static const int8_t qpc_adjust[22] = {
-	29, 30, 31, 32, 32, 33, 34, 34,
-	35, 35, 36, 36, 37, 37, 37, 38,
-	38, 38, 39, 39, 39, 39
-};
-
 static void qp_matrix(int16_t *matrix, int scale, int shift)
 {
+	static const int8_t normAdjust[6][3] = {
+		{10, 16, 13},
+		{11, 18, 14},
+		{13, 20, 16},
+		{14, 23, 18},
+		{16, 25, 20},
+		{18, 29, 23}
+	};
 	/* before zigzag-scan, order of normAdjust v shall be:
 	   0, 2, 2, 0, 1, 0, 2, 2, 2, 2, 1, 0, 1, 2, 2, 1
 	 */
@@ -718,6 +711,11 @@ static void qp_matrix(int16_t *matrix, int scale, int shift)
 
 static void set_qp(h264d_mb_current *mb, int qpy)
 {
+	static const int8_t qpc_adjust[22] = {
+		29, 30, 31, 32, 32, 33, 34, 34,
+		35, 35, 36, 36, 37, 37, 37, 38,
+		38, 38, 39, 39, 39, 39
+	};
 	int div;
 	int mod;
 	int qpc;
@@ -2957,11 +2955,6 @@ static inline void copy_inter(const uint8_t *src, uint8_t *dst, int width, int h
 static inline int inter_pred_mvoffset_luma(int mvint_x, int mvint_y, int stride)
 {
 	return mvint_y * stride + mvint_x;
-}
-
-static inline int inter_pred_mvoffset_chroma(int mvint_x, int mvint_y, int stride)
-{
-	return (mvint_y >> 1) * stride + (mvint_x >> 1) * 2;
 }
 
 typedef struct {
@@ -5937,7 +5930,6 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 	h264d_slice_header *hdr = h2d->slice_header;
 	h264d_pps *pps = &h2d->pps_i[hdr->pic_parameter_set_id];
 	h264d_mb_current *mb = &h2d->mb_current;
-	int mb_addr;
 	int is_ae = pps->entropy_coding_mode_flag;
 
 	if (is_ae) {
@@ -5945,7 +5937,6 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 		byte_align(st);
 		init_cabac_engine(mb->cabac, st);
 	}
-	mb_addr = hdr->first_mb_in_slice;
 	do {
 		uint32_t skip_num;
 		if ((hdr->slice_type != I_SLICE)
@@ -7719,7 +7710,7 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 	return map_cnt;
 }
 
-static inline int get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat, uint32_t dc_mask)
+static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat, uint32_t dc_mask)
 {
 	static const int16_t coeff_abs_level_offset[6] = {
 		227, 227 + 10, 227 + 20, 227 + 30, 227 + 39, 426
@@ -7764,7 +7755,6 @@ static inline int get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int 
 		idx = coeff_map[--mp];
 		coeff[idx] = (cabac_decode_bypass(cb, st) ? -abs_level : abs_level) * qmat[idx & dc_mask];
 	} while (mp);
-	return map_cnt;
 }
 
 struct residual_block_cabac {
@@ -7785,7 +7775,8 @@ struct residual_block_cabac {
 		int coeff_offset = (dc_mask >> 4);
 		memset(coeff + coeff_offset, 0, sizeof(*coeff) * num_coeff);
 		int map_cnt = get_coeff_map_cabac(cb, st, cat, num_coeff, coeff_map);
-		return get_coeff_from_map_cabac(cb, st, cat, coeff_map, map_cnt, coeff + coeff_offset, qmat + coeff_offset, dc_mask);
+		get_coeff_from_map_cabac(cb, st, cat, coeff_map, map_cnt, coeff + coeff_offset, qmat + coeff_offset, dc_mask);
+		return map_cnt <= 15 ? map_cnt : 15;
 	}
 };
 
