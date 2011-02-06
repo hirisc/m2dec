@@ -5788,11 +5788,11 @@ static void calc_mv_pskip(h264d_mb_current *mb, int16_t mv[], int avail)
 		return;
 	}
 	pmb = mb->left4x4inter;
-	if (pmb->ref[0] == 0 && pmb->mv[0][0] == 0 && pmb->mv[0][1] == 0) {
+	if (pmb->ref[0] == 0 && pmb->mv[0][0][0] == 0 && pmb->mv[0][0][1] == 0) {
 		return;
 	}
 	pmb = mb->top4x4inter;
-	if (pmb->ref[0] == 0 && pmb->mv[0][0] == 0 && pmb->mv[0][1] == 0) {
+	if (pmb->ref[0] == 0 && pmb->mv[0][0][0] == 0 && pmb->mv[0][0][1] == 0) {
 		return;
 	}
 	calc_mv16x16(mb, pmv, mvd_a, mvd_b, 0, avail);
@@ -5883,7 +5883,7 @@ static int more_rbsp_data(dec_bits *st)
 		bits = 8;
 	}
 	dt = show_bits(st, bits);
-	if (dt == (1 << (bits - 1))) {
+	if (dt == (1U << (bits - 1))) {
 		/* FIXME */
 		dt = show_bits(st, bits + 24);
 		if (1 < (dt & 0xffffff)) {
@@ -6419,7 +6419,7 @@ static inline void marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr
 	refs->num = frame_num;
 }
 
-static h264d_ref_frame_t *mmco_search(h264d_ref_frame_t *refs, int in_use, int target_num)
+static h264d_ref_frame_t *mmco_search(h264d_ref_frame_t *refs, int in_use, uint32_t target_num)
 {
 	int i = 16;
 	do {
@@ -6456,10 +6456,10 @@ static void mmco_op2(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_
 static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
 {
 	uint32_t long_num = mmco->arg2;
-	int target_num = frame_num - mmco->arg1 - 1;
+	uint32_t target_num = frame_num - mmco->arg1 - 1;
 	int i = 16;
 
-	while (target_num < 0) {
+	while ((int)target_num < 0) {
 		target_num += max_frame_num;
 	}
 	do {
@@ -7817,7 +7817,7 @@ static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *c
 		ctx += (mvd < 4) ? 1 : 0;
 		mvd += 1;
 		if (9 <= mvd) {
-			int exp = 3;
+			unsigned exp = 3;
 			while (cabac_decode_bypass(cb, st) && (exp < sizeof(mvd) * 4)) {
 				mvd += (1 << exp);
 				exp += 1;
