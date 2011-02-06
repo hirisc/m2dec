@@ -2589,10 +2589,6 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 	if (qp_delta) {
 		set_qp(mb, mb->qp + qp_delta);
 	}
-	mb->left4x4coef &= 0xffff0000;
-	*mb->top4x4coef &= 0xffff0000;
-	mb->left4x4pred = 0x22222222;
-	*mb->top4x4pred = 0x22222222;
 	if (ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, mb->qmaty, avail_intra, 26, 0, 0)) {
 		intra16x16_dc_transform(coeff, dc);
 		offset = mb->offset4x4;
@@ -2600,6 +2596,10 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 			ac4x4transform_dconly(luma + *offset++, dc[i], stride);
 		}
 	}
+	mb->left4x4coef &= 0xffff0000;
+	*mb->top4x4coef &= 0xffff0000;
+	mb->left4x4pred = 0x22222222;
+	*mb->top4x4pred = 0x22222222;
 	store_strength_intra(mb);
 	mb_intra_save_info(mb);
 	mb->cbp = mbc->cbp;
@@ -2609,7 +2609,6 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 static int mb_intra16x16_dconly_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
 	return mb_intra16x16_dconly(mb, mbc, st, avail, intra_chroma_pred_mode_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
-
 }
 
 template <typename F0, typename F1, typename F2>
