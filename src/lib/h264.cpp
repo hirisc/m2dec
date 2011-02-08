@@ -85,7 +85,8 @@ static uint32_t ue_golomb(dec_bits *str)
 static int32_t se_golomb(dec_bits *stream)
 {
 	int32_t ue = ue_golomb(stream);
-	return (((ue & 1) ? ue : -ue) + 1) >> 1;
+	int32_t t = (ue + 1) >> 1;
+	return (ue & 1) ? t : -t;
 }
 
 static const int8_t me_golomb_lut[2][48] = {
@@ -107,14 +108,13 @@ static const int8_t me_golomb_lut[2][48] = {
 	}
 };
 
-static int32_t me_golomb(dec_bits *stream, int is_inter)
+static inline int32_t me_golomb(dec_bits *stream, const int8_t *me_lut)
 {
 	uint32_t ue = ue_golomb(stream);
-	assert((unsigned)is_inter <= 1);
-	return me_golomb_lut[is_inter][(ue < 48) ? ue : 0];
+	return me_lut[(ue < 48) ? ue : 0];
 }
 
-static int32_t te_golomb(dec_bits *stream, int range)
+static inline int32_t te_golomb(dec_bits *stream, int range)
 {
 	return (range == 1) ? (get_onebit_inline(stream) ^ 1) : ue_golomb(stream);
 }
@@ -2179,13 +2179,13 @@ struct intra_chroma_pred_mode_cavlc {
 
 struct cbp_intra_cavlc {
 	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
-		return me_golomb(st, 0);
+		return me_golomb(st, me_golomb_lut[0]);
 	}
 };
 
 struct cbp_inter_cavlc {
 	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
-		return me_golomb(st, 1);
+		return me_golomb(st, me_golomb_lut[1]);
 	}
 };
 
