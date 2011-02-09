@@ -7291,6 +7291,7 @@ static inline int cabac_decode_terminate(h264d_cabac_t *cb, dec_bits *st)
 	int range = cb->range - 2;
 	int offset = cb->offset;
 	if (range <= offset) {
+		cb->range = range;
 		return 1;
 	} else {
 		cabac_renorm(cb, st, range, offset);
