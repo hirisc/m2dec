@@ -5828,7 +5828,6 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 	uint32_t max_mb_run = mb->max_x * mb->max_y - (mb->y * mb->max_x + mb->x);
 	uint32_t left4x4, top4x4;
 
-//	mb->type = (slice_type == P_SLICE) ? MB_PSKIP : MB_BSKIP;
 	mb->type = MB_PSKIP;
 	skip_mb_num = skip_mb_num < max_mb_run ? skip_mb_num : max_mb_run;
 	mb->left4x4pred = 0x22222222;
