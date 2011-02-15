@@ -41,6 +41,9 @@
 #define UNPACK(a, num) (((a) >> ((num) * 4)) & 15)
 #define PACK(a, val, num) ((a) | ((val) << ((num) * 4)))
 
+#define REFLIST(x) (x & 3)
+#define DPB(x) (x & 4)
+
 static inline cache_t get_bits32(dec_bits *ths, int bit_len)
 {
 	if (bit_len <= 24) {
@@ -196,6 +199,16 @@ static int vui_parameters(vui_parameters_t *vui, dec_bits *stream)
 	return 0;
 }
 
+static void read_poc_type1_cycle(h264d_sps *sps, dec_bits *st, int max_cycles)
+{
+	int32_t *offset = sps->offset_for_ref_frame;
+	int32_t delta = 0;
+	for (int i = 0; i < max_cycles; ++i) {
+		delta += se_golomb(st);
+		offset[i] = delta;
+	}
+}
+
 static void set_mb_size(h264d_mb_current *mb, int width, int height);
 
 static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
@@ -224,10 +237,8 @@ static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 		sps->delta_pic_order_always_zero_flag = get_onebit(stream);
 		sps->offset_for_non_ref_pic = se_golomb(stream);
 		sps->offset_for_top_to_bottom_field = se_golomb(stream);
-		sps->num_ref_frames_in_pic_order_cnt_cycle = ue_golomb(stream);
-		for (unsigned i = 0; i < sps->num_ref_frames_in_pic_order_cnt_cycle; ++i) {
-			sps->offset_for_ref_frame[i] = se_golomb(stream);
-		}
+		READ_UE_RANGE(sps->num_ref_frames_in_pic_order_cnt_cycle, stream, 255);
+		read_poc_type1_cycle(sps, stream, sps->num_ref_frames_in_pic_order_cnt_cycle);
 	}
 	READ_UE_RANGE(sps->num_ref_frames, stream, 16);
 	sps->gaps_in_frame_num_value_allowed_flag = get_onebit(stream);
@@ -573,14 +584,96 @@ int h264d_decode_picture(h264d_context *h2d)
 	return err;
 }
 
-int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma)
+static inline const h264d_frame *queueing_dpb(h264d_frame_info_t *frm, int dpb_max)
+{
+	if (dpb_max <= frm->dpb_num) {
+		h264d_ref_frame_t *refs = frm->refs;
+		int frm_num = frm->num;
+		int min_poc = INT_MAX;
+		int min_idx = -1;
+		for (int i = 0; i < frm_num; ++i) {
+			if (DPB(refs[i].in_use)) {
+				int poc = refs[i].poc;
+				if (poc && poc < min_poc) {
+					min_idx = i;
+					min_poc = poc;
+				}
+			}
+		}
+		if (0 <= min_idx) {
+			refs[min_idx].in_use = REFLIST(refs[min_idx].in_use);
+			frm->dpb_num -= 1;
+			return &frm->frames[refs[min_idx].frame_idx];
+		} else {
+			return 0;
+		}
+	} else {
+		return 0;
+	}
+}
+
+static inline h264d_ref_frame_t *search_poc0(h264d_ref_frame_t *ref, int max)
+{
+	int i;
+	for (i = 0; i < max; ++i) {
+		if (ref[i].poc == 0) {
+			break;
+		}
+	}
+	return (i < max) ? &ref[i] : 0;
+}
+
+static inline const h264d_frame *flush_dpb(h264d_frame_info_t *frm)
+{
+	h264d_ref_frame_t *ref = search_poc0(frm->refs, frm->num);
+	if (DPB(ref->in_use)) {
+		const h264d_frame *frames = queueing_dpb(frm, 0);
+		if (frames) {
+			return frames;
+		} else {
+			ref->in_use = REFLIST(ref->in_use);
+			frm->dpb_num = 0;
+			return &frm->frames[frm->index];
+		}
+	} else {
+		return 0;
+	}
+}
+
+static inline const h264d_frame *dpb_pull(h264d_context *h2d, int dpb_max)
+{
+	h264d_frame_info_t *frm = h2d->mb_current.frame;
+
+	if (h2d->slice_header->marking.idr || h2d->slice_header->marking.mmco5) {
+		return flush_dpb(frm);
+	} else {
+		return queueing_dpb(frm, dpb_max);
+	}
+}
+
+int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma, int dpb_mode)
 {
 	if (!h2d || !luma || !chroma) {
 		return -1;
 	}
-	*luma = h2d->mb_current.frame->curr_luma;
-	*chroma = h2d->mb_current.frame->curr_chroma;
-	return 0;
+	if (dpb_mode) {
+		const h264d_frame *frm = dpb_pull(h2d, 16);
+		if (frm == 0) {
+			return 0;
+		}
+		*luma = frm->luma;
+		*chroma = frm->chroma;
+	} else {
+		const h264d_frame_info_t *frm = h2d->mb_current.frame;
+		*luma = frm->curr_luma;
+		*chroma = frm->curr_chroma;
+		for (int i = 0; i < 16; ++i) {
+			if (frm->refs[i].frame_idx == frm->index) {
+				frm->refs[i].in_use &= ~IN_DPB;
+			}
+		}
+	}
+	return 1;
 }
 
 static int read_slice(h264d_context *h2d, dec_bits *st);
@@ -635,37 +728,29 @@ static int slice_type_adjust(int slice_type)
 	return (SI_SLICE < slice_type) ? slice_type - SI_SLICE - 1 : slice_type;
 }
 
-static inline uint32_t frames_in_use(h264d_ref_frame_t *refs)
-{
-	int i = 16;
-	uint32_t map = 0;
-	do {
-		if (refs->in_use) {
-			map |= 1 << refs->frame_idx;
-		}
-		refs++;
-	} while (--i);
-	return map;
-}
-
 static inline void find_empty_frame(h264d_mb_current *mb)
 {
 	h264d_frame_info_t *frm = mb->frame;
+	h264d_ref_frame_t *refs = frm->refs;
+	int8_t *lru = frm->lru;
 	int max_idx = 0;
 	int max_val = -1;
-	uint32_t in_use = frames_in_use(frm->refs);
-	uint32_t mask = 1;
-	int *lru = frm->lru;
-	for (int i = 0; i < frm->num; ++i) {
-		if (!(in_use & mask)) {
-			int val = lru[i];
-			if (max_val < val) {
-				max_val = val;
-				max_idx = i;
-			}
-			lru[i] = val + 1;
+	int frm_num = frm->num;
+
+	for (int i = 0; i < frm_num; ++i) {
+		lru[i] += 2;
+	}
+	for (int i = 0; i < frm_num; ++i) {
+		if (refs[i].in_use) {
+			lru[refs[i].frame_idx] = REFLIST(refs[i].in_use) ? 0 : 1;
 		}
-		mask <<= 1;
+	}
+	for (int i = 0; i < frm_num; ++i) {
+		int val = lru[i];
+		if (max_val < val) {
+			max_val = val;
+			max_idx = i;
+		}
 	}
 	lru[max_idx] = 0;
 	frm->index = max_idx;
@@ -751,7 +836,101 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 	}
 }
 
+static inline void calc_poc0(h264d_slice_header *hdr, int log2_max_lsb, int lsb)
+{
+	int prev_poc = hdr->poc;
+	int prev_lsb, prev_msb;
+	int msb;
+	int max_lsb_2;
+	if (hdr->first_mb_in_slice != 0) {
+		return;
+	}
+	if (hdr->marking.idr || hdr->marking.mmco5) {
+		prev_msb = 0;
+		if (hdr->marking.mmco5 && hdr->field_pic_flag && hdr->bottom_field_flag) {
+			prev_lsb = hdr->poc0.lsb;
+		} else {
+			prev_lsb = 0;
+		}
+	} else  {
+		prev_lsb = hdr->poc0.lsb;
+		prev_msb = hdr->poc0.msb;
+	}
+	hdr->poc0.lsb = lsb;
+	max_lsb_2 = (1 << log2_max_lsb) >> 1;
+	if ((lsb < prev_lsb) && (max_lsb_2 <= (prev_lsb - lsb))) {
+		msb = prev_msb + max_lsb_2 * 2;
+	} else if ((prev_lsb < lsb) && (max_lsb_2 < (lsb - prev_lsb))) {
+		msb = prev_msb - max_lsb_2 * 2;
+	} else {
+		msb = prev_msb;
+	}
+	hdr->poc0.msb = msb;
+	hdr->poc = msb + lsb;
+	hdr->poc_bottom = hdr->poc + hdr->poc0.delta_pic_order_cnt_bottom;
+}
 
+static inline void calc_poc1(h264d_slice_header *hdr, const h264d_sps *sps, int nal_id)
+{
+	unsigned frame_num;
+	int poc;
+
+	if (hdr->first_mb_in_slice != 0) {
+		return;
+	}
+	frame_num = hdr->frame_num;
+	if (sps->num_ref_frames_in_pic_order_cnt_cycle && !hdr->marking.idr && !hdr->marking.mmco5) {
+		unsigned num_offset = hdr->poc1.num_offset;
+		if (frame_num < hdr->prev_frame_num) {
+			num_offset += (1 << sps->log2_max_frame_num);
+			hdr->poc1.num_offset = num_offset;
+		}
+		frame_num += num_offset;
+	} else {
+		hdr->poc1.num_offset = 0;
+	}
+	if (frame_num != 0) {
+		int cycle_cnt = 0;
+		int cycle_sum = sps->offset_for_ref_frame[sps->num_ref_frames_in_pic_order_cnt_cycle - 1];
+		frame_num--;
+		if (frame_num != 0 && !(nal_id & 0x60)) {
+			frame_num--;
+		}
+		while (cycle_sum <= (int)frame_num) {
+			frame_num -= cycle_sum;
+			cycle_cnt++;
+		}
+		poc = cycle_cnt * cycle_sum + sps->offset_for_ref_frame[frame_num & 255];
+		if ((nal_id & 0x60) == 0) {
+			poc += sps->offset_for_non_ref_pic;
+		}
+	} else {
+		poc = 0;
+	}
+	hdr->poc = poc = poc + hdr->poc1.delta_pic_order_cnt[0];
+	hdr->poc_bottom = poc + sps->offset_for_top_to_bottom_field + hdr->poc1.delta_pic_order_cnt[1];
+}
+
+static inline void calc_poc2(h264d_slice_header *hdr, const h264d_sps *sps, int nal_id)
+{
+	int poc;
+
+	if (hdr->first_mb_in_slice != 0) {
+		return;
+	}
+	if (hdr->marking.idr || hdr->marking.mmco5) {
+		poc = 0;
+	} else {
+		int prev_frame_num = hdr->prev_frame_num;
+		int frame_num = hdr->frame_num;
+		if (frame_num < prev_frame_num) {
+			frame_num += (1 << sps->log2_max_frame_num);
+		}
+		poc = frame_num * 2 - ((nal_id & 0x60) == 0);
+	}
+	hdr->poc = poc;
+	hdr->poc_bottom = poc;
+}
 
 static int slice_header(h264d_context *h2d, dec_bits *st)
 {
@@ -782,20 +961,34 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		}
 	}
 	if ((h2d->id & 31) == 5) {
+		hdr->marking.idr = 1;
 		READ_UE_RANGE(hdr->idr_pic_id, st, 65535);
+	} else {
+		hdr->marking.idr = 0;
 	}
 	set_mb_size(&h2d->mb_current, sps->pic_width, sps->pic_height);
 	set_mb_pos(&h2d->mb_current, hdr->first_mb_in_slice);
 	if (sps->poc_type == 0) {
-		hdr->poc0.lsb = get_bits(st, sps->log2_max_poc_lsb);
+		uint32_t lsb = get_bits(st, sps->log2_max_poc_lsb);
 		if (!hdr->field_pic_flag && pps->pic_order_present_flag) {
 			hdr->poc0.delta_pic_order_cnt_bottom = se_golomb(st);
+		} else {
+			hdr->poc0.delta_pic_order_cnt_bottom = 0;
 		}
-	} else if ((sps->poc_type == 1) && !sps->delta_pic_order_always_zero_flag) {
-		hdr->poc1.delta_pic_order_cnt[0] = se_golomb(st);
-		if (!hdr->field_pic_flag && pps->pic_order_present_flag) {
-			hdr->poc1.delta_pic_order_cnt[1] = se_golomb(st);
+		calc_poc0(hdr, sps->log2_max_poc_lsb, lsb);
+	} else if (sps->poc_type == 1) {
+		if (!sps->delta_pic_order_always_zero_flag) {
+			hdr->poc1.delta_pic_order_cnt[0] = se_golomb(st);
+			if (!hdr->field_pic_flag && pps->pic_order_present_flag) {
+				hdr->poc1.delta_pic_order_cnt[1] = se_golomb(st);
+			}
+		} else {
+			hdr->poc1.delta_pic_order_cnt[0] = 0;
+			hdr->poc1.delta_pic_order_cnt[1] = 0;
 		}
+		calc_poc1(hdr, sps, h2d->id);
+	} else {
+		calc_poc2(hdr, sps, h2d->id);
 	}
 	if (pps->redundant_pic_cnt_present_flag) {
 		hdr->redundant_pic_cnt = ue_golomb(st);
@@ -833,9 +1026,14 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		}
 	}
 	if (h2d->id & 0x60) {
-		if (dec_ref_pic_marking(h2d->id & 31, &hdr->marking, st) != 0) {
+		if (dec_ref_pic_marking(h2d->id & 31, &hdr->marking, st) < 0) {
+			return -1;
+		}
+		if (hdr->marking.mmco5) {
 			hdr->frame_num = 0;
 		}
+	} else {
+		memset(&hdr->marking, 0, sizeof(hdr->marking));
 	}
 	if (pps->entropy_coding_mode_flag) {
 		if ((hdr->slice_type != I_SLICE)
@@ -888,16 +1086,21 @@ static inline int calc_short_term(int idc, int num, int frame_num, int max_frame
 	return no_wrap;
 }
 
+#define DUMP_REF_LIST
 static void dump_ref_list(h264d_ref_frame_t *refs, int num_ref_frames)
 {
+#if defined(DUMP_REF_LIST) && !defined(NDEBUG) && !defined(__RENESAS_VERSION__)
 	printf("length: %d\n", num_ref_frames);
 	if (!num_ref_frames) {
 		return;
 	}
-	do {
-		printf("\t%d %d\n", refs->num, refs->in_use);
+	for (int i = 0; i < num_ref_frames; ++i) {
+		if (refs->in_use) {
+			printf("\t%d :\t[%d] %d %d\n", i, refs->frame_idx, refs->poc, refs->in_use);
+		}
 		refs++;
-	} while (--num_ref_frames);
+	}
+#endif
 }
 
 static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_ref_frames, int frame_num, int max_frame_num)
@@ -928,14 +1131,14 @@ static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_r
 			} else {
 				mode = LONG_TERM;
 			}
-			if (!refs[num_ref_frames].in_use) {
-				while (!refs[num_ref_frames].in_use && 0 <= num_ref_frames) {
+			if (!REFLIST(refs[num_ref_frames].in_use)) {
+				while (!REFLIST(refs[num_ref_frames].in_use) && 0 <= num_ref_frames) {
 					--num_ref_frames;
 				}
 				++num_ref_frames;
 			}
 			curr_idx = refIdxLx;
-			while (!(refs[curr_idx].num == num && refs[curr_idx].in_use == mode) && curr_idx < num_ref_frames) {
+			while (!(refs[curr_idx].num == num && REFLIST(refs[curr_idx].in_use) == mode) && curr_idx < num_ref_frames) {
 				curr_idx++;
 			}
 			if (num_ref_frames <= curr_idx) {
@@ -948,7 +1151,6 @@ static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_r
 			}
 			refs[curr_idx] = tmp_ref;
 		}
-//		dump_ref_list(refs, num_ref_frames);
 	}
 	return 0;
 }
@@ -964,12 +1166,12 @@ static int dec_ref_pic_marking(int nal_unit_type, h264d_marking_t *mrk, dec_bits
 	int op5_detect = 0;
 
 	if (nal_unit_type == 5) {
-		mrk->idr.no_output_of_prior_pic_flag = tmp;
-		mrk->idr.long_term_reference_flag = get_onebit(st);
+		mrk->no_output_of_prior_pic_flag = tmp;
+		mrk->long_term_reference_flag = get_onebit(st);
 	} else {
-		mrk->non_idr.adaptive_ref_pic_marking_mode_flag = tmp;
+		mrk->adaptive_ref_pic_marking_mode_flag = tmp;
 		if (tmp) {
-			h264d_mmco *mmco = mrk->non_idr.mmco;
+			h264d_mmco *mmco = mrk->mmco;
 			int i = 16;
 			do {
 				READ_UE_RANGE(mmco->op, st, 6);
@@ -995,7 +1197,8 @@ static int dec_ref_pic_marking(int nal_unit_type, h264d_marking_t *mrk, dec_bits
 			} while (--i);
 		}
 	}
-	return op5_detect;
+	mrk->mmco5 = op5_detect;
+	return 0;
 }
 
 static inline int get_nC(int na, int nb)
@@ -5828,6 +6031,7 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 	uint32_t max_mb_run = mb->max_x * mb->max_y - (mb->y * mb->max_x + mb->x);
 	uint32_t left4x4, top4x4;
 
+//	mb->type = (slice_type == P_SLICE) ? MB_PSKIP : MB_BSKIP;
 	mb->type = MB_PSKIP;
 	skip_mb_num = skip_mb_num < max_mb_run ? skip_mb_num : max_mb_run;
 	mb->left4x4pred = 0x22222222;
@@ -6403,20 +6607,22 @@ static inline void deblock_pb(h264d_mb_current *mb)
 	}
 }
 
-static inline void marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames)
+static inline h264d_ref_frame_t *marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	int min_frm_num = INT_MAX;
 	int min_idx = 0;
 	int empty_idx = -1;
+	int non_dpb_idx = -1;
 	int num_long = 0;
 	int num_short = 0;
+
 	for (int i = 0; i < 16; ++i) {
 		int in_use = refs[i].in_use;
 		if (in_use == NOT_IN_USE) {
 			if (empty_idx < 0) {
 				empty_idx = i;
 			}
-		} else if (in_use == SHORT_TERM) {
+		} else if (REFLIST(in_use) == SHORT_TERM) {
 			int num = refs[i].num;
 			if (frame_num < num) {
 				num -= max_frame_num;
@@ -6426,41 +6632,37 @@ static inline void marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr
 				min_idx = i;
 			}
 			num_short++;
-		} else {
+		} else if (REFLIST(in_use) == LONG_TERM) {
 			num_long++;
 		}
 	}
 	if (num_short + num_long < num_ref_frames) {
-		refs +=	empty_idx;
+		refs +=	(0 < empty_idx) ? empty_idx : num_ref_frames - 1;
 	} else {
 		refs += min_idx;
 	}
-	refs->in_use = SHORT_TERM;
+	refs->in_use = IN_DPB | SHORT_TERM;
 	refs->frame_idx = frame_ptr;
 	refs->num = frame_num;
-}
-
-static h264d_ref_frame_t *mmco_search(h264d_ref_frame_t *refs, int in_use, uint32_t target_num)
-{
-	int i = 16;
-	do {
-		if (refs->num == target_num && refs->in_use == in_use) {
-			break;
-		}
-		refs++;
-	} while (--i);
-	return i == 0 ? 0 : refs;
+	refs->poc = poc;
+	return refs;
 }
 
 static void mmco_discard(h264d_ref_frame_t *refs, int in_use, int target_num)
 {
-	h264d_ref_frame_t *ref = mmco_search(refs, in_use, target_num);
-	if (ref) {
-		ref->in_use = NOT_IN_USE;
+	int i = 16;
+	do {
+		if (refs->num == target_num && REFLIST(refs->in_use) == in_use) {
+			break;
+		}
+		refs++;
+	} while (--i);
+	if (i) {
+		refs->in_use = DPB(refs->in_use) | NOT_IN_USE;
 	}
 }
 
-static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
 	int num = frame_num - mmco->arg1 - 1;
 	while (num < 0) {
@@ -6469,12 +6671,12 @@ static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_
 	mmco_discard(refs, SHORT_TERM, num);
 }
 
-static void mmco_op2(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static void mmco_op2(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
 	mmco_discard(refs, LONG_TERM, mmco->arg1);
 }
 
-static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
 	uint32_t long_num = mmco->arg2;
 	uint32_t target_num = frame_num - mmco->arg1 - 1;
@@ -6484,13 +6686,14 @@ static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_
 		target_num += max_frame_num;
 	}
 	do {
-		if (refs->in_use == LONG_TERM) {
+		int in_use = REFLIST(refs->in_use);
+		if (in_use == LONG_TERM) {
 			if (refs->num == long_num) {
-				refs->in_use = NOT_IN_USE;
+				refs->in_use = DPB(refs->in_use) | NOT_IN_USE;
 			}
-		} else if (refs->in_use == SHORT_TERM) {
+		} else if (in_use == SHORT_TERM) {
 			if (refs->num == target_num) {
-				refs->in_use = LONG_TERM;
+				refs->in_use = DPB(refs->in_use) | LONG_TERM;
 				refs->num = long_num;
 			}
 		}
@@ -6498,23 +6701,23 @@ static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_
 	} while (--i);
 }
 
-static void mmco_op4(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static void mmco_op4(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
 	int i = 16;
 	uint32_t max_long_term_idx_plus1 = mmco->arg1;
 	do {
-		if (refs->in_use == LONG_TERM && max_long_term_idx_plus1 <= refs->num) {
-			refs->in_use = NOT_IN_USE;
+		if (REFLIST(refs->in_use) == LONG_TERM && max_long_term_idx_plus1 <= refs->num) {
+			refs->in_use = DPB(refs->in_use) | NOT_IN_USE;
 		}
 		refs++;
 	} while (--i);
 }
 
-static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
 	int i = 16;
 	do {
-		refs->in_use = NOT_IN_USE;
+		refs->in_use = DPB(refs->in_use) | NOT_IN_USE;
 		refs++;
 	} while (--i);
 }
@@ -6524,7 +6727,7 @@ static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs)
 	int i = 16;
 	h264d_ref_frame_t *empty_ref;
 	do {
-		if (refs->in_use == 0) {
+		if (refs->in_use == NOT_IN_USE) {
 			empty_ref = refs;
 			break;
 		}
@@ -6533,34 +6736,32 @@ static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs)
 	return i ? empty_ref : refs - 1;
 }
 
-static void mmco_op6(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_nuim, int max_frame_num)
+static h264d_ref_frame_t *insert_short_ref(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int poc)
 {
 	h264d_ref_frame_t *empty_ref = find_empty_ref(refs);
-	empty_ref->in_use = LONG_TERM;
-	empty_ref->frame_idx = frame_ptr;
-	empty_ref->num = mmco->arg1;
+	memmove(&refs[1], refs, (empty_ref - refs) * sizeof(refs[0]));
+	refs->in_use = IN_DPB | SHORT_TERM;
+	refs->frame_idx = frame_ptr;
+	refs->num = frame_num;
+	refs->poc = poc;
+	return empty_ref;
 }
 
-static void insert_short_ref(h264d_ref_frame_t *refs, int frame_ptr, int frame_num)
+static void mmco_op6(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
-	h264d_ref_frame_t *empty_ref = find_empty_ref(refs);
-	while (empty_ref != refs) {
-		*empty_ref = *(empty_ref - 1);
-		empty_ref--;
-	}
-	empty_ref->in_use = SHORT_TERM;
-	empty_ref->frame_idx = frame_ptr;
-	empty_ref->num = frame_num;
+	h264d_ref_frame_t *ref = insert_short_ref(refs, frame_ptr, frame_num, poc);
+	ref->in_use = IN_DPB | LONG_TERM;
+	ref->num = mmco->arg1;
 }
 
-static void (* const mmco_ops[6])(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num) = {
+static void (* const mmco_ops[6])(const h264d_mmco *mmco, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc) = {
 	mmco_op1, mmco_op2, mmco_op3,
 	mmco_op4, mmco_op5, mmco_op6,
 };
 
-static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num)
+static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
-	const h264d_mmco *mmco = mrk->non_idr.mmco;
+	const h264d_mmco *mmco = mrk->mmco;
 	int op5_detect = 0;
 	int op6_detect = 0;
 	int i = 16;
@@ -6575,11 +6776,40 @@ static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, i
 				op6_detect = 1;
 			}
 		}
-		mmco_ops[op - 1](mmco, refs, frame_ptr, frame_num, max_frame_num);
+		mmco_ops[op - 1](mmco, refs, frame_ptr, frame_num, max_frame_num, poc);
 		mmco++;
 	} while (--i);
 	if (!op6_detect) {
-		insert_short_ref(refs, frame_ptr, op5_detect ? 0 : frame_num);
+		if (op5_detect) {
+			frame_num = poc = 0;
+		}
+		insert_short_ref(refs, frame_ptr, frame_num, poc);
+	}
+}
+
+static inline void gap_mbs(h264d_slice_header *hdr, h264d_mb_current *mb, h264d_ref_frame_t *refs, int max_frame_num, int num_ref_frames)
+{
+	int frame_num = hdr->frame_num;
+	int prev_frame_num = hdr->prev_frame_num;
+	int gap = frame_num - prev_frame_num;
+	while (gap < 0) {
+		gap += max_frame_num;
+	}
+	if (0 < --gap) {
+		int poc = hdr->poc;
+		if (16 < gap) {
+			gap = 16;
+			prev_frame_num = frame_num - 17;
+		}
+		do {
+			h264d_ref_frame_t *r;
+			if (max_frame_num <= ++prev_frame_num) {
+				prev_frame_num -= max_frame_num;
+			}
+			r = marking_sliding_window(refs, mb->frame->index, prev_frame_num, max_frame_num, num_ref_frames, poc);
+			r->in_use = SHORT_TERM;
+			mb->frame->dpb_num++;
+		} while (--gap);
 	}
 }
 
@@ -6587,42 +6817,31 @@ static inline void post_ref_pic_marking(h264d_slice_header *hdr, int nal_unit_ty
 {
 	h264d_marking_t *mrk = &hdr->marking;
 	int frame_num = hdr->frame_num;
+	int poc = hdr->poc;
 	if (nal_unit_type == SLICE_IDR_NAL) {
-		refs[0].in_use = mrk->idr.long_term_reference_flag ? LONG_TERM : SHORT_TERM;
+		refs[0].in_use = IN_DPB | (mrk->long_term_reference_flag ? LONG_TERM : SHORT_TERM);
 		refs[0].frame_idx = mb->frame->index;
 		refs[0].num = frame_num;
+		refs[0].poc = poc;
 		for (int i = 1; i < 16; ++i) {
-			refs[i].in_use = 0;
+			refs[i].in_use = DPB(refs[i].in_use) | NOT_IN_USE;
 		}
 	} else {
-		int prev_frame_num = hdr->prev_frame_num;
-		int gap = frame_num - prev_frame_num;
-		while (gap < 0) {
-			gap += max_frame_num;
+		if (!hdr->marking.idr && !hdr->marking.mmco5) {
+			gap_mbs(hdr, mb, refs, max_frame_num, num_ref_frames);
 		}
-		if (0 < --gap) {
-			if (16 < gap) {
-				gap = 16;
-				prev_frame_num = frame_num - 17;
-			}
-			do {
-				if (max_frame_num <= ++prev_frame_num) {
-					prev_frame_num -= max_frame_num;
-				}
-				marking_sliding_window(refs, mb->frame->index, prev_frame_num, max_frame_num, num_ref_frames);
-			} while (--gap);
-		}
-		if (mrk->non_idr.adaptive_ref_pic_marking_mode_flag) {
-			marking_mmco(mrk, refs, mb->frame->index, frame_num, max_frame_num);
+		if (mrk->adaptive_ref_pic_marking_mode_flag) {
+			marking_mmco(mrk, refs, mb->frame->index, frame_num, max_frame_num, poc);
 		} else {
-			marking_sliding_window(refs, mb->frame->index, frame_num, max_frame_num, num_ref_frames);
+			marking_sliding_window(refs, mb->frame->index, frame_num, max_frame_num, num_ref_frames, poc);
 		}
+		mb->frame->dpb_num++;
 	}
 }
 
 static inline int ref_pic_eval(const h264d_ref_frame_t& ref, int frame_num, int max_frame_num)
 {
-	int in_use = ref.in_use;
+	int in_use = REFLIST(ref.in_use);
 	int num = ref.num;
 	if (in_use == SHORT_TERM) {
 		return (frame_num < num) ? num - max_frame_num : num;
@@ -6663,8 +6882,9 @@ static inline void ref_pic_init_ip(h264d_ref_frame_t *ref, int frame_num, int ma
 {
 	sort_ref(ref, num_ref_frames, frame_num, max_frame_num);
 	for (int i = num_ref_frames; i < 16; ++i) {
-		ref[i].in_use = 0;
+		ref[i].in_use = DPB(ref[i].in_use) | NOT_IN_USE;
 	}
+	dump_ref_list(ref, 16);
 }
 
 static int post_process(h264d_context *h2d, h264d_mb_current *mb)
@@ -6675,6 +6895,7 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 
 	hdr = h2d->slice_header;
 	if (is_filled) {
+		h264d_frame_info_t *frame;
 		deblock_pb(mb);
 		h264d_sps *sps = &h2d->sps_i[h2d->pps_i[hdr->pic_parameter_set_id].seq_parameter_set_id];
 		int max_frame_num = 1 << sps->log2_max_frame_num;
@@ -6686,6 +6907,7 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 				post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, &h2d->mb_current, hdr->reorder[1].ref_frames);
 			}
 		}
+		frame = h2d->mb_current.frame;
 		ref_pic_init_ip(hdr->reorder[0].ref_frames, hdr->frame_num, max_frame_num, num_ref_frames);
 		hdr->prev_frame_num = hdr->frame_num;
 		hdr->first_mb_in_slice = mb->max_x * mb->max_x;

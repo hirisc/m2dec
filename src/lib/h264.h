@@ -51,6 +51,7 @@ enum {
 	NOT_IN_USE = 0,
 	SHORT_TERM = 1,
 	LONG_TERM = 2,
+	IN_DPB = 4,
 	UNDEFINED_NAL = 0,
 	SLICE_NONIDR_NAL = 1,
 	SLICE_PARTA_NAL = 2,
@@ -136,6 +137,7 @@ typedef struct {
 	int8_t log2_max_frame_num;
 	int8_t log2_max_poc_lsb;
 	uint8_t num_ref_frames;
+	uint8_t num_ref_frames_in_pic_order_cnt_cycle;
 	int16_t pic_width;
 	int16_t pic_height;
 	int16_t frame_crop[4];
@@ -149,9 +151,8 @@ typedef struct {
 	unsigned vui_parameters_present_flag : 1;
 	int32_t offset_for_non_ref_pic;
 	int32_t offset_for_top_to_bottom_field;
-	uint32_t num_ref_frames_in_pic_order_cnt_cycle;
-	vui_parameters_t vui;
 	int32_t offset_for_ref_frame[256];
+	vui_parameters_t vui;
 } h264d_sps;
 
 typedef struct {
@@ -185,6 +186,7 @@ typedef struct {
 	int16_t in_use; /* 0, 1, 2 = unused, short_term, long_term */
 	int16_t frame_idx;
 	uint32_t num;
+	int32_t poc;
 } h264d_ref_frame_t;
 
 typedef struct {
@@ -198,16 +200,12 @@ typedef struct {
 } h264d_mmco;
 
 typedef struct {
-	union {
-		struct {
-			unsigned no_output_of_prior_pic_flag : 1;
-			unsigned long_term_reference_flag : 1;
-		} idr;
-		struct {
-			int8_t adaptive_ref_pic_marking_mode_flag;
-			h264d_mmco mmco[16];
-		} non_idr;
-	};
+	unsigned idr : 1;
+	unsigned mmco5 : 1;
+	unsigned no_output_of_prior_pic_flag : 1;
+	unsigned long_term_reference_flag : 1;
+	unsigned adaptive_ref_pic_marking_mode_flag : 1;
+	h264d_mmco mmco[16];
 } h264d_marking_t;
 
 typedef struct {
@@ -230,6 +228,7 @@ typedef struct {
 	uint32_t first_mb_in_slice;
 	uint32_t frame_num;
 	uint32_t prev_frame_num;
+	int32_t poc, poc_bottom;
 	union {
 		struct {
 			uint32_t lsb;
@@ -237,10 +236,10 @@ typedef struct {
 			int32_t delta_pic_order_cnt_bottom;
 		} poc0;
 		struct {
+			uint32_t num_offset;
 			int32_t delta_pic_order_cnt[2];
 		} poc1;
 	};
-	uint32_t poc;
 	uint32_t redundant_pic_cnt;
 	h264d_reorder_t reorder[2];
 	h264d_marking_t marking;
@@ -251,9 +250,10 @@ typedef struct {
 	uint8_t *curr_chroma;
 	int num;
 	int index;
+	int dpb_num;
 	h264d_ref_frame_t *refs;
 	h264d_frame frames[32];
-	int lru[32];
+	int8_t lru[32];
 } h264d_frame_info_t;
 
 typedef struct {
@@ -349,7 +349,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, h264d_info_t *info);
 int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame);
 int h264d_decode_picture(h264d_context *h2d);
-int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma);
+int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma, int dpb_mode);
 void h264d_load_bytes_skip03(dec_bits *ths, intptr_t read_bytes);
 
 #ifdef __cplusplus

@@ -4,6 +4,7 @@
 #include "getopt.h"
 #include "bitio.h"
 #include "h264.h"
+#include "md5.h"
 
 #ifdef __RENESAS_VERSION__
 
@@ -86,11 +87,19 @@ struct input_data_t {
 	size_t pos_;
 	void *var_;
 	FILE *fo_;
-	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0) {
+	bool md5_;
+	bool dpb_;
+	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), md5_(false), dpb_(true) {
 		FILE *fi;
 		int opt;
-		while ((opt = getopt(argc, argv, "o:O:")) != -1) {
+		while ((opt = getopt(argc, argv, "do:O:")) != -1) {
 			switch (opt) {
+			case 'd':
+				dpb_ = false;
+				break;
+			case 'O':
+				md5_ = true;
+				/* FALLTHROUGH */
 			case 'o':
 				fo_ = fopen(optarg, "wb");
 				break;
@@ -116,17 +125,43 @@ struct input_data_t {
 			fclose(fo_);
 		}
 	}
-	size_t write(const void *data, size_t size) {
+	static void md5txt(const unsigned char *md5, char *txt)
+	{
+		for (int i = 0; i < 16; ++i) {
+			sprintf(txt + i * 2, "%02xd", *md5++);
+		}
+		txt[32] = 0x0d;
+		txt[33] = 0x0a;
+	}
+	size_t writeframe(const void *luma, const void *chroma, size_t luma_size) {
 		if (fo_) {
-			fwrite(data, 1, size, fo_);
-			return size;
+			if (md5_) {
+				md5_state_t md5;
+				md5_byte_t digest[16];
+				char txt[16 * 2 + 2];
+
+				md5_init(&md5);
+				md5_append(&md5, (const md5_byte_t *)luma, (int)luma_size);
+				md5_append(&md5, (const md5_byte_t *)chroma, (int)(luma_size >> 1));
+				md5_finish(&md5, digest);
+				md5txt(digest, txt);
+				fwrite(txt, 1, sizeof(txt), fo_);
+			} else {
+				fwrite(luma, 1, luma_size, fo_);
+				fwrite(chroma, 1, luma_size >> 1, fo_);
+			}
+			return luma_size;
 		}
 		return 0;
 	}
 	void BlameUser() {
 		fprintf(stderr,
 			"Usage:\n"
-			"\th264dec [-o <outfile>] <infile>\n");
+			"\th264dec [-o|O <outfile>] <infile>\n"
+			"\t\t-o: RAW output\n"
+			"\t\t-O: MD5 output\n"
+			"\t\t-d: Bypass DPB\n"
+			);
 		exit(-1);
 	}
 };
@@ -147,6 +182,8 @@ int main(int argc, char *argv[])
 {
 	h264d_context *h2d;
 	h264d_frame *mem;
+	uint8_t *luma, *chroma;
+	int luma_size;
 	int err;
 
 	h2d = new h264d_context;
@@ -170,7 +207,7 @@ int main(int argc, char *argv[])
 		"width x height x num: %d x %d x %d\n"
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
-	info.frame_num = info.frame_num < 3 ? 3 : info.frame_num;
+	info.frame_num = info.frame_num < 3 ? 3 : (info.frame_num + (data.dpb_ ? 16 : 0));
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
 	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame);
@@ -179,19 +216,26 @@ int main(int argc, char *argv[])
 	}
 	jmp_buf jmp;
 	dec_bits_set_callback(h2d->stream, reread_file, &data, &jmp);
+	luma_size = info.src_height * info.src_width;
 	for (int i = 0; i < 100000; ++i) {
-		uint8_t *luma, *chroma;
-		int luma_size;
 
 		err = h264d_decode_picture(h2d);
 		if (err == -1) {
 			break;
 		}
-		h246d_get_decoded_frame(h2d, &luma, &chroma);
-		luma_size = info.src_height * info.src_width;
-		data.write(luma, luma_size);
-		data.write(chroma, luma_size >> 1);
+		while (h246d_get_decoded_frame(h2d, &luma, &chroma, data.dpb_)) {
+			data.writeframe(luma, chroma, luma_size);
+			if (!data.dpb_) {
+				break;
+			}
+		}
 		if (err < 0) {
+			break;
+		}
+	}
+	while (h246d_get_decoded_frame(h2d, &luma, &chroma, data.dpb_)) {
+		data.writeframe(luma, chroma, luma_size);
+		if (!data.dpb_) {
 			break;
 		}
 	}
