@@ -1,4 +1,4 @@
-AC_INIT(m2dec, 0.1.10q)
+AC_INIT(m2dec, 0.1.10l)
 AC_CONFIG_SRCDIR(src/lib/mpeg2.cpp)
 AM_INIT_AUTOMAKE(dist-bzip2)
 dnl AC_PROG_LIBTOOL
@@ -50,4 +50,4 @@ AC_ARG_ENABLE(display,
 esac],[aadisp=false])
 AM_CONDITIONAL(AALIB, test x$aadisp = xtrue)
 dnl files to be generated
-AC_OUTPUT(Makefile src/Makefile src/lib/Makefile src/app/Makefile src/omx/Makefile Project/Makefile Project/VC/Makefile Project/HEW/Makefile Project/HEW/m2dec/Makefile Project/HEW/libm2dec/Makefile Project/HEW/h264dec/Makefile extras/Makefile)
+AC_OUTPUT(Makefile src/Makefile src/lib/Makefile src/app/Makefile src/omx/Makefile Project/Makefile Project/VC/Makefile Project/HEW/Makefile Project/HEW/m2dec/Makefile Project/HEW/libm2dec/Makefile extras/Makefile)
