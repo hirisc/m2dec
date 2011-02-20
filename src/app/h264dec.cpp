@@ -187,13 +187,13 @@ int main(int argc, char *argv[])
 	int err;
 
 	h2d = new h264d_context;
-	err = h264d_init(h2d);
-	if (err) {
-		return err;
-	}
 	input_data_t data(argc, argv, (void *)h2d);
 	if (data.len_ <= 0) {
 		return -1;
+	}
+	err = h264d_init(h2d, data.dpb_ ? 16 : 1);
+	if (err) {
+		return err;
 	}
 	err = h264d_read_header(h2d, data.data_, data.len_);
 	data.pos_ = data.len_;
@@ -233,7 +233,7 @@ int main(int argc, char *argv[])
 			break;
 		}
 	}
-	while (h246d_get_decoded_frame(h2d, &luma, &chroma, data.dpb_)) {
+	while (h246d_get_decoded_frame(h2d, &luma, &chroma, 0)) {
 		data.writeframe(luma, chroma, luma_size);
 		if (!data.dpb_) {
 			break;

@@ -51,7 +51,6 @@ enum {
 	NOT_IN_USE = 0,
 	SHORT_TERM = 1,
 	LONG_TERM = 2,
-	IN_DPB = 4,
 	UNDEFINED_NAL = 0,
 	SLICE_NONIDR_NAL = 1,
 	SLICE_PARTA_NAL = 2,
@@ -191,7 +190,7 @@ typedef struct {
 
 typedef struct {
 	int8_t ref_pic_list_reordering_flag;
-	h264d_ref_frame_t ref_frames[16];
+	h264d_ref_frame_t *ref_frames;
 } h264d_reorder_t;
 
 typedef struct {
@@ -246,14 +245,27 @@ typedef struct {
 } h264d_slice_header;
 
 typedef struct {
+	int poc;
+	int frame_idx;
+} h264d_dpb_elem_t;
+
+typedef struct {
+	int8_t size;
+	int8_t max;
+	int8_t output;
+	h264d_dpb_elem_t data[16];
+} h264d_dpb_t;
+
+typedef struct {
 	uint8_t *curr_luma;
 	uint8_t *curr_chroma;
 	int num;
 	int index;
-	int dpb_num;
-	h264d_ref_frame_t *refs;
+	h264d_ref_frame_t refs[16];
+	h264d_ref_frame_t refs1[16];
 	h264d_frame frames[32];
 	int8_t lru[32];
+	h264d_dpb_t dpb;
 } h264d_frame_info_t;
 
 typedef struct {
@@ -325,10 +337,10 @@ typedef struct mb_code {
 } mb_code;
 
 typedef struct {
-	int src_width, src_height;
-	int disp_width, disp_height;
-	int frame_num;
-	int crop[4];
+	int16_t src_width, src_height;
+	int16_t disp_width, disp_height;
+	int16_t frame_num;
+	int16_t crop[4];
 	int additional_size;
 } h264d_info_t;
 
@@ -344,7 +356,7 @@ typedef struct {
 } h264d_context;
 
 
-int h264d_init(h264d_context *h2d);
+int h264d_init(h264d_context *h2d, int dpb_max);
 int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, h264d_info_t *info);
 int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame);
