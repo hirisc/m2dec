@@ -6913,13 +6913,15 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 		int max_frame_num = 1 << sps->log2_max_frame_num;
 		int num_ref_frames = sps->num_ref_frames;
 		nal_id = h2d->id;
-		if (nal_id & 0x60) {
-			post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, &h2d->mb_current, hdr->reorder[0].ref_frames);
-			if (hdr->slice_type == B_SLICE) {
-				post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, &h2d->mb_current, hdr->reorder[1].ref_frames);
-			}
-		}
 		frame = h2d->mb_current.frame;
+		if (nal_id & 0x60) {
+			post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, mb, hdr->reorder[0].ref_frames);
+			if (hdr->slice_type == B_SLICE) {
+				post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, mb, hdr->reorder[1].ref_frames);
+			}
+		} else {
+			dpb_insert(&frame->dpb, hdr->poc, frame->index);
+		}
 		ref_pic_init_ip(hdr->reorder[0].ref_frames, hdr->frame_num, max_frame_num, num_ref_frames);
 		hdr->prev_frame_num = hdr->frame_num;
 		hdr->first_mb_in_slice = mb->max_x * mb->max_x;
