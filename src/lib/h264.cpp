@@ -1051,8 +1051,6 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		if (hdr->marking.mmco5) {
 			hdr->frame_num = 0;
 		}
-	} else {
-		memset(&hdr->marking, 0, sizeof(hdr->marking));
 	}
 	if (pps->entropy_coding_mode_flag) {
 		if ((hdr->slice_type != I_SLICE)
@@ -3268,6 +3266,7 @@ static inline void fill_left_top_chroma(const uint8_t *src, uint8_t *buf, int le
 	int y;
 
 	src += top * stride + left;
+	left = (width == left) ? left - 2 : left;
 	dst = buf + left;
 	for (y = 0; y < top; ++y) {
 		memcpy(dst, src, width - left);
