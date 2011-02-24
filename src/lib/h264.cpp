@@ -249,6 +249,8 @@ static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 		for (int i = 0; i < 4; ++i) {
 			sps->frame_crop[i] = ue_golomb(stream) * 2;
 		}
+	} else {
+		memset(sps->frame_crop, 0, sizeof(sps->frame_crop));
 	}
 	if ((sps->vui_parameters_present_flag = get_onebit(stream)) != 0) {
 		int err = vui_parameters(&sps->vui, stream);
@@ -592,6 +594,17 @@ static inline void dpb_init(h264d_dpb_t *dpb, int maxsize)
 	dpb->output = -1;
 }
 
+//#define DUMP_DPB
+static void dump_dpb(h264d_dpb_t *dpb)
+{
+#if defined(DUMP_DPB) && !defined(NDEBUG) && !defined(__RENESAS_VERSION__)
+	printf("DPB length: %d\n", dpb->size);
+	for (int i = 0; i < dpb->size; ++i) {
+		printf("\t[%d] :\tpoc: %d idx: %d\n", i, dpb->data[i].poc, dpb->data[i].frame_idx);
+	}
+#endif
+}
+
 static inline void dpb_insert(h264d_dpb_t *dpb, int poc, int frame_idx)
 {
 	int size = dpb->size;
@@ -661,13 +674,12 @@ static inline int dpb_exist(const h264d_dpb_t *dpb, int frame_idx) {
 	return 0;
 }
 
-int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma, int dpb_mode)
+int h246d_get_decoded_frame(h264d_context *h2d, h264d_frame *frame, int dpb_mode)
 {
 	h264d_frame_info_t *frm;
-	const h264d_frame *f;
 	int frame_idx;
 
-	if (!h2d || !luma || !chroma) {
+	if (!h2d || !frame) {
 		return -1;
 	}
 	frm = h2d->mb_current.frame;
@@ -681,12 +693,11 @@ int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma
 	} else {
 		frame_idx = dpb_force_pop(&frm->dpb);
 	}
+	dump_dpb(&frm->dpb);
 	if (frame_idx < 0) {
 		return 0;
 	}
-	f = &frm->frames[frame_idx];
-	*luma = f->luma;
-	*chroma = f->chroma;
+	*frame = frm->frames[frame_idx];
 	return 1;
 }
 
@@ -956,23 +967,32 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	h264d_slice_header *hdr = h2d->slice_header;
 	h264d_sps *sps;
 	h264d_pps *pps;
+	h264d_mb_current *mb;
 	uint32_t prev_first_mb = hdr->first_mb_in_slice;
 	int slice_type;
 
+	mb = &h2d->mb_current;
 	if ((hdr->first_mb_in_slice = ue_golomb(st)) <= prev_first_mb) {
 		if (prev_first_mb != UINT_MAX) {
 			return -2;
 		}
-		find_empty_frame(&h2d->mb_current);
-		memset(h2d->mb_current.deblock_base, 0, sizeof(deblock_info_t) * h2d->mb_current.max_x * h2d->mb_current.max_y);
+		find_empty_frame(mb);
+		memset(mb->deblock_base, 0, sizeof(deblock_info_t) * mb->max_x * mb->max_y);
 	}
 	READ_UE_RANGE(slice_type, st, 9);
 	hdr->slice_type = slice_type_adjust(slice_type);
 	READ_UE_RANGE(hdr->pic_parameter_set_id, st, 255);
 	pps = &h2d->pps_i[hdr->pic_parameter_set_id];
 	sps = &h2d->sps_i[pps->seq_parameter_set_id];
-	h2d->mb_current.pps = pps;
-	h2d->mb_current.is_constrained_intra = pps->constrained_intra_pred_flag;
+	mb->pps = pps;
+	mb->is_constrained_intra = pps->constrained_intra_pred_flag;
+	if (hdr->first_mb_in_slice <= prev_first_mb) {
+		h264d_frame *frm = &mb->frame->frames[mb->frame->index];
+		frm->width = sps->pic_width;
+		frm->height = sps->pic_height;
+		memcpy(frm->crop, sps->frame_crop, sizeof(sps->frame_crop));
+	}
+
 	hdr->frame_num = get_bits(st, sps->log2_max_frame_num);
 	if (!sps->frame_mbs_only_flag) {
 		if ((hdr->field_pic_flag = get_onebit(st)) != 0) {
@@ -1101,23 +1121,6 @@ static inline int calc_short_term(int idc, int num, int frame_num, int max_frame
 		}
 	}
 	return no_wrap;
-}
-
-//#define DUMP_REF_LIST
-static void dump_ref_list(h264d_ref_frame_t *refs, int num_ref_frames)
-{
-#if defined(DUMP_REF_LIST) && !defined(NDEBUG) && !defined(__RENESAS_VERSION__)
-	printf("length: %d\n", num_ref_frames);
-	if (!num_ref_frames) {
-		return;
-	}
-	for (int i = 0; i < num_ref_frames; ++i) {
-		if (refs->in_use) {
-			printf("\t%d :\t[%d] %d %d\n", i, refs->frame_idx, refs->poc, refs->in_use);
-		}
-		refs++;
-	}
-#endif
 }
 
 static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_ref_frames, int frame_num, int max_frame_num)
@@ -6727,7 +6730,7 @@ static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_
 	} while (--i);
 }
 
-static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs, h264d_dpb_t *dpb)
+static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs)
 {
 	int i = 16;
 	h264d_ref_frame_t *empty_ref;
@@ -6741,9 +6744,9 @@ static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs, h264d_dpb_t *d
 	return i ? empty_ref : refs - 1;
 }
 
-static h264d_ref_frame_t *insert_short_ref(h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int poc)
+static h264d_ref_frame_t *insert_short_ref(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int poc)
 {
-	h264d_ref_frame_t *empty_ref = find_empty_ref(refs, dpb);
+	h264d_ref_frame_t *empty_ref = find_empty_ref(refs);
 	memmove(&refs[1], refs, (empty_ref - refs) * sizeof(refs[0]));
 	refs->in_use = SHORT_TERM;
 	refs->frame_idx = frame_ptr;
@@ -6754,7 +6757,7 @@ static h264d_ref_frame_t *insert_short_ref(h264d_ref_frame_t *refs, h264d_dpb_t 
 
 static void mmco_op6(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
 {
-	h264d_ref_frame_t *ref = insert_short_ref(refs, dpb, frame_ptr, frame_num, poc);
+	h264d_ref_frame_t *ref = insert_short_ref(refs, frame_ptr, frame_num, poc);
 	ref->in_use = LONG_TERM;
 	ref->num = mmco->arg1;
 	dpb_insert(dpb, poc, frame_ptr);
@@ -6789,7 +6792,7 @@ static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, h
 		if (op5_detect) {
 			frame_num = poc = 0;
 		}
-		insert_short_ref(refs, dpb, frame_ptr, frame_num, poc);
+		insert_short_ref(refs, frame_ptr, frame_num, poc);
 		if (op5_detect) {
 			dpb_insert_idr(dpb, poc, frame_ptr);
 		} else {
@@ -6895,7 +6898,6 @@ static inline void ref_pic_init_ip(h264d_ref_frame_t *ref, int frame_num, int ma
 	for (int i = num_ref_frames; i < 16; ++i) {
 		ref[i].in_use = NOT_IN_USE;
 	}
-	dump_ref_list(ref, 16);
 }
 
 static int post_process(h264d_context *h2d, h264d_mb_current *mb)

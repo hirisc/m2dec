@@ -178,7 +178,8 @@ typedef struct {
 typedef struct {
 	uint8_t *luma;
 	uint8_t *chroma;
-	int32_t luma_len;
+	int16_t width, height;
+	int16_t crop[4];
 } h264d_frame;
 
 typedef struct {
@@ -361,7 +362,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, h264d_info_t *info);
 int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame);
 int h264d_decode_picture(h264d_context *h2d);
-int h246d_get_decoded_frame(h264d_context *h2d, uint8_t **luma, uint8_t **chroma, int dpb_mode);
+int h246d_get_decoded_frame(h264d_context *h2d, h264d_frame *frame, int dpb_mode);
 void h264d_load_bytes_skip03(dec_bits *ths, intptr_t read_bytes);
 
 #ifdef __cplusplus
