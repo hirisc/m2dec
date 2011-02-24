@@ -867,6 +867,18 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 	}
 }
 
+static inline int adjust_frame_num(h264d_slice_header *hdr, int frame_num, uint32_t log2_max_frame_num)
+{
+	int prev_frame_num = hdr->prev_frame_num;
+	if ((frame_num < prev_frame_num) && !hdr->marking.idr && !hdr->marking.mmco5) {
+		int delta = 1 << log2_max_frame_num;
+		do {
+			frame_num += delta;
+		} while (frame_num < prev_frame_num);
+	}
+	return frame_num;
+}
+
 static inline void calc_poc0(h264d_slice_header *hdr, int log2_max_lsb, int lsb)
 {
 	int prev_lsb, prev_msb;
@@ -910,12 +922,7 @@ static inline void calc_poc1(h264d_slice_header *hdr, const h264d_sps *sps, int 
 	}
 	frame_num = hdr->frame_num;
 	if (sps->num_ref_frames_in_pic_order_cnt_cycle && !hdr->marking.idr && !hdr->marking.mmco5) {
-		unsigned num_offset = hdr->poc1.num_offset;
-		if (frame_num < hdr->prev_frame_num) {
-			num_offset += (1 << sps->log2_max_frame_num);
-			hdr->poc1.num_offset = num_offset;
-		}
-		frame_num += num_offset;
+		frame_num += hdr->poc1.num_offset;
 	} else {
 		hdr->poc1.num_offset = 0;
 	}
@@ -953,9 +960,6 @@ static inline void calc_poc2(h264d_slice_header *hdr, const h264d_sps *sps, int 
 	} else {
 		int prev_frame_num = hdr->prev_frame_num;
 		int frame_num = hdr->frame_num;
-		if (frame_num < prev_frame_num) {
-			frame_num += (1 << sps->log2_max_frame_num);
-		}
 		poc = frame_num * 2 - ((nal_id & 0x60) == 0);
 	}
 	hdr->poc = poc;
@@ -993,7 +997,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		memcpy(frm->crop, sps->frame_crop, sizeof(sps->frame_crop));
 	}
 
-	hdr->frame_num = get_bits(st, sps->log2_max_frame_num);
+	hdr->frame_num = adjust_frame_num(hdr, get_bits(st, sps->log2_max_frame_num), sps->log2_max_frame_num);
 	if (!sps->frame_mbs_only_flag) {
 		if ((hdr->field_pic_flag = get_onebit(st)) != 0) {
 			hdr->bottom_field_flag = get_onebit(st);
