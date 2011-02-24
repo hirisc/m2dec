@@ -66,7 +66,6 @@ static int alloc_frames(h264d_frame **mem, int width, int height, int num_mem)
 	}
 	*mem = m = new h264d_frame[num_mem];
 	for (int i = 0; i < num_mem; ++i) {
-		m[i].luma_len = luma_len;
 		m[i].luma = new uint8_t[luma_len];
 		m[i].chroma = new uint8_t[luma_len >> 1];
 	}
@@ -81,27 +80,48 @@ static void free_frames(h264d_frame *mem, int num_mem)
 	}
 }
 
+static bool outfilename(char *infilename, char *outfilename, size_t size)
+{
+	char *start;
+	char *end;
+	if (!(start = strrchr(infilename, '/')) && !(start = strrchr(infilename, '\\'))) {
+		start = infilename;
+	} else {
+		start += 1;
+	}
+	end = strrchr(start, '.');
+	if (end) {
+		*end = '\0';
+	}
+	if (size <= strlen(start)) {
+		return false;
+	}
+	sprintf(outfilename, "%s.out", start);
+	return true;
+}
+
 struct input_data_t {
 	uint8_t *data_;
 	size_t len_;
 	size_t pos_;
 	void *var_;
 	FILE *fo_;
+	bool raw_;
 	bool md5_;
 	bool dpb_;
-	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), md5_(false), dpb_(true) {
+	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), raw_(false), md5_(false), dpb_(true) {
 		FILE *fi;
 		int opt;
-		while ((opt = getopt(argc, argv, "do:O:")) != -1) {
+		while ((opt = getopt(argc, argv, "doO")) != -1) {
 			switch (opt) {
 			case 'd':
 				dpb_ = false;
 				break;
 			case 'O':
 				md5_ = true;
-				/* FALLTHROUGH */
+				break;
 			case 'o':
-				fo_ = fopen(optarg, "wb");
+				raw_ = true;
 				break;
 			default:
 				BlameUser();
@@ -111,6 +131,12 @@ struct input_data_t {
 		if ((argc <= optind) ||	!(fi = fopen(argv[optind], "rb"))) {
 			BlameUser();
 			/* NOTREACHED */
+		}
+		if (md5_ || raw_) {
+			char outfile[256];
+			if (outfilename(argv[optind], outfile, sizeof(outfile))) {
+				fo_ = fopen(outfile, "wb");
+			}
 		}
 		fseek(fi, 0, SEEK_END);
 		len_ = ftell(fi);
@@ -125,6 +151,32 @@ struct input_data_t {
 			fclose(fo_);
 		}
 	}
+	static size_t write_md5(void *dst, const uint8_t *src, size_t size) {
+		md5_append((md5_state_t *)dst, (const md5_byte_t *)src, (int)size);
+		return size;
+	}
+	static size_t write_raw(void *dst, const uint8_t *src, size_t size) {
+		return fwrite((const void *)src, 1, size, (FILE *)dst);
+	}
+	static void write_cropping(const h264d_frame *frame, size_t (*writef)(void *dst, const uint8_t *src, size_t size), void *dst) {
+		const uint8_t *src;
+		int stride, height, width;
+
+		stride = frame->width;
+		src = frame->luma + stride * frame->crop[2] + frame->crop[0];
+		height = frame->height - frame->crop[2] - frame->crop[3];
+		width = stride - frame->crop[0] - frame->crop[1];
+		for (int y = 0; y < height; ++y) {
+			writef(dst, src, width);
+			src += stride;
+		}
+		src = frame->chroma + stride * (frame->crop[2] >> 1) + frame->crop[0];
+		height >>= 1;
+		for (int y = 0; y < height; ++y) {
+			writef(dst, src, width);
+			src += stride;
+		}
+	}
 	static void md5txt(const unsigned char *md5, char *txt)
 	{
 		for (int i = 0; i < 16; ++i) {
@@ -133,22 +185,21 @@ struct input_data_t {
 		txt[32] = 0x0d;
 		txt[33] = 0x0a;
 	}
-	size_t writeframe(const void *luma, const void *chroma, size_t luma_size) {
+	size_t writeframe(const h264d_frame *frame) {
 		if (fo_) {
+			int luma_size = frame->width * frame->height;
 			if (md5_) {
 				md5_state_t md5;
 				md5_byte_t digest[16];
 				char txt[16 * 2 + 2];
 
 				md5_init(&md5);
-				md5_append(&md5, (const md5_byte_t *)luma, (int)luma_size);
-				md5_append(&md5, (const md5_byte_t *)chroma, (int)(luma_size >> 1));
+				write_cropping(frame, write_md5, (void *)&md5);
 				md5_finish(&md5, digest);
 				md5txt(digest, txt);
 				fwrite(txt, 1, sizeof(txt), fo_);
 			} else {
-				fwrite(luma, 1, luma_size, fo_);
-				fwrite(chroma, 1, luma_size >> 1, fo_);
+				write_cropping(frame, write_raw, (void *)fo_);
 			}
 			return luma_size;
 		}
@@ -157,7 +208,7 @@ struct input_data_t {
 	void BlameUser() {
 		fprintf(stderr,
 			"Usage:\n"
-			"\th264dec [-o|O <outfile>] <infile>\n"
+			"\th264dec [-o|O ] <infile>\n"
 			"\t\t-o: RAW output\n"
 			"\t\t-O: MD5 output\n"
 			"\t\t-d: Bypass DPB\n"
@@ -182,8 +233,6 @@ int main(int argc, char *argv[])
 {
 	h264d_context *h2d;
 	h264d_frame *mem;
-	uint8_t *luma, *chroma;
-	int luma_size;
 	int err;
 
 	h2d = new h264d_context;
@@ -207,7 +256,7 @@ int main(int argc, char *argv[])
 		"width x height x num: %d x %d x %d\n"
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
-	info.frame_num = info.frame_num < 3 ? 3 : (info.frame_num + (data.dpb_ ? 16 : 0));
+	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ ? 16 : 0);
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
 	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame);
@@ -216,15 +265,15 @@ int main(int argc, char *argv[])
 	}
 	jmp_buf jmp;
 	dec_bits_set_callback(h2d->stream, reread_file, &data, &jmp);
-	luma_size = info.src_height * info.src_width;
+	h264d_frame frame;
 	for (int i = 0; i < 100000; ++i) {
 
 		err = h264d_decode_picture(h2d);
 		if (err == -1) {
 			break;
 		}
-		while (h246d_get_decoded_frame(h2d, &luma, &chroma, data.dpb_)) {
-			data.writeframe(luma, chroma, luma_size);
+		while (h246d_get_decoded_frame(h2d, &frame, data.dpb_)) {
+			data.writeframe(&frame);
 			if (!data.dpb_) {
 				break;
 			}
@@ -233,8 +282,8 @@ int main(int argc, char *argv[])
 			break;
 		}
 	}
-	while (h246d_get_decoded_frame(h2d, &luma, &chroma, 0)) {
-		data.writeframe(luma, chroma, luma_size);
+	while (h246d_get_decoded_frame(h2d, &frame, 0)) {
+		data.writeframe(&frame);
 		if (!data.dpb_) {
 			break;
 		}
