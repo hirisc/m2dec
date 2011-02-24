@@ -40,9 +40,11 @@ typedef signed int int32_t;
 #pragma inline(dec_bits_error, endofbuffer, endofbuffer_check, mix_bit, flush_bits, bit_width)
 typedef int intptr_t;
 typedef unsigned uintptr_t;
+typedef unsigned int uint32_t;
 typedef signed char int8_t;
 typedef unsigned short uint16_t;
 typedef signed short int16_t;
+typedef signed int int32_t;
 typedef unsigned char uint8_t;
 
 #elif defined(_M_IX86)
