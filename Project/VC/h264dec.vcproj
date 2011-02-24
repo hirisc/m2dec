@@ -176,6 +176,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\app\md5.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\app\my_getopt.c"
 				>
 			</File>
@@ -187,6 +191,10 @@
 			>
 			<File
 				RelativePath="..\..\src\app\getopt.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\app\md5.h"
 				>
 			</File>
 			<File
