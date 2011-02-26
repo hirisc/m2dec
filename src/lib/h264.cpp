@@ -3164,23 +3164,65 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 }
 
 
-static inline void copy_inter(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
+static void copy_inter16x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
 {
-	width = (unsigned)width >> 2;
 	do {
-		const uint8_t *s = src;
-		uint8_t *d = dst;
-		int x = width;
-		do {
-			d[0] = *s++;
-			d[1] = *s++;
-			d[2] = *s++;
-			d[3] = *s++;
-			d += 4;
-		} while (--x);
+		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
+		((uint32_t *)dst)[1] = ((uint32_t *)src)[1];
+		((uint32_t *)dst)[2] = ((uint32_t *)src)[2];
+		((uint32_t *)dst)[3] = ((uint32_t *)src)[3];
 		dst += stride;
 		src += src_stride;
 	} while (--height);
+}
+
+static void copy_inter8x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	do {
+		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
+		((uint32_t *)dst)[1] = ((uint32_t *)src)[1];
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
+
+static void copy_inter4x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	do {
+		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
+
+static void (* const copy_inter_align[3])(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride) = {
+	copy_inter4x_align,
+	copy_inter8x_align,
+	copy_inter16x_align
+};
+
+static inline void copy_inter(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
+{
+	width = (unsigned)width >> 2;
+	if (((intptr_t)src & 3) == 0) {
+		copy_inter_align[width >> 1](src, dst, height, src_stride, stride);
+		VC_CHECK;
+	} else {
+		do {
+			const uint8_t *s = src;
+			uint8_t *d = dst;
+			int x = width;
+			do {
+				d[0] = *s++;
+				d[1] = *s++;
+				d[2] = *s++;
+				d[3] = *s++;
+				d += 4;
+			} while (--x);
+			dst += stride;
+			src += src_stride;
+		} while (--height);
+	}
 }
 
 static inline int inter_pred_mvoffset_luma(int mvint_x, int mvint_y, int stride)
@@ -3439,7 +3481,7 @@ typedef struct {
 
 static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, int posx, int posy, int width, int height, int stride, int vert_size, chroma_filter_info_t *filter)
 {
-	uint8_t buf[18 * 9];
+	uint32_t buf[18 * 9 / sizeof(uint32_t) + 1];
 
 	if (posx < -width) {
 		src += -width - posx;
@@ -3460,13 +3502,13 @@ static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, int posx, 
 		width += 2;
 		height += 1;
 	}
-	fill_rect_umv_chroma(src, buf, width, height, stride, vert_size, posx, posy);
+	fill_rect_umv_chroma(src, (uint8_t *)buf, width, height, stride, vert_size, posx, posy);
 	if (filter) {
 		width -= 2;
 		height -= 1;
-		filter_chroma_vert_horiz(buf, dst, width, height, filter->mvx, filter->mvy, width + 2, stride);
+		filter_chroma_vert_horiz((const uint8_t *)buf, dst, width, height, filter->mvx, filter->mvy, width + 2, stride);
 	} else {
-		copy_inter(buf, dst, width, height, width, stride);
+		copy_inter_align[(unsigned)width >> 3]((const uint8_t *)buf, dst, height, width, stride);
 	}
 }
 
