@@ -239,6 +239,7 @@ typedef struct {
 			uint32_t num_offset;
 			int32_t delta_pic_order_cnt[2];
 		} poc1;
+		uint32_t poc2_prev_frameoffset;
 	};
 	uint32_t redundant_pic_cnt;
 	h264d_reorder_t reorder[2];

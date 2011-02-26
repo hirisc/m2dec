@@ -867,18 +867,6 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 	}
 }
 
-static inline int adjust_frame_num(h264d_slice_header *hdr, int frame_num, uint32_t log2_max_frame_num)
-{
-	int prev_frame_num = hdr->prev_frame_num;
-	if ((frame_num < prev_frame_num) && !hdr->marking.idr && !hdr->marking.mmco5) {
-		int delta = 1 << log2_max_frame_num;
-		do {
-			frame_num += delta;
-		} while (frame_num < prev_frame_num);
-	}
-	return frame_num;
-}
-
 static inline void calc_poc0(h264d_slice_header *hdr, int log2_max_lsb, int lsb)
 {
 	int prev_lsb, prev_msb;
@@ -921,23 +909,30 @@ static inline void calc_poc1(h264d_slice_header *hdr, const h264d_sps *sps, int 
 		return;
 	}
 	frame_num = hdr->frame_num;
-	if (sps->num_ref_frames_in_pic_order_cnt_cycle && !hdr->marking.idr && !hdr->marking.mmco5) {
-		frame_num += hdr->poc1.num_offset;
+	if (!hdr->marking.idr && !hdr->marking.mmco5) {
+		if (frame_num < hdr->prev_frame_num) {
+			hdr->poc1.num_offset += 1 << sps->log2_max_frame_num;
+		}
 	} else {
 		hdr->poc1.num_offset = 0;
 	}
-	if (frame_num != 0) {
-		int cycle_cnt = 0;
-		int cycle_sum = sps->offset_for_ref_frame[sps->num_ref_frames_in_pic_order_cnt_cycle - 1];
-		frame_num--;
-		if (frame_num != 0 && !(nal_id & 0x60)) {
+	if (sps->num_ref_frames_in_pic_order_cnt_cycle) {
+		frame_num += hdr->poc1.num_offset;
+		if (frame_num != 0) {
+			int cycle_cnt = 0;
+			int cycle_sum = sps->offset_for_ref_frame[sps->num_ref_frames_in_pic_order_cnt_cycle - 1];
 			frame_num--;
+			if (frame_num != 0 && !(nal_id & 0x60)) {
+				frame_num--;
+			}
+			while (cycle_sum <= (int)frame_num) {
+				frame_num -= cycle_sum;
+				cycle_cnt++;
+			}
+			poc = cycle_cnt * cycle_sum + sps->offset_for_ref_frame[frame_num & 255];
+		} else {
+			poc = sps->offset_for_ref_frame[0];
 		}
-		while (cycle_sum <= (int)frame_num) {
-			frame_num -= cycle_sum;
-			cycle_cnt++;
-		}
-		poc = cycle_cnt * cycle_sum + sps->offset_for_ref_frame[frame_num & 255];
 		if ((nal_id & 0x60) == 0) {
 			poc += sps->offset_for_non_ref_pic;
 		}
@@ -956,11 +951,14 @@ static inline void calc_poc2(h264d_slice_header *hdr, const h264d_sps *sps, int 
 		return;
 	}
 	if (hdr->marking.idr || hdr->marking.mmco5) {
+		hdr->poc2_prev_frameoffset = 0;
 		poc = 0;
 	} else {
-		int prev_frame_num = hdr->prev_frame_num;
 		int frame_num = hdr->frame_num;
-		poc = frame_num * 2 - ((nal_id & 0x60) == 0);
+		if (frame_num < hdr->prev_frame_num) {
+			hdr->poc2_prev_frameoffset += (1 << sps->log2_max_frame_num);
+		}
+		poc = (frame_num + hdr->poc2_prev_frameoffset) * 2 - ((nal_id & 0x60) == 0);
 	}
 	hdr->poc = poc;
 	hdr->poc_bottom = poc;
@@ -996,8 +994,8 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		frm->height = sps->pic_height;
 		memcpy(frm->crop, sps->frame_crop, sizeof(sps->frame_crop));
 	}
-
-	hdr->frame_num = adjust_frame_num(hdr, get_bits(st, sps->log2_max_frame_num), sps->log2_max_frame_num);
+	hdr->frame_num = get_bits(st, sps->log2_max_frame_num);
+//	hdr->frame_num = adjust_frame_num(hdr, get_bits(st, sps->log2_max_frame_num), sps->log2_max_frame_num);
 	if (!sps->frame_mbs_only_flag) {
 		if ((hdr->field_pic_flag = get_onebit(st)) != 0) {
 			hdr->bottom_field_flag = get_onebit(st);
@@ -1127,6 +1125,20 @@ static inline int calc_short_term(int idc, int num, int frame_num, int max_frame
 	return no_wrap;
 }
 
+//#define DUMP_REF_LIST
+static void dump_ref_list(h264d_ref_frame_t *refs, int num_ref_frames)
+{
+#if defined(DUMP_REF_LIST) && !defined(NDEBUG) && !defined(__RENESAS_VERSION__)
+	printf("refs(%d)\tuse\tnum\tpoc\n", num_ref_frames);
+	for (int i = 0; i < 16; ++i) {
+		if (!refs[i].in_use) {
+			break;
+		}
+		printf("\t%d,\t%d,\t%d\n", refs[i].in_use, refs[i].num, refs[i].poc);
+	}
+#endif
+}
+
 static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_ref_frames, int frame_num, int max_frame_num)
 {
 	assert((unsigned)num_ref_frames <= 16);
@@ -1168,6 +1180,7 @@ static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_r
 			refs[refIdxLx] = tmp_ref;
 		}
 	}
+	dump_ref_list(rdr->ref_frames, num_ref_frames);
 	return 0;
 }
 
