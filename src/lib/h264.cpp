@@ -995,7 +995,6 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		memcpy(frm->crop, sps->frame_crop, sizeof(sps->frame_crop));
 	}
 	hdr->frame_num = get_bits(st, sps->log2_max_frame_num);
-//	hdr->frame_num = adjust_frame_num(hdr, get_bits(st, sps->log2_max_frame_num), sps->log2_max_frame_num);
 	if (!sps->frame_mbs_only_flag) {
 		if ((hdr->field_pic_flag = get_onebit(st)) != 0) {
 			hdr->bottom_field_flag = get_onebit(st);
@@ -1129,7 +1128,7 @@ static inline int calc_short_term(int idc, int num, int frame_num, int max_frame
 static void dump_ref_list(h264d_ref_frame_t *refs, int num_ref_frames)
 {
 #if defined(DUMP_REF_LIST) && !defined(NDEBUG) && !defined(__RENESAS_VERSION__)
-	printf("refs(%d)\tuse\tnum\tpoc\n", num_ref_frames);
+	printf("refs(%d) use\tnum\tpoc\n", num_ref_frames);
 	for (int i = 0; i < 16; ++i) {
 		if (!refs[i].in_use) {
 			break;
@@ -6637,7 +6636,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 	}
 }
 
-static inline h264d_ref_frame_t *marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc, h264d_dpb_t *dpb)
+static inline h264d_ref_frame_t *marking_sliding_window(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	int min_frm_num = INT_MAX;
 	int min_idx = 0;
@@ -6691,7 +6690,7 @@ static void mmco_discard(h264d_ref_frame_t *refs, int in_use, int target_num)
 	}
 }
 
-static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	int num = frame_num - mmco->arg1 - 1;
 	while (num < 0) {
@@ -6700,12 +6699,12 @@ static void mmco_op1(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_
 	mmco_discard(refs, SHORT_TERM, num);
 }
 
-static void mmco_op2(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static void mmco_op2(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	mmco_discard(refs, LONG_TERM, mmco->arg1);
 }
 
-static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	uint32_t long_num = mmco->arg2;
 	uint32_t target_num = frame_num - mmco->arg1 - 1;
@@ -6726,7 +6725,7 @@ static void mmco_op3(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_
 	} while (--i);
 }
 
-static void mmco_op4(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static void mmco_op4(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	int i = 16;
 	uint32_t max_long_term_idx_plus1 = mmco->arg1;
@@ -6738,7 +6737,7 @@ static void mmco_op4(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_
 	} while (--i);
 }
 
-static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	int i = 16;
 	do {
@@ -6747,45 +6746,20 @@ static void mmco_op5(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_
 	} while (--i);
 }
 
-static h264d_ref_frame_t *find_empty_ref(h264d_ref_frame_t *refs)
+static void mmco_op6(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
-	int i = 16;
-	h264d_ref_frame_t *empty_ref;
-	do {
-		if (refs->in_use == NOT_IN_USE) {
-			empty_ref = refs;
-			break;
-		}
-		refs++;
-	} while (--i);
-	return i ? empty_ref : refs - 1;
-}
-
-static h264d_ref_frame_t *insert_short_ref(h264d_ref_frame_t *refs, int frame_ptr, int frame_num, int poc)
-{
-	h264d_ref_frame_t *empty_ref = find_empty_ref(refs);
-	memmove(&refs[1], refs, (empty_ref - refs) * sizeof(refs[0]));
-	refs->in_use = SHORT_TERM;
-	refs->frame_idx = frame_ptr;
-	refs->num = frame_num;
-	refs->poc = poc;
-	return empty_ref;
-}
-
-static void mmco_op6(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
-{
-	h264d_ref_frame_t *ref = insert_short_ref(refs, frame_ptr, frame_num, poc);
+	h264d_ref_frame_t *ref = marking_sliding_window(refs, frame_ptr, frame_num, max_frame_num, num_ref_frames, poc);
 	ref->in_use = LONG_TERM;
 	ref->num = mmco->arg1;
 	dpb_insert(dpb, poc, frame_ptr);
 }
 
-static void (* const mmco_ops[6])(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc) = {
+static void (* const mmco_ops[6])(const h264d_mmco *mmco, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc) = {
 	mmco_op1, mmco_op2, mmco_op3,
 	mmco_op4, mmco_op5, mmco_op6,
 };
 
-static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int poc)
+static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, h264d_dpb_t *dpb, int frame_ptr, int frame_num, int max_frame_num, int num_ref_frames, int poc)
 {
 	const h264d_mmco *mmco = mrk->mmco;
 	int op5_detect = 0;
@@ -6802,14 +6776,14 @@ static inline void marking_mmco(h264d_marking_t *mrk, h264d_ref_frame_t *refs, h
 				op6_detect = 1;
 			}
 		}
-		mmco_ops[op - 1](mmco, refs, dpb, frame_ptr, frame_num, max_frame_num, poc);
+		mmco_ops[op - 1](mmco, refs, dpb, frame_ptr, frame_num, max_frame_num, num_ref_frames, poc);
 		mmco++;
 	} while (--i);
 	if (!op6_detect) {
 		if (op5_detect) {
 			frame_num = poc = 0;
 		}
-		insert_short_ref(refs, frame_ptr, frame_num, poc);
+		marking_sliding_window(refs, frame_ptr, frame_num, max_frame_num, num_ref_frames, poc);
 		if (op5_detect) {
 			dpb_insert_idr(dpb, poc, frame_ptr);
 		} else {
@@ -6837,7 +6811,7 @@ static inline void gap_mbs(h264d_slice_header *hdr, h264d_mb_current *mb, h264d_
 			if (max_frame_num <= ++prev_frame_num) {
 				prev_frame_num -= max_frame_num;
 			}
-			r = marking_sliding_window(refs, mb->frame->index, prev_frame_num, max_frame_num, num_ref_frames, poc, &mb->frame->dpb);
+			r = marking_sliding_window(refs, mb->frame->index, prev_frame_num, max_frame_num, num_ref_frames, poc);
 		} while (--gap);
 	}
 }
@@ -6862,9 +6836,9 @@ static inline void post_ref_pic_marking(h264d_slice_header *hdr, int nal_unit_ty
 			gap_mbs(hdr, mb, refs, max_frame_num, num_ref_frames);
 		}
 		if (mrk->adaptive_ref_pic_marking_mode_flag) {
-			marking_mmco(mrk, refs, dpb, mb->frame->index, frame_num, max_frame_num, poc);
+			marking_mmco(mrk, refs, dpb, mb->frame->index, frame_num, max_frame_num, num_ref_frames, poc);
 		} else {
-			marking_sliding_window(refs, mb->frame->index, frame_num, max_frame_num, num_ref_frames, poc, dpb);
+			marking_sliding_window(refs, mb->frame->index, frame_num, max_frame_num, num_ref_frames, poc);
 			dpb_insert(dpb, poc, mb->frame->index);
 		}
 	}
