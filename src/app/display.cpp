@@ -257,7 +257,7 @@ static void yuvtorgb565_2( unsigned char *yAdr, unsigned char *uvAdr, int width,
 #define __attribute__(x)
 #endif
 extern "C" const unsigned long long
-#if defined(__GNUC__) && !defined(__CYGWIN__)
+#if defined(__GNUC__) && !defined(__CYGWIN__) && !defined(__MINGW32__)
 _rgbScale[]
 #else
 rgbScale[]

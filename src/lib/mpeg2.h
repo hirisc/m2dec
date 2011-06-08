@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#include "types.h"
+#include "m2types.h"
 #define __LIBM2DEC_API
 
 

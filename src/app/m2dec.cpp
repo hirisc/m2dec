@@ -83,7 +83,9 @@ char *getenv(const char *name) {return 0;}
 #include "mpeg_demux.h"
 #include "txt2bin.h"
 #include "display.h"
+#ifdef ENABLE_AALIB
 #include "aadisp.h"
+#endif
 
 const int FRAME_NUM = 6;
 const size_t INDATA_MAX = 1 * 1024 * 1024;
