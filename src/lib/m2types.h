@@ -1,5 +1,5 @@
-#ifndef _TYPES_H_
-#define _TYPES_H_
+#ifndef _M2TYPES_H_
+#define _M2TYPES_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -148,4 +148,4 @@ static __inline uint32_t read4_unalign(const uint32_t *s) {
 #define CLIP255I(a) (!((a) & ~255) ? (a) : ((unsigned)~(a) >> 24))
 #define EXTEND_BYTE(a) ((a) = (a) * 0x01010101)
 
-#endif /* _TYPES_H_ */
+#endif /* _M2TYPES_H_ */
