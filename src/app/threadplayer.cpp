@@ -1,3 +1,4 @@
+#ifdef ENABLE_DISPLAY
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
@@ -548,9 +549,11 @@ Uint32 DispTimer(Uint32 interval, void *param)
 #ifdef _M_IX86
 #include <crtdbg.h>
 #endif
+#endif /* ENABLE_DISPLAY */
 
 int main(int argc, char **argv)
 {
+#ifdef ENABLE_DISPLAY
 	SDL_TimerID timer;
 
 #ifdef _M_IX86
@@ -583,6 +586,7 @@ int main(int argc, char **argv)
 	if (opt.outfile_) {
 		fclose(opt.outfile_);
 	}
+#endif /* ENABLE_DISPLAY */
 	return 0;
 }
 
