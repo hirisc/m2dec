@@ -468,16 +468,3 @@ static const vlc_t run_before_7_bit3[28] = {
 	{10, 1}, {10, 1}, {10, 1}, {10, 1},
 	{0, 0}, {14, 2}, {13, 1}, {13, 1},
 };
-
-static const int8_t sub_mb_ref_map_p[4] = {
-	1, 1, 1, 1
-};
-
-static const int8_t sub_mb_ref_map_b[13] = {
-	0,
-	1, 2, 3,
-	1, 1,
-	2, 2,
-	3, 3,
-	1, 2, 3
-};

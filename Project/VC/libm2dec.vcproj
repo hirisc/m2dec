@@ -202,10 +202,6 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\src\lib\m2types.h"
-				>
-			</File>
-			<File
 				RelativePath="..\..\src\lib\motioncomp.h"
 				>
 			</File>
@@ -215,6 +211,10 @@
 			</File>
 			<File
 				RelativePath="..\..\src\lib\txt2bin.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\lib\types.h"
 				>
 			</File>
 			<File

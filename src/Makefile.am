@@ -1,1 +1,1 @@
-SUBDIRS = . lib app
+SUBDIRS = . lib app omx
