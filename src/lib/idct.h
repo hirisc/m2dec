@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#include "types.h"
+#include "m2types.h"
 
 #ifdef __RENESAS_VERSION__
 void m2d_prefetch_mb(uint8_t *dst, int32_t dst_stride);

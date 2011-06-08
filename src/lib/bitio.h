@@ -33,7 +33,7 @@ extern "C" {
 #ifndef _M_IX86
 #include "config.h"
 #endif
-#include "types.h"
+#include "m2types.h"
 
 enum {
 	CACHE_BITS = sizeof(cache_t) * 8

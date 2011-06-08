@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include "getopt.h"
 #include "bitio.h"
 #include "h264.h"
@@ -106,16 +107,23 @@ struct input_data_t {
 	size_t pos_;
 	void *var_;
 	FILE *fo_;
+	int dpb_;
 	bool raw_;
 	bool md5_;
-	bool dpb_;
-	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), raw_(false), md5_(false), dpb_(true) {
+	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), dpb_(-1), raw_(false), md5_(false) {
 		FILE *fi;
 		int opt;
-		while ((opt = getopt(argc, argv, "doO")) != -1) {
+		while ((opt = getopt(argc, argv, "bd:oO")) != -1) {
 			switch (opt) {
+			case 'b':
+				dpb_ = 1;
+				break;
 			case 'd':
-				dpb_ = false;
+				dpb_ = strtol(optarg, 0, 0);
+				if (16 < (unsigned)dpb_) {
+					BlameUser();
+					/* NOTREACHED */
+				}
 				break;
 			case 'O':
 				md5_ = true;
@@ -201,6 +209,7 @@ struct input_data_t {
 			} else {
 				write_cropping(frame, write_raw, (void *)fo_);
 			}
+			fflush(fo_);
 			return luma_size;
 		}
 		return 0;
@@ -208,10 +217,11 @@ struct input_data_t {
 	void BlameUser() {
 		fprintf(stderr,
 			"Usage:\n"
-			"\th264dec [-o|O ] <infile>\n"
+			"\th264dec [-b] [-d <dpb_size>] [-o|O ] <infile>\n"
+			"\t\t-b: Bypass DPB\n"
+			"\t\t-d <dpb_size>: Specify number of DPB frames -1, 1..16 (default: -1(auto))\n"
 			"\t\t-o: RAW output\n"
 			"\t\t-O: MD5 output\n"
-			"\t\t-d: Bypass DPB\n"
 			);
 		exit(-1);
 	}
@@ -240,7 +250,7 @@ int main(int argc, char *argv[])
 	if (data.len_ <= 0) {
 		return -1;
 	}
-	err = h264d_init(h2d, data.dpb_ ? 16 : 1);
+	err = h264d_init(h2d, data.dpb_);
 	if (err) {
 		return err;
 	}
@@ -256,37 +266,30 @@ int main(int argc, char *argv[])
 		"width x height x num: %d x %d x %d\n"
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
-	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ ? 16 : 0);
+	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? 16 : data.dpb_);
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
-	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame);
+	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame, info.additional_size);
 	if (err) {
 		return err;
 	}
 	jmp_buf jmp;
 	dec_bits_set_callback(h2d->stream, reread_file, &data, &jmp);
 	h264d_frame frame;
-	for (int i = 0; i < 100000; ++i) {
-
+	for (int i = 0; i < INT_MAX; ++i) {
 		err = h264d_decode_picture(h2d);
 		if (err == -1) {
 			break;
 		}
-		while (h246d_get_decoded_frame(h2d, &frame, data.dpb_)) {
+		while (h246d_get_decoded_frame(h2d, &frame, (data.dpb_ == 1))) {
 			data.writeframe(&frame);
-			if (!data.dpb_) {
-				break;
-			}
 		}
 		if (err < 0) {
 			break;
 		}
 	}
-	while (h246d_get_decoded_frame(h2d, &frame, 0)) {
+	while (h246d_get_decoded_frame(h2d, &frame, 1)) {
 		data.writeframe(&frame);
-		if (!data.dpb_) {
-			break;
-		}
 	}
 	delete[] second_frame;
 	free_frames(mem, info.frame_num);
