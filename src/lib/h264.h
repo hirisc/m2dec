@@ -44,7 +44,7 @@ extern "C" {
 #include <stdio.h>
 #endif
 
-#include "types.h"
+#include "m2types.h"
 #define __LIBH264DEC_API
 
 enum {
@@ -76,7 +76,12 @@ enum {
 	MB_P8x8 = 29,
 	MB_P8x8REF0 = 30,
 	MB_PSKIP = 31,
-	MB_BDIRECT16x16 = 32,
+	MB_BSKIP = 31,
+	MB_BDIRECT16x16 = 31,
+	COL_MB16x16 = 0,
+	COL_MB16x8,
+	COL_MB8x16,
+	COL_MB8x8,
 	EXTENDED_SAR = 255
 };
 
@@ -139,6 +144,7 @@ typedef struct {
 	uint8_t num_ref_frames_in_pic_order_cnt_cycle;
 	int16_t pic_width;
 	int16_t pic_height;
+	int16_t max_dpb_in_mbs;
 	int16_t frame_crop[4];
 	unsigned constraint_set_flag : 8; /* reserved_zero_bits included */
 	unsigned delta_pic_order_always_zero_flag : 1;
@@ -163,6 +169,7 @@ typedef struct {
 	unsigned redundant_pic_cnt_present_flag : 1;
 	unsigned transform_8x8_mode_flag : 1;
 	unsigned pic_scaling_matrix_present_flag : 1;
+	int8_t seq_parameter_set_id;
 	int8_t num_ref_idx_l0_active_minus1;
 	int8_t num_ref_idx_l1_active_minus1;
 	int8_t weighted_bipred_idc;
@@ -170,7 +177,6 @@ typedef struct {
 	int8_t pic_init_qs;
 	int8_t chroma_qp_index[2];
 	uint8_t pic_scaling_list_present_flag; /* bitfield, LSB first */
-	uint32_t seq_parameter_set_id;
 	uint32_t num_slice_groups_minus1;
 /*	uint32_t slice_group_map_type; */
 } h264d_pps;
@@ -182,17 +188,35 @@ typedef struct {
 	int16_t crop[4];
 } h264d_frame;
 
+typedef union {
+	int16_t v[2];
+	uint32_t vector;
+} h264d_vector_t;
+
+typedef struct {
+	int8_t type;
+	int8_t ref[4];
+	h264d_vector_t mv[16];
+} h264d_col_mb_t;
+
 typedef struct {
 	int16_t in_use; /* 0, 1, 2 = unused, short_term, long_term */
 	int16_t frame_idx;
 	uint32_t num;
 	int32_t poc;
+	h264d_col_mb_t *col; /* valid only for List1. */
 } h264d_ref_frame_t;
 
 typedef struct {
 	int8_t ref_pic_list_reordering_flag;
 	h264d_ref_frame_t *ref_frames;
 } h264d_reorder_t;
+
+typedef struct {
+	int8_t log2_luma_denom;
+	int8_t luma_weight_flag;
+	int8_t luma_weight[16];
+} h264d_weight_table_t;
 
 typedef struct {
 	int8_t op;
@@ -216,8 +240,7 @@ typedef struct {
 	unsigned sp_for_switch_flag : 1;
 	uint8_t pic_parameter_set_id;
 	int8_t slice_type;
-	int8_t num_ref_idx_l0_active_minus1;
-	int8_t num_ref_idx_l1_active_minus1;
+	int8_t num_ref_idx_lx_active_minus1[2];
 	int8_t cabac_init_idc;
 	int8_t qp_delta;
 	int8_t qs_delta;
@@ -243,6 +266,7 @@ typedef struct {
 	};
 	uint32_t redundant_pic_cnt;
 	h264d_reorder_t reorder[2];
+	h264d_weight_table_t pred_weight_table[2];
 	h264d_marking_t marking;
 } h264d_slice_header;
 
@@ -261,22 +285,27 @@ typedef struct {
 typedef struct {
 	uint8_t *curr_luma;
 	uint8_t *curr_chroma;
+	h264d_col_mb_t *curr_col;
 	int num;
 	int index;
-	h264d_ref_frame_t refs[16];
-	h264d_ref_frame_t refs1[16];
+	h264d_ref_frame_t refs[2][16];
 	h264d_frame frames[32];
 	int8_t lru[32];
 	h264d_dpb_t dpb;
 } h264d_frame_info_t;
 
 typedef struct {
+	h264d_vector_t mv[2];
+	h264d_vector_t mvd[2];
+} h264d_vector_set_t;
+
+typedef struct {
 	int8_t type;
 	int8_t chroma_pred_mode;
 	int8_t cbp;
-	int8_t ref[2];
+	int8_t ref[2][2];
 	uint16_t cbf;
-	int16_t mv[2][4][2];
+	h264d_vector_set_t mov[4];
 } prev_mb_t;
 
 typedef struct {
@@ -298,21 +327,23 @@ typedef struct {
 	int8_t is_constrained_intra;
 	int8_t type;
 	int8_t qp, qp_chroma;
-	int8_t lefttop_ref;
+	int8_t lefttop_ref[2];
 	int8_t prev_qp_delta;
 	int8_t chroma_pred_mode;
 	int16_t x, y;
 	int16_t max_x, max_y;
 	int16_t firstline; /* # of first line of MBs */
-	int16_t lefttop_mv[2];
 	uint8_t *luma; /* current destination point */
 	uint8_t *chroma;
+	h264d_vector_t lefttop_mv[2];
 	int32_t left4x4pred;
 	int32_t left4x4coef;
 	int32_t *top4x4pred;
 	int32_t *top4x4coef;
 	prev_mb_t *left4x4inter;
 	prev_mb_t *top4x4inter;
+	h264d_col_mb_t *col_curr;
+	const int8_t *sub_mb_ref_map;
 	uint32_t cbp, cbf;
 	deblock_info_t *deblock_curr;
 	deblock_info_t *deblock_base;
@@ -322,8 +353,7 @@ typedef struct {
 	prev_mb_t *mb_base;
 	h264d_cabac_t *cabac;
 	h264d_pps *pps;
-	int8_t *num_ref_idx_l0_active_minus1;
-	int8_t *num_ref_idx_l1_active_minus1;
+	int8_t *num_ref_idx_lx_active_minus1[2];
 	int16_t *qmatc_p;
 	int16_t qmaty[16];
 	int16_t qmatc[16];
@@ -335,7 +365,7 @@ typedef struct {
 typedef struct mb_code {
 	int (*mb_dec)(h264d_mb_current *mb, const struct mb_code *mbc, dec_bits *st, int avail);
 	int (*mb_pred)(uint8_t *dst, int stride, int avail);
-	int8_t cbp;
+	int16_t cbp;
 } mb_code;
 
 typedef struct {
@@ -361,9 +391,9 @@ typedef struct {
 int h264d_init(h264d_context *h2d, int dpb_max);
 int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, h264d_info_t *info);
-int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame);
+int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame, int second_frame_size);
 int h264d_decode_picture(h264d_context *h2d);
-int h246d_get_decoded_frame(h264d_context *h2d, h264d_frame *frame, int dpb_mode);
+int h246d_get_decoded_frame(h264d_context *h2d, h264d_frame *frame, int bypass_dpb);
 void h264d_load_bytes_skip03(dec_bits *ths, intptr_t read_bytes);
 
 #ifdef __cplusplus
