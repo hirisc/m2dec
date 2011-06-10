@@ -8,9 +8,7 @@
 #include <functional>
 #include "getopt.h"
 
-#ifndef __RENESAS_VERSION__
 using namespace std;
-#endif
 
 class FileWriter {
 protected:
