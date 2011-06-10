@@ -6057,24 +6057,6 @@ static void b_direct_ref_mv_calc(h264d_mb_current *mb, int avail, int8_t *ref_id
 	b_skip_ref_mv(ref_idx, mv, ref_a, ref_b, ref_c, mv_a, mv_b, mv_c);
 }
 
-static void sub_mb_direct8x8_mv(h264d_mb_current *mb, dec_bits *st, int avail, int blk_idx, prev8x8_t *pblk, int lx)
-{
-	if (lx == 0) {
-		int8_t ref_idx[2];
-		h264d_vector_t mv[2];
-		b_direct_ref_mv_calc(mb, avail, ref_idx, mv[0].v);
-		pblk += blk_idx;
-		for (int lx = 0; lx < 2; ++lx) {
-			pblk->ref[lx] = ref_idx[lx];
-			uint32_t mov = mv[lx].vector;
-			for (int i = 0; i < 4; ++i) {
-				pblk->mov[i].mv[lx].vector = mov;
-				pblk->mov[i].mvd[lx].vector = 0U;
-			}
-		}
-	}
-}
-
 static void direct_mv_pred(h264d_mb_current *mb, const int8_t *ref_idx, const h264d_vector_t *mv, int xsize, int ysize, int xoffset, int yoffset)
 {
 	int bidir = 0;
@@ -6118,6 +6100,11 @@ static void pred_direct8x8(h264d_mb_current *mb, int blk_idx, prev8x8_t *pblk)
 		memset(pblk->mov, 0, sizeof(pblk->mov));
 		direct_zero_pred(mb, 8, 8, xoffset, yoffset);
 	}
+}
+
+static void sub_mb8x8_direct(h264d_mb_current *mb, dec_bits *st, int avail, int blk_idx, prev8x8_t *pblk, int lx)
+{
+	/* do nothing */
 }
 
 template<typename F0>
@@ -6251,7 +6238,7 @@ static void (* const sub_mb_p_cavlc[4])(h264d_mb_current *mb, dec_bits *st, int 
 };
 
 static void (* const sub_mb_b_cavlc[13])(h264d_mb_current *mb, dec_bits *st, int avail, int blk_idx, prev8x8_t *pblk, int lx) = {
-	sub_mb_direct8x8_mv,
+	sub_mb8x8_direct,
 	sub_mb8x8_mv_cavlc,
 	sub_mb8x8_mv_cavlc,
 	sub_mb8x8_mv_cavlc,
@@ -6514,16 +6501,22 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 		       F5 QpDelta,
 		       F6 ResidualBlock)
 {
+	static const prev8x8_t blk_base[4] = {
+		{{-1, -1}, {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}},
+		{{-1, -1}, {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}},
+		{{-1, -1}, {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}},
+		{{-1, -1}, {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}}}
+	};
 	prev8x8_t curr_blk[4];
 	int8_t sub_mb_type[4];
 	uint32_t cbp;
 	uint32_t str_vert, str_horiz;
 	uint32_t left4x4, top4x4;
 
-	if (SubMbType(mb, st, sub_mb_type) < 0) {
+	memcpy(curr_blk, blk_base, sizeof(curr_blk));
+	if (SubMbType(mb, st, sub_mb_type, curr_blk, avail) < 0) {
 		return -1;
 	}
-	memset(curr_blk, 0, sizeof(curr_blk));
 	for (int lx = 0; lx < 2; ++lx) {
 		RefIdx8x8(mb, st, sub_mb_type, curr_blk, avail, lx);
 	}
@@ -6601,7 +6594,7 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 }
 
 struct sub_mb_type_p_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
 		for (int i = 0; i < 4; ++i) {
 			READ_UE_RANGE(sub_mb_type[i], st, 3);
 		}
@@ -6609,14 +6602,42 @@ struct sub_mb_type_p_cavlc {
 	}
 };
 
+static inline void fill_direct8x8_mv(prev8x8_t *pblk, int blk_idx, const int8_t *ref_idx, const h264d_vector_t *mv)
+{
+	uint32_t mov0 = mv[0].vector;
+	uint32_t mov1 = mv[1].vector;
+	pblk += blk_idx;
+	pblk->ref[0] = ref_idx[0];
+	pblk->ref[1] = ref_idx[1];
+	for (int i = 0; i < 4; ++i) {
+		pblk->mov[i].mv[0].vector = mov0;
+		pblk->mov[i].mv[1].vector = mov1;
+		pblk->mov[i].mvd[0].vector = 0U;
+		pblk->mov[i].mvd[1].vector = 0U;
+	}
+}
+
 struct sub_mb_type_b_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
+		int b_direct_cnt = 0;
+		h264d_vector_t mv[2];
+		int8_t ref_idx[2];
+
 		for (int i = 0; i < 4; ++i) {
-			READ_UE_RANGE(sub_mb_type[i], st, 12);
+			int type;
+			READ_UE_RANGE(type, st, 12);
+			sub_mb_type[i] = type;
+			if (type == 0) {
+				if (b_direct_cnt++ == 0) {
+					b_direct_ref_mv_calc(mb, avail, ref_idx, mv[0].v);
+				}
+				fill_direct8x8_mv(curr_blk, i, ref_idx, mv);
+			}
 		}
 		return 0;
 	}
 };
+
 
 struct ref_idx16x16_cavlc {
 	 int operator()(h264d_mb_current *mb, dec_bits *st, int lx, int avail) {
@@ -6802,16 +6823,16 @@ static void calc_mv_pskip(h264d_mb_current *mb, int16_t mv[], int avail)
 
 static inline void fill_pskip_col(h264d_col_mb_t *col_mb, const int8_t *ref_idx, const h264d_vector_t *mv)
 {
-	int ref = *ref_idx++;
 	uint32_t *dst = &(col_mb->mv->vector);
 	uint32_t v = mv[0].vector;
 	int i = 16 / 2;
+	col_mb->type = COL_MB16x16;
 	do {
 		dst[0] = v;
 		dst[1] = v;
 		dst += 2;
 	} while (--i);
-	memset(col_mb->ref, ref, sizeof(col_mb->ref));
+	memset(col_mb->ref, *ref_idx, sizeof(col_mb->ref));
 }
 
 static void p_skip_mb(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_t *mv)
@@ -6819,23 +6840,6 @@ static void p_skip_mb(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_t *mv)
 	calc_mv_pskip(mb, mv->v, get_availability(mb));
 	fill_pskip_col(mb->col_curr, ref_idx, mv);
 	inter_pred8x8(mb, mv->v, 16, 16, mb->frame->refs[0][0].frame_idx, 0, 0, 0);
-}
-
-static inline void store_col_pskip(h264d_col_mb_t *col_mb, const int8_t *ref_idx, const h264d_vector_t *mv)
-{
-	h264d_vector_t *mvdst = col_mb->mv;
-	uint32_t v;
-	int i;
-
-	col_mb->type = COL_MB16x16;
-	memset(col_mb->ref, ref_idx[0], sizeof(col_mb->ref));
-	v = mv->vector;
-	i = 16 / 2;
-	do {
-		mvdst[0].vector = v;
-		mvdst[1].vector = v;
-		mvdst += 2;
-	} while (--i);
 }
 
 static inline void fill_bskip_mv(h264d_vector_t *mv, const int8_t *ref_idx)
@@ -6857,6 +6861,7 @@ static inline void fill_bskip_col(h264d_col_mb_t *col_mb, const int8_t *ref_idx,
 	uint32_t *dst = &(col_mb->mv->vector);
 	const uint32_t *src = &(mv->vector);
 	int i = 16 / 2;
+	col_mb->type = COL_MB8x8;
 	if (ref < 0) {
 		src++;
 		ref = *ref_idx;
@@ -6956,33 +6961,6 @@ static void b_skip_mb(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_t *mv)
 	fill_bskip_mv(mv, ref_idx);
 	pred_direct16x16(mb, ref_idx, mv);
 	fill_bskip_col(mb->col_curr, ref_idx, mv);
-}
-
-static inline void store_col_bskip(h264d_col_mb_t *col_mb, const int8_t *ref_idx, const h264d_vector_t *mv)
-{
-	int8_t *refdst = col_mb->ref;
-	h264d_vector_t *mvdst = col_mb->mv;
-
-	col_mb->type = COL_MB8x8;
-	for (int blk = 0; blk < 4; ++blk) {
-		int refcol = *ref_idx++;
-		const h264d_vector_t *mvcol;
-
-		if (0 <= refcol) {
-			mvcol = &mv[0];
-			ref_idx++;
-		} else {
-			mvcol = &mv[1];
-			refcol = *ref_idx++;
-		}
-		refdst[blk] = refcol;
-		mvdst[0].vector = mvcol[0].vector;
-		mvdst[1].vector = mvcol[2].vector;
-		mvdst[4].vector = mvcol[8].vector;
-		mvdst[5].vector = mvcol[10].vector;
-		mvdst = mvdst + (blk & 1) * 4 + 2;
-		mv = mv + (blk & 1) * 8 + 4;
-	}
 }
 
 static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
@@ -9073,7 +9051,7 @@ static int mb_intra16x16_acdc_cabac(h264d_mb_current *mb, const mb_code *mbc, de
 } 
 
 struct sub_mb_type_p_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
 		h264d_cabac_t *cb = mb->cabac;
 		for (int i = 0; i < 4; ++i) {
 			int t;
@@ -9114,10 +9092,21 @@ static inline int sub_mb_type_b_one_cabac(h264d_cabac_t *cb, dec_bits *st)
 }
 
 struct sub_mb_type_b_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
 		h264d_cabac_t *cb = mb->cabac;
+		int b_direct_cnt = 0;
+		h264d_vector_t mv[2];
+		int8_t ref_idx[2];
+
 		for (int i = 0; i < 4; ++i) {
-			sub_mb_type[i] = sub_mb_type_b_one_cabac(cb, st);
+			int type = sub_mb_type_b_one_cabac(cb, st);
+			sub_mb_type[i] = type;
+			if (type == 0) {
+				if (b_direct_cnt++ == 0) {
+					b_direct_ref_mv_calc(mb, avail, ref_idx, mv[0].v);
+				}
+				fill_direct8x8_mv(curr_blk, i, ref_idx, mv);
+			}
 		}
 		return 0;
 	}
@@ -9196,7 +9185,7 @@ static void (* const sub_mb_p_cabac[4])(h264d_mb_current *mb, dec_bits *st, int 
 };
 
 static void (* const sub_mb_b_cabac[13])(h264d_mb_current *mb, dec_bits *st, int avail, int blk_idx, prev8x8_t *pblk, int lx) = {
-	sub_mb_direct8x8_mv,
+	sub_mb8x8_direct,
 	sub_mb8x8_mv_cabac,
 	sub_mb8x8_mv_cabac,
 	sub_mb8x8_mv_cabac,
@@ -9301,10 +9290,10 @@ struct ref_idx8x8_cabac {
 		int dir = 1 << lx;
 		h264d_cabac_t *cb = mb->cabac;
 		const int8_t *sub_mb_ref_map = mb->sub_mb_ref_map;
-		pblk[0].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, ((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[0][lx])) + ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[0][lx])) * 2) : 0) : -1;
-		pblk[1].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, (0 < pblk[0].ref[lx]) + ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[1][lx])) * 2) : 0) : -1;
-		pblk[2].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, ((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[1][lx])) + (0 < pblk[0].ref[lx]) * 2) : 0) : -1;
-		pblk[3].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type]) ? (t ? ref_idx_cabac_sub(st, cb, (0 < pblk[2].ref[lx]) + (0 < pblk[1].ref[lx]) * 2) : 0) : -1;
+		pblk[0].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, ((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[0][lx])) + ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[0][lx])) * 2) : 0) : pblk[0].ref[lx];
+		pblk[1].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, (0 < pblk[0].ref[lx]) + ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[1][lx])) * 2) : 0) : pblk[1].ref[lx];
+		pblk[2].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type++]) ? (t ? ref_idx_cabac_sub(st, cb, ((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[1][lx])) + (0 < pblk[0].ref[lx]) * 2) : 0) : pblk[2].ref[lx];
+		pblk[3].ref[lx] = (dir & sub_mb_ref_map[*sub_mb_type]) ? (t ? ref_idx_cabac_sub(st, cb, (0 < pblk[2].ref[lx]) + (0 < pblk[1].ref[lx]) * 2) : 0) : pblk[3].ref[lx];
 	}
 };
 
