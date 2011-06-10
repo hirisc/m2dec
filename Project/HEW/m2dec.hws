@@ -3,14 +3,14 @@
 [DATABASE_VERSION]
 "11.0" 
 [WORKSPACE_DETAILS]
-"m2dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\m2dec.hws" "SuperH RISC engine" "Renesas SuperH Standard" 
+"m2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\m2dec.hws" "SuperH RISC engine" "Renesas SuperH Standard" 
 [SHARED_WORKSPACE_CONTROL_STATUS]
 "" "" "" 
 "" "" "" 
 [PROJECTS]
-"h264dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\h264dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\h264dec\h264dec.hwp" 0 
-"libm2dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\libm2dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\libm2dec\libm2dec.hwp" 0 
-"m2dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\m2dec" "C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\Project\HEW\m2dec\m2dec.hwp" 0 
+"h264dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\h264dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\h264dec\h264dec.hwp" 0 
+"libm2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\libm2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\libm2dec\libm2dec.hwp" 0 
+"m2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\m2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\m2dec\m2dec.hwp" 0 
 [INFORMATION]
 "ワークスペース情報がありません" 
 [SCRAP]
@@ -21,7 +21,9 @@
 [HELP_FILES]
 "c:\hew3\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
 "c:\program files (x86)\renesas\hew\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
-"c:\program files (x86)\renesas\hew\tools\renesas\sh\9_1_1\hew\stdlib.hlp" "C/C++ Standard Library Help" 1 
+"c:\program files (x86)\renesas\hew\tools\renesas\sh\9_1_1\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
+"c:\program files\renesas\hew\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
+"c:\program files\renesas\hew\tools\renesas\sh\9_3_2\hew\stdlib.chm" "C/C++ Standard Library Help" 1 
 [GENERAL_DATA_PROJECT]
 [USERMENUTOOLS]
 [CUSTOMPLACEHOLDERS]

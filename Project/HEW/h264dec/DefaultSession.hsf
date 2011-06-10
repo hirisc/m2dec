@@ -55,10 +55,8 @@
 [WINDOW_POSITION_STATE_DATA_VD3]
 [WINDOW_POSITION_STATE_DATA_VD4]
 [WINDOW_Z_ORDER]
-"C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\src\app\h264dec.cpp" 
-"C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\src\app\m2dec.cpp" 
-"C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\src\lib\types.h" 
-"C:\cygwin\home\minegisi\programs\m2dec-0.1.9g\src\lib\mpeg2.cpp" 
+"C:\cygwin\home\minegisi\programs\m2dec\src\app\optparser.h" 
+"C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" 
 [TARGET_NAME]
 "" "" 1400652080 
 [STATUSBAR_STATEINFO_VD1]
