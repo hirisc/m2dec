@@ -359,7 +359,7 @@
 [LANGUAGE]
 "Japanese" 
 [CONFIG_INFO_VD1]
-0 
+1 
 [CONFIG_INFO_VD2]
 0 
 [CONFIG_INFO_VD3]
@@ -400,6 +400,8 @@
 [WINDOW_POSITION_STATE_DATA_VD3]
 [WINDOW_POSITION_STATE_DATA_VD4]
 [WINDOW_Z_ORDER]
+"C:\cygwin\home\minegisi\programs\m2dec\src\app\optparser.h" 
+"C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" 
 [TARGET_NAME]
 "SH4AL-DSP Cycle Base Simulator(Little endian)" "" 0 
 [STATUSBAR_STATEINFO_VD1]
@@ -447,7 +449,7 @@
 [FLASH_DETAILS]
 "" 0 0 "" 0 "" 0 0 "" 0 0 0 0 0 0 0 "" "" "" "" "" 
 [BREAKPOINTS]
-"c:\cygwin\home\minegisi\programs\m2dec\src\app\m2dec.cpp" 495 67395788 1 "{00000000-0000-0000-C000-000000000046}" "" 
+"c:\cygwin\home\minegisi\programs\m2dec\src\app\m2dec.cpp" 495 28160476 1 "{00000000-0000-0000-C000-000000000046}" "" 
 "c:\cygwin\home\minegisi\programs\m2dec\src\lib\motioncomp_asm.src" 343 0 1 "{00000000-0000-0000-C000-000000000046}" "" 
 "c:\cygwin\home\minegisi\programs\m2dec\src\lib\seq.cpp" 1491 0 1 "{00000000-0000-0000-C000-000000000046}" "" 
 [END]
