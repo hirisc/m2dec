@@ -20,7 +20,6 @@ char OutputFile[MAX_MD5SIZE];
 
 void abort() {while (1);}
 static int infilepos;
-static int outfilepos;
 
 static void exit(int err) {
 	while (err);
