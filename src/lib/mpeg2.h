@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#include "m2types.h"
+#include "m2d.h"
 #define __LIBM2DEC_API
 
 
@@ -47,11 +47,6 @@ enum {
 	B_VOP,
 	D_VOP
 };
-
-typedef struct {
-	int16_t pattern;
-	int8_t length;
-} vlc_t;
 
 /**Element of VLD tables for DCT coefficients.
  */
@@ -118,18 +113,13 @@ enum {
 };
 
 typedef struct {
-	uint8_t *luma;
-	uint8_t *chroma;
-} m2d_frame;
-
-typedef struct {
 	uint8_t *curr_luma;
 	uint8_t *curr_chroma;
 	ptrdiff_t diff_to_ref[2][2]; /* forward/backward x luma/chroma */
 	int idx_of_ref[2];
 	int num;
 	int index;
-	m2d_frame frames[MAX_FRAME_NUM];
+	m2d_frame_t frames[MAX_FRAME_NUM];
 	int lru[MAX_FRAME_NUM];
 } m2d_frames;
 
@@ -201,6 +191,7 @@ typedef struct {
 	dec_bits *stream;
 	m2d_mb_current *mb_current;
 	m2d_gop_header *gop_header;
+	int out_state;
 	m2d_seq_header seq_header_i;
 	m2d_gop_header gop_header_i;
 	dec_bits stream_i;
@@ -217,13 +208,16 @@ enum {
 	M2D_ERR_UNKNOWN = -4
 };
 
-__LIBM2DEC_API int m2d_init(m2d_context *m2d, int num_mem, m2d_frame *mem);
-__LIBM2DEC_API int m2d_read_seq_header(m2d_context *m2d);
+__LIBM2DEC_API int m2d_init(m2d_context *m2d);
+__LIBM2DEC_API int m2d_read_header(m2d_context *m2d, const byte_t *data, size_t len);
+__LIBM2DEC_API int m2d_get_info(m2d_context *m2d, m2d_info_t *info);
+__LIBM2DEC_API int m2d_set_frames(m2d_context *m2d, int num_mem, m2d_frame_t *mem);
 __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int indata_bytes);
-__LIBM2DEC_API int m2d_find_mpeg_data(dec_bits *stream);
 __LIBM2DEC_API int m2d_decode_data(m2d_context *m2d);
-__LIBM2DEC_API const m2d_frame *m2d_get_decoded_frame(m2d_context *m2d, int *width, int *height, int is_end);
+__LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end);
 __LIBM2DEC_API int m2d_skip_frames(m2d_context *m2d, int frame_num);
+
+extern const m2d_func_table_t * const m2d_func;
 
 #ifdef __cplusplus
 }

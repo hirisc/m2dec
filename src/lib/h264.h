@@ -44,7 +44,7 @@ extern "C" {
 #include <stdio.h>
 #endif
 
-#include "m2types.h"
+#include "m2d.h"
 #define __LIBH264DEC_API
 
 enum {
@@ -181,16 +181,9 @@ typedef struct {
 /*	uint32_t slice_group_map_type; */
 } h264d_pps;
 
-typedef struct {
-	uint8_t *luma;
-	uint8_t *chroma;
-	int16_t width, height;
-	int16_t crop[4];
-} h264d_frame;
-
 typedef union {
-	int16_t v[2];
 	uint32_t vector;
+	int16_t v[2];
 } h264d_vector_t;
 
 typedef struct {
@@ -213,8 +206,6 @@ typedef struct {
 } h264d_reorder_t;
 
 typedef struct {
-	int8_t log2_luma_denom;
-	int8_t luma_weight_flag;
 	int8_t luma_weight[16];
 } h264d_weight_table_t;
 
@@ -289,7 +280,7 @@ typedef struct {
 	int num;
 	int index;
 	h264d_ref_frame_t refs[2][16];
-	h264d_frame frames[32];
+	m2d_frame_t frames[32];
 	int8_t lru[32];
 	h264d_dpb_t dpb;
 } h264d_frame_info_t;
@@ -369,14 +360,6 @@ typedef struct mb_code {
 } mb_code;
 
 typedef struct {
-	int16_t src_width, src_height;
-	int16_t disp_width, disp_height;
-	int16_t frame_num;
-	int16_t crop[4];
-	int additional_size;
-} h264d_info_t;
-
-typedef struct {
 	int id;
 	h264d_slice_header *slice_header;
 	dec_bits *stream;
@@ -387,14 +370,15 @@ typedef struct {
 	h264d_sps sps_i[32];
 } h264d_context;
 
-
 int h264d_init(h264d_context *h2d, int dpb_max);
 int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
-int h264d_get_info(h264d_context *h2d, h264d_info_t *info);
-int h264d_set_frames(h264d_context *h2d, int num_frame, h264d_frame *frame, uint8_t *second_frame, int second_frame_size);
+int h264d_get_info(h264d_context *h2d, m2d_info_t *info);
+int h264d_set_frames(h264d_context *h2d, int num_frame, m2d_frame_t *frame, uint8_t *second_frame, int second_frame_size);
 int h264d_decode_picture(h264d_context *h2d);
-int h246d_get_decoded_frame(h264d_context *h2d, h264d_frame *frame, int bypass_dpb);
+int h264d_get_decoded_frame(h264d_context *h2d, m2d_frame_t *frame, int bypass_dpb);
 void h264d_load_bytes_skip03(dec_bits *ths, intptr_t read_bytes);
+
+extern const m2d_func_table_t * const h264d_func;
 
 #ifdef __cplusplus
 }

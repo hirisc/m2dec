@@ -39,7 +39,7 @@ typedef struct {
 	dec_bits stream_i;
 } pes_demuxer_t;
 
-int mpeg_demux_init(pes_demuxer_t *dmx, int (*callback_func)(void *), void *arg, jmp_buf *jmp);
+int mpeg_demux_init(pes_demuxer_t *dmx, int (*callback_func)(void *), void *arg);
 const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p);
 int mpeg_demux_request_set_data(pes_demuxer_t *dmx, const byte_t **indata_p, int *size_p, void *arg);
 

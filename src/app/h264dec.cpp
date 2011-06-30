@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #ifdef __RENESAS_VERSION__
 
 extern "C" {
+#pragma section FILES
 
 #define O_RDONLY 1
 #define O_WRONLY 2
@@ -18,6 +20,7 @@ extern "C" {
 char InputFile[MAX_FILESIZE];
 char OutputFile[MAX_MD5SIZE];
 
+#pragma section
 void abort() {while (1);}
 static int infilepos;
 
@@ -28,6 +31,7 @@ static void exit(int err) {
 int fseek(FILE *fp, long offset, int whence) {
 	return 0;
 }
+
 int open(char *name, int mode, int flg) {
 	if (mode & O_RDONLY) {
 		infilepos = 0;
@@ -54,17 +58,17 @@ char *getenv(const char *name) {return 0;}
 
 }
 
-#endif
+#endif /* __RENESAS_VERSION__ */
 
-static int alloc_frames(h264d_frame **mem, int width, int height, int num_mem)
+static int alloc_frames(m2d_frame_t **mem, int width, int height, int num_mem)
 {
-	h264d_frame *m;
+	m2d_frame_t *m;
 	int luma_len = ((width + 15) & ~15) * ((height + 15) & ~15) + 15;
 
 	if (luma_len <= 0) {
 		return -1;
 	}
-	*mem = m = new h264d_frame[num_mem];
+	*mem = m = new m2d_frame_t[num_mem];
 	for (int i = 0; i < num_mem; ++i) {
 		m[i].luma = new uint8_t[luma_len];
 		m[i].chroma = new uint8_t[luma_len >> 1];
@@ -72,7 +76,7 @@ static int alloc_frames(h264d_frame **mem, int width, int height, int num_mem)
 	return 0;
 }
 
-static void free_frames(h264d_frame *mem, int num_mem)
+static void free_frames(m2d_frame_t *mem, int num_mem)
 {
 	for (int i = 0; i < num_mem; ++i) {
 		delete[] mem[i].luma;
@@ -119,7 +123,7 @@ struct input_data_t {
 				break;
 			case 'd':
 				dpb_ = strtol(optarg, 0, 0);
-				if (16 < (unsigned)dpb_) {
+				if (32 < (unsigned)dpb_) {
 					BlameUser();
 					/* NOTREACHED */
 				}
@@ -145,15 +149,22 @@ struct input_data_t {
 				fo_ = fopen(outfile, "wb");
 			}
 		}
+#ifdef __RENESAS_VERSION__
+		data_ = (uint8_t *)InputFile;
+		len_ = sizeof(InputFile);
+#else
 		fseek(fi, 0, SEEK_END);
 		len_ = ftell(fi);
 		fseek(fi, 0, SEEK_SET);
 		data_ = new uint8_t[len_];
 		fread(data_, 1, len_, fi);
+#endif
 		fclose(fi);
 	}
 	~input_data_t() {
+#ifndef __RENESAS_VERSION__
 		delete[] data_;
+#endif
 		if (fo_) {
 			fclose(fo_);
 		}
@@ -165,7 +176,7 @@ struct input_data_t {
 	static size_t write_raw(void *dst, const uint8_t *src, size_t size) {
 		return fwrite((const void *)src, 1, size, (FILE *)dst);
 	}
-	static void write_cropping(const h264d_frame *frame, size_t (*writef)(void *dst, const uint8_t *src, size_t size), void *dst) {
+	static void write_cropping(const m2d_frame_t *frame, size_t (*writef)(void *dst, const uint8_t *src, size_t size), void *dst) {
 		const uint8_t *src;
 		int stride, height, width;
 
@@ -192,7 +203,7 @@ struct input_data_t {
 		txt[32] = 0x0d;
 		txt[33] = 0x0a;
 	}
-	size_t writeframe(const h264d_frame *frame) {
+	size_t writeframe(const m2d_frame_t *frame) {
 		if (fo_) {
 			int luma_size = frame->width * frame->height;
 			if (md5_) {
@@ -238,12 +249,21 @@ static int reread_file(void *var)
 	}
 }
 
+#ifdef _M_IX86
+#include <crtdbg.h>
+#endif
+
 int main(int argc, char *argv[])
 {
 	h264d_context *h2d;
-	h264d_frame *mem;
+	m2d_frame_t *mem;
 	int err;
 
+#ifdef _M_IX86
+	_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_WNDW);
+//	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
+#endif
 	h2d = new h264d_context;
 	input_data_t data(argc, argv, (void *)h2d);
 	if (data.len_ <= 0) {
@@ -258,7 +278,7 @@ int main(int argc, char *argv[])
 	if (err) {
 		return err;
 	}
-	h264d_info_t info;
+	m2d_info_t info;
 	h264d_get_info(h2d, &info);
 	fprintf(stderr,
 		"length: %ld\n"
@@ -266,34 +286,38 @@ int main(int argc, char *argv[])
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
 	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? 16 : data.dpb_);
+//	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? (25 - info.frame_num) : data.dpb_);
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
 	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame, info.additional_size);
 	if (err) {
 		return err;
 	}
-	jmp_buf jmp;
-	dec_bits_set_callback(h2d->stream, reread_file, &data, &jmp);
-	h264d_frame frame;
+	dec_bits_set_callback(h2d->stream, reread_file, &data);
+	m2d_frame_t frame;
 	for (int i = 0; i < INT_MAX; ++i) {
 		err = h264d_decode_picture(h2d);
 		if (err == -1) {
 			break;
 		}
-		while (h246d_get_decoded_frame(h2d, &frame, (data.dpb_ == 1))) {
+		while (h264d_get_decoded_frame(h2d, &frame, (data.dpb_ == 1))) {
 			data.writeframe(&frame);
 		}
 		if (err < 0) {
 			break;
 		}
 	}
-	while (h246d_get_decoded_frame(h2d, &frame, 1)) {
+	while (h264d_get_decoded_frame(h2d, &frame, 1)) {
 		data.writeframe(&frame);
 	}
 	delete[] second_frame;
 	free_frames(mem, info.frame_num);
 	delete[] mem;
 	delete h2d;
+
+#ifdef _M_IX86
+	assert(_CrtCheckMemory());
+#endif
 	return err;
 }
 

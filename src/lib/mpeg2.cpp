@@ -1,4 +1,4 @@
-/** Analyze MPEG-2 sequence layer and below.
+ /** Analyze MPEG-2 sequence layer and below.
  *  Copyright 2008 Takayuki Minegishi
  *
  *  Permission is hereby granted, free of charge, to any person
@@ -107,10 +107,15 @@ static void (* const skip_mb_func[4])(m2d_mb_current *mb, int mb_increment) = {
 #define VALID_PTR(x) ((x) && !((intptr_t)(x) & (sizeof(*(x)) - 1)))
 #define MARKER_BIT1(stream, err) {err |= !get_onebit(stream);}
 
-static int m2d_frames_init(m2d_frames *frames, int num_mem, m2d_frame *mem)
+__LIBM2DEC_API int m2d_set_frames(m2d_context *m2d, int num_mem, m2d_frame_t *mem)
 {
+	m2d_frames *frames;
 	int i;
-	num_mem = (num_mem <= MAX_FRAME_NUM) ? num_mem : MAX_FRAME_NUM;
+
+	if (!m2d || (MAX_FRAME_NUM < (unsigned)num_mem) || !mem) {
+		return -1;
+	}
+	frames = m2d->mb_current->frames;
 	frames->num = num_mem;
 	memcpy(frames->frames, mem, sizeof(frames->frames[0]) * num_mem);
 	for (i = 0; i < num_mem; ++i) {
@@ -145,7 +150,7 @@ static int find_valid_frame(int ref0_idx, int ref1_idx, int *lru, int num_frames
 	return max_idx;
 }
 
-static void set_ptrdiff(m2d_frames *frames, int ref, int frm_idx, m2d_frame *curr_frame)
+static void set_ptrdiff(m2d_frames *frames, int ref, int frm_idx, m2d_frame_t *curr_frame)
 {
 	frames->diff_to_ref[ref][0] = frames->frames[frm_idx].luma - curr_frame->luma;
 	frames->diff_to_ref[ref][1] = frames->frames[frm_idx].chroma - curr_frame->chroma;
@@ -155,7 +160,7 @@ static void m2d_update_frames(m2d_frames *frames, int next_coding_type)
 {
 	int curr_idx;
 	int ref0_idx, ref1_idx;
-	m2d_frame *curr_frame;
+	m2d_frame_t *curr_frame;
 
 	curr_idx = frames->index;
 	if (curr_idx < 0) {
@@ -197,7 +202,7 @@ static void m2d_frames_inc_mb_y_pos(m2d_frames *frames, int inc_y, int width)
 static void m2d_frames_set_mb_pos(m2d_mb_current *mb, int mb_x, int mb_y, int width)
 {
 	m2d_frames *frames = mb->frames;
-	m2d_frame *frame = &frames->frames[frames->index < 0 ? 0 : frames->index];
+	m2d_frame_t *frame = &frames->frames[frames->index < 0 ? 0 : frames->index];
 	mb->mb_x = mb_x;
 	mb->mb_y = mb_y;
 	frames->curr_luma = frame->luma;
@@ -208,7 +213,7 @@ static void m2d_frames_set_mb_pos(m2d_mb_current *mb, int mb_x, int mb_y, int wi
 
 void m2d_mb_set_default(m2d_mb_current *mb);
 
-__LIBM2DEC_API int m2d_init(m2d_context *m2d, int num_mem, m2d_frame *mem)
+__LIBM2DEC_API int m2d_init(m2d_context *m2d)
 {
 	memset(m2d, 0, sizeof(*m2d));
 	m2d->seq_header = &m2d->seq_header_i;
@@ -218,43 +223,14 @@ __LIBM2DEC_API int m2d_init(m2d_context *m2d, int num_mem, m2d_frame *mem)
 	m2d_mb_set_default(m2d->mb_current);
 	m2d->gop_header = &m2d->gop_header_i;
 	m2d->mb_current->frames = &m2d->frames_i;
-	m2d_frames_init(m2d->mb_current->frames, num_mem, mem);
 	VC_CHECK;
 	dec_bits_open(m2d->stream, 0);
 	return 0;
 }
 
-/**Search "00 00 01 xx" pattern.
- */
-int m2d_next_start_code(const byte_t *org_src, int byte_len)
+static dec_bits *m2d_stream_pos(m2d_context *m2d)
 {
-	const signed char *src;
-
-	src = (const signed char *)org_src + 2;
-	byte_len = byte_len - 2;
-
-	while (0 < byte_len) {
-		int d = *src++;
-		if (1 < (unsigned)d) {
-			/* most probable case */
-			src += 2;
-			byte_len -= 3;
-		} else if (d == 0) {
-			byte_len -= 1;
-		} else {
-			/* d == 1 */
-			src -= 3;
-			if ((src[0] == 0) && (src[1] == 0)) {
-				/* found "00 00 01" */
-				src += 3;
-				break;
-			} else {
-				src += 5;
-				byte_len -= 3;
-			}
-		}
-	}
-	return (byte_len <= 0) ? -1 : (int)((const byte_t *)src - org_src);
+	return &m2d->stream_i;
 }
 
 static void m2d_load_qmat(uint8_t *qmat, const int8_t *zigzag, dec_bits *stream)
@@ -331,7 +307,7 @@ static void m2d_mb_set_frame_size(m2d_mb_current *mb, int width, int height)
 #endif
 }
 
-__LIBM2DEC_API int m2d_read_seq_header(m2d_context *m2d)
+static int m2d_read_seq_header(m2d_context *m2d)
 {
 	dec_bits *stream;
 	m2d_seq_header *header;
@@ -676,7 +652,7 @@ static int m2d_dispatch_one_nal(m2d_context *m2d, int code_type)
 {
 	int err;
 
-	if (setjmp(*m2d->stream->jmp) != 0) {
+	if (setjmp(m2d->stream->jmp) != 0) {
 		return 0;
 	}
 	if (code_type < 0xb0) {
@@ -705,36 +681,6 @@ static int m2d_dispatch_one_nal(m2d_context *m2d, int code_type)
 		}
 	}
 	return err;
-}
-
-
-/**Decode Variable Length Code which has one argument.
- */
-int m2d_dec_vld_unary(dec_bits *stream, const vlc_t *vld_tab, int bitlen)
-{
-	const vlc_t *code;
-	int idx;
-	int len;
-
-	code = &vld_tab[show_bits(stream, bitlen)];
-	len = code->length;
-	idx = 0;
-	while (len <= 0) {
-		int rest_len;
-		if (len == 0) {
-			/* invalid code */
-			assert(0);
-			return -1;
-		}
-		skip_bits(stream, bitlen);
-		rest_len = -len;
-		rest_len = rest_len < bitlen ? rest_len : bitlen;
-		idx += code->pattern;
-		code = &vld_tab[show_bits(stream, rest_len) + idx];
-		len = code->length;
-	}
-	skip_bits(stream, len);
-	return code->pattern;
 }
 
 /** Decode macroblock_type for Intra picture.
@@ -1084,10 +1030,8 @@ static inline int parse_coef(m2d_mb_current *mb, dec_bits *stream, int dct_type,
 			/* additional look-up */
 			if (len < 0) {
 				/* undefined code */
-				if (stream->jmp) {
-					longjmp(*stream->jmp, 1);
-					/* NOTREACHED */
-				}
+				longjmp(stream->jmp, 1);
+				/* NOTREACHED */
 				return 0;
 			}
 			vld_tab_curr += vlc->run;
@@ -1568,43 +1512,60 @@ static int m2d_decode_macroblocks(m2d_context *m2d)
 	return err;
 }
 
-__LIBM2DEC_API const m2d_frame *m2d_get_decoded_frame(m2d_context *m2d, int *width, int *height, int is_end)
+__LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
 	m2d_seq_header *header;
 	m2d_mb_current *mb;
 	m2d_frames *frames;
 	int idx;
 
-	if (m2d == 0) {
-		return 0;
+	if ((m2d == 0) || ((intptr_t)m2d & 3) || (frame == 0) || ((intptr_t)frame & 3)) {
+		return -1;
 	}
-	header = m2d->seq_header;
 	mb = m2d->mb_current;
-	if (VALID_PTR(width)) {
-		*width =
-#ifdef FAST_DECODE
-		mb->mbmax_x * 2;
-#else
-		header->horizontal_size_value;
-#endif
-	}
-	if (VALID_PTR(height)) {
-		*height =
-#ifdef FAST_DECODE
-		mb->mbmax_y * 2;
-#else
-		header->vertical_size_value;
-#endif
-	}
 	frames = mb->frames;
 	if (is_end) {
+		if (m2d->out_state < 3) {
+			m2d->out_state = 3;
+		}
 		idx = frames->idx_of_ref[1];
 	} else if (m2d->picture->picture_coding_type == B_VOP) {
 		idx = frames->index;
 	} else {
 		idx = frames->idx_of_ref[0];
 	}
-	return &frames->frames[idx];
+	*frame = frames->frames[idx];
+
+	header = m2d->seq_header;
+	frame->width =
+#ifdef FAST_DECODE
+		mb->mbmax_x * 2;
+#else
+		header->horizontal_size_value;
+#endif
+	frame->height =
+#ifdef FAST_DECODE
+		mb->mbmax_y * 2;
+#else
+		header->vertical_size_value;
+#endif
+	switch (m2d->out_state) {
+	case 0:
+		m2d->out_state = 1;
+		return 0;
+	case 1:
+		m2d->out_state = 2;
+		return 1;
+	case 2:
+		m2d->out_state = 1;
+		return 0;
+	case 3:
+		m2d->out_state = 4;
+		return 1;
+	case 4:
+		return 0;
+	}
+	return 1;
 }
 
 __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int indata_bytes)
@@ -1613,34 +1574,6 @@ __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int inda
 		return -1;
 	}
 	dec_bits_set_data(m2d->stream, indata, indata_bytes);
-	return 0;
-}
-
-/** Search start code for block(s) of input data.
- */
-__LIBM2DEC_API int m2d_find_mpeg_data(dec_bits *stream)
-{
-	show_bits(stream, 8);
-	const byte_t *indata = dec_bits_current(stream);
-	const byte_t *tail = dec_bits_tail(stream);
-	int indata_bytes = (int)(tail - indata);
-	int read_bytes;
-
-	while ((read_bytes = m2d_next_start_code(indata, indata_bytes)) < 0) {
-		int d1 = indata[indata_bytes - 2];
-		int d0 = indata[indata_bytes - 1];
-		indata = dec_bits_load_next(stream, &indata_bytes);
-		if (indata == 0) {
-			return -1;
-		} else if (d1 == 0 && d0 == 0 && indata[0] == 1) {
-			read_bytes = 1;
-			break;
-		} else if (d0 == 0 && indata[0] == 0 && indata[1] == 1) {
-			read_bytes = 2;
-			break;
-		}
-	}
-	skip_bytes(stream, read_bytes);
 	return 0;
 }
 
@@ -1670,15 +1603,76 @@ __LIBM2DEC_API int m2d_decode_data(m2d_context *m2d)
 	return err;
 }
 
+__LIBM2DEC_API int m2d_read_header(m2d_context *m2d, const byte_t *data, size_t len)
+{
+	dec_bits *st;
+	m2d_mb_current *mb;
+	int err;
+	int code_type;
+
+	if (!m2d || !data || !m2d->stream) {
+		return -1;
+	}
+	st = m2d->stream;
+	err = dec_bits_set_data(st, data, len);
+	if (err < 0) {
+		return err;
+	}
+	if (setjmp(st->jmp) != 0) {
+		return 0;
+	}
+	mb = m2d->mb_current;
+	bool seq_header_detect = false;
+	do {
+		err = m2d_find_mpeg_data(st);
+		if (err < 0) {
+			return err;
+		}
+		code_type = get_bits(st, 8);
+		if ((code_type == 0xb3) || (seq_header_detect && (code_type == 0xb5))) {
+			err = m2d_dispatch_one_nal(m2d, code_type);
+			if (code_type == 0xb3) {
+				seq_header_detect = true;
+			} else {
+				break;
+			}
+		} else if (seq_header_detect) {
+			break;
+		}
+	} while (0 <= err);
+	return err;
+}
+
+__LIBM2DEC_API int m2d_get_info(m2d_context *m2d, m2d_info_t *info)
+{
+	int src_width, src_height;
+	if (!m2d || !info) {
+		return -1;
+	}
+	src_width = m2d->seq_header->horizontal_size_value;
+	src_height = m2d->seq_header->vertical_size_value;
+	info->src_width = (src_width + 15) & ~15;
+	info->src_height = (src_height + 15) & ~15;
+	info->disp_width = m2d->seq_header->display_width;
+	info->disp_height = m2d->seq_header->display_height;
+	info->frame_num = 3;
+	info->crop[0] = 0;
+	info->crop[1] = info->src_width - src_width;
+	info->crop[2] = 0;
+	info->crop[3] = info->src_height - src_height;
+	info->additional_size = 0;
+	return 0;
+}
+
 __LIBM2DEC_API int m2d_skip_frames(m2d_context *m2d, int frame_num)
 {
 	int err;
 	dec_bits *stream;
 
-	if ((m2d == 0) || (frame_num <= 0) || (m2d->stream->jmp == 0)) {
+	if ((m2d == 0) || (frame_num <= 0)) {
 		return -1;
 	}
-	if (setjmp(*m2d->stream->jmp) != 0) {
+	if (setjmp(m2d->stream->jmp) != 0) {
 		return 0;
 	}
 	stream = m2d->stream;
@@ -1784,3 +1778,16 @@ int test_parse_coef()
 
 #endif /* FAST_DECODE */
 #endif /* NDEBUG */
+
+static void * const m2d_func_[8] = {
+	(void *)(sizeof(m2d_context)),
+	(void *)m2d_init,
+	(void *)m2d_stream_pos,
+	(void *)m2d_read_header,
+	(void *)m2d_get_info,
+	(void *)m2d_set_frames,
+	(void *)m2d_decode_data,
+	(void *)m2d_get_decoded_frame
+};
+
+const m2d_func_table_t * const m2d_func = (const m2d_func_table_t *)m2d_func_;
