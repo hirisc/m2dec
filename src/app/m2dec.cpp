@@ -31,12 +31,17 @@
 #include <algorithm>
 #include <vector>
 #include <functional>
+#include "bitio.h"
+#include "mpeg2.h"
+#include "mpeg_demux.h"
+#include "txt2bin.h"
+#include "display.h"
+#ifdef ENABLE_AALIB
+#include "aadisp.h"
+#endif
 
-#ifndef __RENESAS_VERSION__
 
-using namespace std;
-
-#else
+#ifdef __RENESAS_VERSION__
 
 extern "C" {
 #pragma section FILES
@@ -72,20 +77,13 @@ int read(int fileno, char *buf, unsigned int count) {
 	infilepos += count;
 	return count;
 }
+int lseek() {return 0;}
 int write(int fileno, char *buf, unsigned int count) {return count;}
 char *getenv(const char *name) {return 0;}
+
 }
 
 #endif /* __RENESAS_VERSION__ */
-
-#include "bitio.h"
-#include "mpeg2.h"
-#include "mpeg_demux.h"
-#include "txt2bin.h"
-#include "display.h"
-#ifdef ENABLE_AALIB
-#include "aadisp.h"
-#endif
 
 const int FRAME_NUM = 6;
 const size_t INDATA_MAX = 1 * 1024 * 1024;
@@ -130,8 +128,8 @@ static int test_dec_bits()
 	err |= dec_bits_open(&stream0, 0);
 	err |= dec_bits_open(&stream1, 0);
 
-	dec_bits_set_callback(&stream0, error_report, &jb0, 0);
-	dec_bits_set_callback(&stream1, error_report, &jb1, 0);
+	dec_bits_set_callback(&stream0, error_report, &jb0);
+	dec_bits_set_callback(&stream1, error_report, &jb1);
 	dec_bits_set_data(&stream0, (byte_t *)&buf[0], BUF_SIZE);
 	dec_bits_set_data(&stream1, (byte_t *)&buf[0], BUF_SIZE);
 	int bit = 0;
@@ -282,9 +280,9 @@ static int test_all()
 #include <crtdbg.h>
 #endif
 
-class AllocateFrame : public binary_function<m2d_frame, size_t, void> {
+class AllocateFrame : public binary_function<m2d_frame_t, size_t, void> {
 public:
-	void operator()(m2d_frame& frm, size_t len) {
+	void operator()(m2d_frame_t& frm, size_t len) {
 		frm.luma = new uint8_t[len];
 		frm.chroma = new uint8_t[len / 2];
 	}
@@ -300,8 +298,8 @@ static int set_packet_mode(reread_t *re)
 	int err;
 
 	pes_demuxer_t *dmx = &re->dmx;
-	mpeg_demux_init(dmx, reread_file, re, 0);
-	dec_bits_set_callback(m2d->stream, reread_packet, 0, 0);
+	mpeg_demux_init(dmx, reread_file, re);
+	dec_bits_set_callback(m2d->stream, reread_packet, 0);
 	re->opt->set_demuxer_mode(true);
 	err = m2d_decode_data(m2d);
 	return err;
@@ -357,7 +355,7 @@ int mpeg_demux_request_set_data(pes_demuxer_t *dmx, const byte_t **indata_p, int
 	}
 }
 
-void allocate_frames(m2d_frame *frm, m2d_frame *frm_align, int frame_num, size_t luma_len)
+void allocate_frames(m2d_frame_t *frm, m2d_frame_t *frm_align, int frame_num, size_t luma_len)
 {
 #if 0
 	for_each(frames.begin(), frames.end(), bind2nd(AllocateFrame(), luma_len));
@@ -393,19 +391,19 @@ int main(int argc, char **argv)
 		return -1;
 	}
 	auto_ptr<m2d_context> m2d(new m2d_context);
-	vector<m2d_frame> frm(FRAME_NUM);
-	vector<m2d_frame> frm_align(FRAME_NUM);
+	vector<m2d_frame_t> frm(FRAME_NUM);
+	vector<m2d_frame_t> frm_align(FRAME_NUM);
 	allocate_frames(&frm[0], &frm_align[0], frm.size(), LUMA_LEN);
 
 	int err = 0;
-	err |= m2d_init(m2d.get(), FRAME_NUM, &frm_align[0]);
+	err |= m2d_init(m2d.get());
+	err |= m2d_set_frames(m2d.get(), FRAME_NUM, &frm_align[0]);
 
 	reread_t reread_data = {
 		m2d.get(),
 		&opt
 	};
-	jmp_buf jmp;
-	dec_bits_set_callback(m2d.get()->stream, reread_file, &reread_data, &jmp);
+	dec_bits_set_callback(m2d.get()->stream, reread_file, &reread_data);
 
 	int frame_num = opt.frame_num_;
 	for (int s = 0; s < 1; ++s) {
@@ -414,16 +412,15 @@ int main(int argc, char **argv)
 		}
 		m2d_skip_frames(m2d.get(), opt.skip_frames_);
 		for (int i = 0; i < frame_num; ++i) {
-			const m2d_frame *frm;
-			int width, height;
+			m2d_frame_t frm;
+
 			err = decode_one_frame(&reread_data);
 			int is_end = (err != 1);
 			if (i != 0) {
-				frm = m2d_get_decoded_frame(m2d.get(), &width, &height, is_end);
-				if (frm) {
-					opt.write_file(frm->luma, frm->chroma, width, height);
+				if (0 < m2d_get_decoded_frame(m2d.get(), &frm, is_end)) {
+					opt.write_file(frm.luma, frm.chroma, frm.width, frm.height);
 					if (err != 1) {
-						opt.write_file(frm->luma, frm->chroma, width, height); /* output delayed frame */
+						opt.write_file(frm.luma, frm.chroma, frm.width, frm.height); /* output delayed frame */
 					}
 				}
 			}
@@ -438,20 +435,20 @@ int main(int argc, char **argv)
 	}
 
 	if (opt.verbose_) {
-		int width, height;
-		m2d_get_decoded_frame(m2d.get(), &width, &height, 0);
+		m2d_frame_t frm;
+		m2d_get_decoded_frame(m2d.get(), &frm, 0);
 		printf(
 			"width, height: %dx%d\n"
 			"sizeof m2d: %d\n"
 			"sizeof m2d_mb_current: %d\n",
-			width, height,
+			frm.width, frm.height,
 			sizeof(m2d_context),
 			sizeof(m2d_mb_current));
 	}
+
 #ifdef _M_IX86
 	assert(_CrtCheckMemory());
 #endif
-
 	return err;
 }
 

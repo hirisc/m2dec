@@ -48,7 +48,7 @@ struct dec_bits_t {
 	const byte_t *buf_head_;
 	int (*error_func_)(void *);
 	void *error_arg_;
-	jmp_buf *jmp;
+	jmp_buf jmp;
 };
 
 typedef struct dec_bits_t dec_bits;
@@ -56,7 +56,7 @@ typedef struct dec_bits_t dec_bits;
 
 int dec_bits_open(dec_bits *ths, void (*loadbytes_func)(dec_bits *, int bytes));
 void dec_bits_close(dec_bits *ths);
-void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg, jmp_buf *jmp);
+void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg);
 
 int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len);
 cache_t show_bits(dec_bits *ths, int bit_len);

@@ -45,7 +45,7 @@ typedef SDL_Event UniEvent;
 
 #ifndef __RENESAS_VERSION__
 
-typedef map<int, const char *> Logmap;
+typedef std::map<int, const char *> Logmap;
 static Logmap LogTags;
 
 static UniMutex *LogMutex;
@@ -56,7 +56,7 @@ struct LogRecord {
 	LogRecord(unsigned long long t, int id, int m) : time(t), threadid(id), mark(m) {}
 };
 
-static vector<LogRecord> LogList;
+static std::vector<LogRecord> LogList;
 
 static void LogInit()
 {
@@ -104,7 +104,7 @@ static void RecordTime(int mark)
 
 #include <functional>
 
-class LogDumpEach : public binary_function<LogRecord, unsigned long long, void> {
+class LogDumpEach : public std::binary_function<LogRecord, unsigned long long, void> {
 public:
 	void operator() (LogRecord& rec, const unsigned long long& start_time) const {
 		printf("%lld, %s, %d\n", rec.time - start_time, LogTags.find(rec.threadid)->second, rec.mark);
@@ -116,7 +116,7 @@ static void LogDump()
 {
 #ifndef __RENESAS_VERSION__
 	unsigned long long start = LogList.front().time;
-	for_each(LogList.begin(), LogList.end(), bind2nd(LogDumpEach(), start));
+	std::for_each(LogList.begin(), LogList.end(), std::bind2nd(LogDumpEach(), start));
 #endif
 }
 

@@ -7,22 +7,20 @@
 #include <list>
 #include <map>
 #include "getopt.h"
+#include "md5.h"
 #include "bitio.h"
 #include "mpeg2.h"
 #include "mpeg_demux.h"
+#include "h264.h"
 #ifdef __GNUC__
 #include <stdint.h>
 #endif
 
-#ifndef __RENESAS_VERSION__
-using namespace std;
-#endif
 
 #include "unithread.h"
 
 struct Buffer {
-	uint8_t *data, *data2;
-	int width, height;
+	uint8_t *data;
 	int len;
 };
 
@@ -47,12 +45,6 @@ public:
 	~Queue() {
 		UniDestroyCond(cond_);
 		UniDestroyMutex(mutex_);
-	}
-	UniMutex *mutex() const {
-		return mutex_;
-	}
-	UniCond *cond() const {
-		return cond_;
 	}
 	bool full() const {
 		return next(head_) == tail_;
@@ -91,7 +83,7 @@ public:
 	}
 	T& getfilled() {
 		UniLockMutex(mutex_);
-		while (!terminated() && empty()) {
+		while (empty() && !terminated()) {
 			UniCondWait(cond_, mutex_);
 		}
 		int tail = tail_;
@@ -103,20 +95,20 @@ public:
 	}
 };
 
-typedef Queue<Buffer> QueueType;
+typedef Queue<Buffer> FileQueueType;
 
 class FileReader {
-	QueueType outqueue_;
-	list<char *> infiles_;
+	FileQueueType outqueue_;
+	std::list<char *> infiles_;
 public:
 	FILE *fd_;
 	int insize_;
-	FileReader(Buffer *src_p, int buf_num, FILE *fd, int insize, list<char *> &infiles)
-		: outqueue_(QueueType(src_p, buf_num)), infiles_(infiles), fd_(fd), insize_(insize) {}
-	QueueType& outqueue() {
+	FileReader(Buffer *src_p, int buf_num, FILE *fd, int insize, std::list<char *> &infiles)
+		: outqueue_(FileQueueType(src_p, buf_num)), infiles_(infiles), fd_(fd), insize_(insize) {}
+	FileQueueType& outqueue() {
 		return outqueue_;
 	}
-	list<char *> &infiles() {
+	std::list<char *> &infiles() {
 		return infiles_;
 	}
 
@@ -133,6 +125,7 @@ public:
 					fr->infiles().pop_front();
 					buf.len = fread(buf.data, 1, fr->insize_, fr->fd_);
 				} else {
+					fr->outqueue().setfilled(buf);
 					fr->outqueue().terminate();
 					fprintf(stderr, "File terminate.\n");
 					RecordTime(0);
@@ -145,153 +138,131 @@ public:
 	}
 };
 
-static int reread_file_ps(void *arg);
-
-class PesDemuxer {
-	QueueType outqueue_;
-	list<char *> infiles_;
-	pes_demuxer_t demux_;
-public:
-	FILE *fd_;
-	PesDemuxer(Buffer *src_p, int buf_num, FILE *fd, list<char *> &infiles)
-		: outqueue_(QueueType(src_p, buf_num)), infiles_(infiles), fd_(fd) {
-		//		mpeg_demux_init(&demux_, reread_file_ps, this, jmp_buf *jmp);
-	}
-	QueueType& outqueue() {
-		return outqueue_;
-	}
-	list<char *> &infiles() {
-		return infiles_;
-	}
-	pes_demuxer_t *demuxer() {
-		return &demux_;
-	}
-	static int run(void *data) {
-		RecordTime(1);
-		PesDemuxer *fr = (PesDemuxer *)data;
-		while (1) {
-			int read_size;
-			int ret;
-			Buffer& buf = fr->outqueue().emptybuf();
-//			int read_size = fread(buf.data, 1, fr->insize_, fr->fd_);
-			ret = 0;
-			if ((fread(&read_size, 1, 4, fr->fd_) == 4)
-			    && ((ret = fread(buf.data, 1, read_size, fr->fd_)) == read_size)) {
-				buf.len = read_size;
-			} else {
-#if 0
-				fclose(fr->fd_);
-				if (!fr->infiles().empty() && (fr->fd_ = fopen(fr->infiles().front(), "rb"))) {
-					fr->infiles().pop_front();
-					buf.len = fread(buf.data, 1, fr->insize_, fr->fd_);
-				} else {
-					fr->outqueue().terminate();
-					RecordTime(0);
-					return 0;
-				}
-#endif
-			}
-			fr->outqueue().setfilled(buf);
-		}
-		return -1;
-	}
+struct Frame {
+	uint8_t *data, *data2;
+	int width, height;
+	int crop_right, crop_bottom;
 };
 
-static int reread_file_ps(void *arg)
-{
-	PesDemuxer *module = (PesDemuxer *)arg;
-	Buffer& dst = module->outqueue().emptybuf();
-	dec_bits *stream = module->demuxer()->stream;
-	#if 0
-	if (src.len <= 0) {
-		return -1;
-	} else {
-		dec_bits_set_data(stream, src.data, src.len);
-		return 0;
-	}
-	#endif
-}
+typedef Queue<Frame> FrameQueueType;
 
 static int reread_file(void *arg);
 static int reread_packet(void *arg);
 
+enum {
+	MODE_MPEG2,
+	MODE_MPEG2PS,
+	MODE_H264
+};
+
 class M2Decoder {
-	m2d_frame *frame_;
-	uint8_t **frame_org;
-	QueueType& inqueue_;
-	QueueType outqueue_;
-	jmp_buf jmp_;
-	jmp_buf jmp2_;
-	m2d_context m2d_;
+	uint8_t **frame_org_;
+	uint8_t *second_frame_;
+	int frame_num_;
+	FileQueueType& inqueue_;
+	FrameQueueType outqueue_;
+	byte_t *context_;
+	const m2d_func_table_t *func_;
 	pes_demuxer_t demux_;
+	const byte_t *curr_data_;
+	int curr_data_len_;
 public:
-	M2Decoder(QueueType& inqueue, Buffer *dst, int dstnum, int bufnum,
-		int width, int height, int pes_mode)
-		: inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)) {
-		int len = ((width + 15) & ~15) * ((height + 15) & ~15);
-		frame_ = new m2d_frame[bufnum];
-		frame_org = new uint8_t *[bufnum];
-		for (int i = 0; i < bufnum; ++i) {
-			frame_org[i] = new uint8_t[((len * 3) >> 1) + 31];
-			frame_[i].luma = (uint8_t *)((((intptr_t)frame_org[i]) + 15) & ~15);
-			frame_[i].chroma = frame_[i].luma + len;
+	M2Decoder(FileQueueType& inqueue, Frame *dst, int dstnum, int codec_mode)
+		: inqueue_(inqueue), outqueue_(FrameQueueType(dst, dstnum)), context_(0), curr_data_(0) {
+		switch (codec_mode) {
+		case MODE_MPEG2:
+			/* FALLTHROUGH */
+		case MODE_MPEG2PS:
+			func_ = m2d_func;
+			break;
+		case MODE_H264:
+			func_ = h264d_func;
+			break;
 		}
-		m2d_init(&m2d_, bufnum, frame_);
-		if (pes_mode) {
-			mpeg_demux_init(&demux_, reread_file, this, &jmp_);
-			dec_bits_set_callback(m2d_.stream, reread_packet, this, &jmp2_);
+		context_ = new byte_t[func_->context_size];
+		func_->init(context_, -1);
+		memset(&demux_, 0, sizeof(demux_));
+		if (codec_mode == MODE_MPEG2PS) {
+			mpeg_demux_init(&demux_, reread_file, this);
+			dec_bits_set_callback(func_->stream_pos(context_), reread_packet, this);
+			reread_packet((void *)this);
 		} else {
-			memset(&demux_, 0, sizeof(demux_));
-			dec_bits_set_callback(m2d_.stream, reread_file, this, &jmp_);
+			dec_bits_set_callback(func_->stream_pos(context_), reread_file, this);
+			reread_file((void *)this);
 		}
+		func_->read_header(context_, curr_data_, curr_data_len_);
+		m2d_info_t info;
+		func_->get_info(context_, &info);
+		int len = ((info.src_width + 15) & ~15) * ((info.src_height + 15) & ~15);
+		int bufnum = info.frame_num + ((codec_mode == MODE_H264) ? 16 : 0);
+		frame_num_ = bufnum;
+		std::vector<m2d_frame_t> frame(bufnum);
+		frame_org_ = new uint8_t *[bufnum];
+		for (int i = 0; i < bufnum; ++i) {
+			frame_org_[i] = new uint8_t[((len * 3) >> 1) + 31];
+			frame[i].luma = (uint8_t *)((((intptr_t)frame_org_[i]) + 15) & ~15);
+			frame[i].chroma = frame[i].luma + len;
+		}
+		second_frame_ = new byte_t[info.additional_size];
+		func_->set_frames(context_, bufnum, &frame[0], second_frame_, info.additional_size);
 	}
 	~M2Decoder() {
-		for (int i = 0; i < outqueue_.size(); ++i) {
-			delete[] frame_org[i];
+		delete[] second_frame_;
+		for (int i = 0; i < frame_num_; ++i) {
+			delete[] frame_org_[i];
 		}
-		delete[] frame_org;
-		delete[] frame_;
+		delete[] frame_org_;
+		delete[] context_;
 	}
-	QueueType& inqueue() {
+	void memory_current(const byte_t *curr_data, int curr_data_len) {
+		curr_data_ = curr_data;
+		curr_data_len_ = curr_data_len;
+	}
+	FileQueueType& inqueue() {
 		return inqueue_;
 	}
-	QueueType& outqueue() {
+	FrameQueueType& outqueue() {
 		return outqueue_;
 	}
-	m2d_context *context() {
-		return &m2d_;
+	void *context() {
+		return context_;
+	}
+	const m2d_func_table_t *func() {
+		return func_;
 	}
 	dec_bits *stream() {
-		return m2d_.stream;
+		return func_->stream_pos(context_);
 	}
 	pes_demuxer_t *demuxer() {
 		return &demux_;
 	}
+	void post_dst(m2d_frame_t& frm) {
+		Frame& dst = outqueue().emptybuf();
+		dst.width = (frm.width + 15) & ~15;
+		dst.height = (frm.height + 15) & ~15;
+		dst.crop_right = frm.crop[0] + frm.crop[1];
+		dst.crop_bottom = frm.crop[2] + frm.crop[3];
+		dst.data = frm.luma + frm.crop[2] * frm.width + frm.crop[0];
+		dst.data2 = frm.chroma + ((frm.crop[2] * frm.width) >> 1) + frm.crop[0];
+		outqueue().setfilled(dst);
+	}
 	static int run(void *data) {
 		RecordTime(1);
 		M2Decoder *module = (M2Decoder *)data;
-		m2d_context *m2d = module->context();
-		int first = 1;
 		while (1) {
-			int width, height;
-			const m2d_frame *frm;
-			if (module->inqueue().terminated() && module->inqueue().empty()) {
-				module->outqueue().terminate();
-				RecordTime(0);
-				return 0;
+			m2d_frame_t frm;
+			while (module->func()->get_decoded_frame(module->context(), &frm, 0) <= 0) {
+				int err = module->func()->decode_picture(module->context());
+				if (err < 0) {
+					while (module->func()->get_decoded_frame(module->context(), &frm, 1)) {
+						module->post_dst(frm);
+					}
+					module->outqueue().terminate();
+					RecordTime(0);
+					return 0;
+				}
 			}
-			m2d_decode_data(m2d);
-			if (first) {
-				first = 0;
-				continue;
-			}
-			frm = m2d_get_decoded_frame(m2d, &width, &height, 0);
-			Buffer& dst = module->outqueue().emptybuf();
-			dst.width = (width + 15) & ~15;
-			dst.height = (height + 15) & ~15;
-			dst.data = frm->luma;
-			dst.data2 = frm->chroma;
-			module->outqueue().setfilled(dst);
+			module->post_dst(frm);
 		}
 		return -1;
 	}
@@ -301,11 +272,13 @@ static int reread_file(void *arg)
 {
 	M2Decoder *module = (M2Decoder *)arg;
 	Buffer& src = module->inqueue().getfilled();
-	dec_bits *stream = module->demuxer()->stream;
-	stream = stream ? stream : module->stream();
 	if (src.len <= 0) {
+		module->memory_current(0, 0);
 		return -1;
 	} else {
+		dec_bits *stream = module->demuxer()->stream;
+		stream = stream ? stream : module->stream();
+		module->memory_current(src.data, src.len);
 		dec_bits_set_data(stream, src.data, src.len);
 		return 0;
 	}
@@ -318,21 +291,22 @@ static int reread_packet(void *arg)
 	const byte_t *packet;
 	int packet_size;
 	packet = mpeg_demux_get_video(dmx, &packet_size);
+	module->memory_current(packet, packet_size);
 	if (packet) {
-		dec_bits_set_data(module->context()->stream, packet, (size_t)packet_size);
+		dec_bits_set_data(module->stream(), packet, (size_t)packet_size);
 		return 0;
 	} else {
 		return -1;
 	}
 }
 
-void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma,
+void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
 		   uint16_t *pitches, int width, int height)
 {
 	uint8_t *dst0 = dst[0];
 	for (int i = 0; i < height; ++i) {
 		memcpy(dst0, src_luma, width);
-		src_luma += width;
+		src_luma += src_stride;
 		dst0 += pitches[0];
 	}
 	width >>= 1;
@@ -344,7 +318,7 @@ void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_ch
 			dst1[j] = src_chroma[j * 2];
 			dst2[j] = src_chroma[j * 2 + 1];
 		}
-		src_chroma += width * 2;
+		src_chroma += src_stride;
 		dst1 += pitches[1];
 		dst2 += pitches[2];
 	}
@@ -354,12 +328,13 @@ const int MAX_WIDTH = 1920;
 const int MAX_HEIGHT = 1088;
 const int MAX_LEN = (MAX_WIDTH * MAX_HEIGHT * 3) >> 1;
 const int FILE_READ_SIZE = 65536 * 7;
-const int BUFNUM = 3;
+const int BUFNUM = 5;
 
 static void BlameUser() {
 	fprintf(stderr,
-		"Usage: srview [-s] [-r] [-t interval] [-o outfile] infile [infile ...]\n"
-		"\t-s : Program Stream (PS)\n"
+		"Usage: srview [-s] [-r] [-t interval] [-m outfile(MD5)] [-o outfile(Raw)] infile [infile ...]\n"
+		"\t-h : H.264 Elementary Data\n"
+		"\t-s : MPEG-2 Program Stream (PS)\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
 		"\t-t interval : specify interval of each frame in ms unit\n");
@@ -368,20 +343,26 @@ static void BlameUser() {
 
 struct Options {
 	int interval_;
-	list<char *> infile_list_;
-	FILE *infile_, *outfile_;
-	int pes_mode_;
+	std::list<char *> infile_list_;
+	FILE *infile_, *outfile_, *outfilemd5_;
+	int codec_mode_;
 	bool repeat_;
 	bool logdump_;
 
 	Options(int argc, char **argv)
-		: interval_(0), infile_(0), outfile_(0),
-		  pes_mode_(0), repeat_(false), logdump_(false) {
+		: interval_(0), infile_(0), outfile_(0), outfilemd5_(0),
+		  codec_mode_(MODE_MPEG2), repeat_(false), logdump_(false) {
 		int opt;
-		while ((opt = getopt(argc, argv, "lo:rst:")) != -1) {
+		while ((opt = getopt(argc, argv, "hlm:o:rst:")) != -1) {
 			switch (opt) {
+			case 'h':
+				codec_mode_ = MODE_H264;
+				break;
 			case 'l':
 				logdump_ = true;
+				break;
+			case 'm':
+				outfilemd5_ = fopen(optarg, "wb");
 				break;
 			case 'o':
 				outfile_ = fopen(optarg, "wb");
@@ -390,7 +371,7 @@ struct Options {
 				repeat_ = true;
 				break;
 			case 's':
-				pes_mode_ = 1;
+				codec_mode_ = MODE_MPEG2PS;
 				break;
 			case 't':
 				interval_ = strtoul(optarg, 0, 0);
@@ -450,6 +431,34 @@ static void waitevents(SDL_Overlay *yuv, SDL_Rect *rect,  int &suspended)
 	}
 }
 
+static void fwrites(void *fout, const byte_t *src, int size)
+{
+	fwrite(src, 1, size, (FILE *)fout);
+}
+
+static int file_write(const byte_t *luma, const byte_t *chroma, int src_stride, int width, int height, void *out, void (*Write)(void *out, const byte_t *src, int size))
+{
+	for (int y = 0; y < height; ++y) {
+		Write(out, luma, width);
+		luma += src_stride;
+	}
+	height >>= 1;
+	for (int y = 0; y < height; ++y) {
+		Write(out, chroma, width);
+		chroma += src_stride;
+	}
+	return ((width * height) * 3) >> 1;
+}
+
+static void bin2hex(const md5_byte_t *md5, char *hex)
+{
+	for (int i = 0; i < 16; ++i) {
+		sprintf(hex + i * 2, "%02xd", *md5++);
+	}
+	hex[32] = 0x0d;
+	hex[33] = 0x0a;
+}
+
 void run_loop(Options& opt) {
 	int width = 0;
 	int height = 0;
@@ -459,7 +468,7 @@ void run_loop(Options& opt) {
 		0, 0, width, height
 	};
 
-	LogTags.insert(pair<int, const char *> (UniThreadID(), "Main"));
+	LogTags.insert(std::pair<int, const char *> (UniThreadID(), "Main"));
 	RecordTime(1);
 
 	/* Run File Loader */
@@ -470,14 +479,14 @@ void run_loop(Options& opt) {
 	}
 	FileReader fr(src, BUFNUM, opt.infile_, FILE_READ_SIZE, opt.infile_list_);
 	UniThread *thr_file = UniCreateThread(FileReader::run, (void *)&fr);
-	LogTags.insert(pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
+	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
 
-	/* Run Mpeg-2 Decoder */
-	Buffer dst_align[BUFNUM];
-	M2Decoder m2dec(fr.outqueue(), dst_align, BUFNUM, BUFNUM + 2, MAX_WIDTH, MAX_HEIGHT, opt.pes_mode_);
+	/* Run Video Decoder */
+	Frame dst_align[BUFNUM];
+ 	M2Decoder m2dec(fr.outqueue(), dst_align, BUFNUM, opt.codec_mode_);
 	UniThread *thr_m2d = UniCreateThread(M2Decoder::run, (void *)&m2dec);
-	QueueType &outqueue = m2dec.outqueue();
-	LogTags.insert(pair<int, const char *> (UniGetThreadID(thr_m2d), "Mpeg2Dec"));
+	FrameQueueType &outqueue = m2dec.outqueue();
+	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
 
 	UniEvent ev;
 	while (UniPollEvent(&ev)) ;
@@ -487,10 +496,10 @@ void run_loop(Options& opt) {
 			if (outqueue.terminated() && outqueue.empty()) {
 				goto endloop;
 			}
-			Buffer& out = outqueue.getfilled();
-			if ((width != out.width) || (height != out.height)) {
-				width = out.width;
-				height = out.height;
+			Frame& out = outqueue.getfilled();
+			if ((width != (out.width - out.crop_right)) || (height != (out.height - out.crop_bottom))) {
+				width = out.width - out.crop_right;
+				height = out.height - out.crop_bottom;
 				rect.w = width;
 				rect.h = height;
 				fprintf(stderr, "size: %d x %d\n", width, height);
@@ -499,15 +508,23 @@ void run_loop(Options& opt) {
 					SDL_FreeYUVOverlay(yuv);
 				}
 				yuv = SDL_CreateYUVOverlay(width, height, SDL_IYUV_OVERLAY, surface);
-				fprintf(stderr, "stride: %d\n", yuv->pitches[0]);
 			}
 			SDL_LockYUVOverlay(yuv);
-			display_write(yuv->pixels, out.data, out.data2, yuv->pitches, yuv->w, yuv->h);
+			display_write(yuv->pixels, out.data, out.data2, out.width, yuv->pitches, yuv->w, yuv->h);
 			SDL_UnlockYUVOverlay(yuv);
-			int lumasize = width * height;
 			if (opt.outfile_) {
-				fwrite(out.data, 1, lumasize, opt.outfile_);
-				fwrite(out.data2, 1, lumasize >> 1, opt.outfile_);
+				file_write(out.data, out.data2, out.width, width, height, opt.outfile_, fwrites);
+			}
+			if (opt.outfilemd5_) {
+				md5_state_t md5;
+				md5_byte_t digest[16];
+				char hex[32 + 2];
+
+				md5_init(&md5);
+				file_write(out.data, out.data2, out.width, width, height, (void *)&md5, (void (*)(void *out, const byte_t *src, int size))md5_append);
+				md5_finish(&md5, digest);
+				bin2hex(digest, hex);
+				fwrite(hex, 1, sizeof(hex), opt.outfilemd5_);
 			}
 		} else {
 			UniDelay(100);
@@ -585,6 +602,9 @@ int main(int argc, char **argv)
 	}
 	if (opt.outfile_) {
 		fclose(opt.outfile_);
+	}
+	if (opt.outfilemd5_) {
+		fclose(opt.outfilemd5_);
 	}
 #endif /* ENABLE_DISPLAY */
 	return 0;

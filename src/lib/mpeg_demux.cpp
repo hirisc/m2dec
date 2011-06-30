@@ -114,14 +114,14 @@ static int video_element_packet(pes_demuxer_t *dmx)
 	return 1;
 }
 
-int mpeg_demux_init(pes_demuxer_t *dmx, int (*callback_func)(void *), void *arg, jmp_buf *jmp)
+int mpeg_demux_init(pes_demuxer_t *dmx, int (*callback_func)(void *), void *arg)
 {
 	if (dmx == 0) {
 		return -1;
 	}
 	memset((void *)dmx, 0, sizeof(*dmx));
 	dec_bits_open(dmx->stream = &dmx->stream_i, 0);
-	dec_bits_set_callback(dmx->stream, callback_func, arg, jmp);
+	dec_bits_set_callback(dmx->stream, callback_func, arg);
 	return 0;
 }
 
@@ -131,6 +131,9 @@ const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p)
 	int err;
 
 	stream = dmx->stream;
+	if (setjmp(stream->jmp) != 0) {
+		return 0;
+	}
 	if (0 < dmx->shortage) {
 		const byte_t *current;
 		int rest, min;

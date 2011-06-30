@@ -164,6 +164,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\lib\m2d.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\lib\motioncomp.cpp"
 				>
 			</File>
@@ -199,6 +203,10 @@
 			</File>
 			<File
 				RelativePath="..\..\src\lib\idct.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\lib\m2d.h"
 				>
 			</File>
 			<File

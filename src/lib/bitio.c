@@ -116,18 +116,16 @@ static int endofbuffer_check(dec_bits *ths, int data_remains)
 	if (ths->error_func_) {
 		cache_t cache_ = ths->cache_;
 		int cache_len_ = ths->cache_len_;
-		if (ths->error_func_(ths->error_arg_) < 0) {
-			if (!data_remains && ths->jmp) {
-				longjmp(*ths->jmp, 1);
-			}
-			return -1;
+		if (!data_remains && ths->error_func_(ths->error_arg_) < 0) {
+			longjmp(ths->jmp, 1);
+			/* NOTREACHED */
 		}
 		ths->cache_ = cache_;
 		ths->cache_len_ = cache_len_;
 		return 0;
-	} else if (!data_remains && ths->jmp) {
-		longjmp(*ths->jmp, 1);
-		return 0;
+	} else if (!data_remains) {
+		longjmp(ths->jmp, 1);
+		/* NOTREACHED */
 	} else {
 		return -1;
 	}
@@ -274,17 +272,15 @@ int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len)
  */
 int dec_bits_open(dec_bits *ths, void (*loadbytes_func)(dec_bits *, int bytes))
 {
-	memset(ths, 0, sizeof(*ths));
 	ths->load_bytes = loadbytes_func ? loadbytes_func : load_bytes;
 	return 0;
 }
 
-void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg, jmp_buf *jmp)
+void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg)
 {
-	assert(error_func || error_arg || jmp);
+	assert(error_func || error_arg);
 	ths->error_func_ = error_func ? error_func : ths->error_func_;
 	ths->error_arg_ = error_arg ? error_arg : ths->error_arg_;
-	ths->jmp = jmp ? jmp : ths->jmp;
 }
 
 /**Decoder bitstream finalizer.
