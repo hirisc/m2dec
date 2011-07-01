@@ -540,10 +540,13 @@ endloop:
 
 	UniWaitThread(thr_m2d, &status);
 	RecordTime(0);
+	if (yuv) {
+		SDL_FreeYUVOverlay(yuv);
+		yuv = 0;
+	}
 	for (int i = 0; i < BUFNUM; ++i) {
 		delete[] src[i].data;
 	}
-	fseek(opt.infile_, 0, SEEK_SET);
 }
 
 Uint32 DispTimer(Uint32 interval, void *param)
@@ -578,7 +581,7 @@ int main(int argc, char **argv)
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
 #endif
-	if (SDL_Init(SDL_INIT_EVERYTHING) < 0) {
+	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO) < 0) {
 		return -1;
 	}
 	atexit(SDL_Quit);
@@ -588,6 +591,9 @@ int main(int argc, char **argv)
 	if (opt.logdump_) {
 		atexit(LogDump);
 	}
+#ifdef _M_IX86
+	atexit((void (*)(void))_CrtCheckMemory);
+#endif
 	SDL_EventState(SDL_ACTIVEEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
 	if (opt.interval_) {
