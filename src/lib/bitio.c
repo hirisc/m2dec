@@ -116,7 +116,7 @@ static int endofbuffer_check(dec_bits *ths, int data_remains)
 	if (ths->error_func_) {
 		cache_t cache_ = ths->cache_;
 		int cache_len_ = ths->cache_len_;
-		if (!data_remains && ths->error_func_(ths->error_arg_) < 0) {
+		if (ths->error_func_(ths->error_arg_) < 0) {
 			longjmp(ths->jmp, 1);
 			/* NOTREACHED */
 		}
