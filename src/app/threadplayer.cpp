@@ -580,6 +580,7 @@ int main(int argc, char **argv)
 	_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_WNDW);
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
+	atexit((void (*)(void))_CrtCheckMemory);
 #endif
 	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO) < 0) {
 		return -1;
@@ -591,9 +592,6 @@ int main(int argc, char **argv)
 	if (opt.logdump_) {
 		atexit(LogDump);
 	}
-#ifdef _M_IX86
-	atexit((void (*)(void))_CrtCheckMemory);
-#endif
 	SDL_EventState(SDL_ACTIVEEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
 	if (opt.interval_) {
