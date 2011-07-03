@@ -8739,12 +8739,14 @@ struct cbp_cabac {
 	}
 };
 
-static inline uint32_t unary_cabac(h264d_cabac_t *cb, dec_bits *st, int idx, int limit)
+static inline uint32_t unary_cabac(h264d_cabac_t *cb, dec_bits *st, int limit)
 {
 	int x = 0;
+	int idx = 62;
 	do {
 		if (cabac_decode_decision(cb, st, idx)) {
 			x = x + 1;
+			idx = 63;
 		} else {
 			break;
 		}
@@ -8758,7 +8760,7 @@ struct qp_delta_cabac {
 		h264d_cabac_t *cb = mb->cabac;
 		int qp_delta = cabac_decode_decision(cb, st, ctx_idx);
 		if (qp_delta) {
-			qp_delta = unary_cabac(cb, st, ctx_idx, 52) + 1;
+			qp_delta = unary_cabac(cb, st, 52) + 1;
 			qp_delta = (((qp_delta & 1) ? qp_delta : -qp_delta) + 1) >> 1;
 		}
 		mb->prev_qp_delta = qp_delta;
