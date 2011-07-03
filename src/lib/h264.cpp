@@ -7329,7 +7329,7 @@ static inline void deblock_luma_horiz_str1_3(int a, int b2, const int8_t *tc0, u
 			deblock_luma_horiz<Strength1_3h<1>, 1, 4>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3h<1>());
 		}
 		luma += stride * 4;
-		str >>= 2;
+		str = (unsigned)str >> 2;
 	}
 }
 
@@ -7345,7 +7345,7 @@ static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0,
 			deblock_luma_horiz<Strength1_3h<2>, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride, Strength1_3h<2>());
 		}
 		chroma += stride * 2;
-		str >>= 2;
+		str = (unsigned)str >> 2;
 	}
 }
 
@@ -7450,7 +7450,7 @@ static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, ui
 			deblock_luma_vert<Strength1_3v<1>, 4>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3v<1>());
 		}
 		luma += 4;
-		str >>= 2;
+		str = (unsigned)str >> 2;
 	}
 }
 
