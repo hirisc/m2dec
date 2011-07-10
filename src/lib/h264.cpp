@@ -2488,7 +2488,6 @@ static inline void luma_intra4x4_pred(h264d_mb_current *mb, int avail_intra, con
 	intra4x4pred_func[*pr++](luma + offset[13], stride, 3);
 	intra4x4pred_func[*pr++](luma + offset[14], stride, 7);
 	intra4x4pred_func[*pr](luma + offset[15], stride, 3);
-	mb->prev_qp_delta = 0;
 	mb->left4x4coef &= 0xffff0000;
 	*mb->top4x4coef &= 0xffff0000;
 }
@@ -2523,6 +2522,8 @@ static inline int mb_intra4x4(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 		if (qp_delta) {
 			set_qp(mb, mb->qp + qp_delta);
 		}
+	} else {
+		mb->prev_qp_delta = 0;
 	}
 	if (cbp & 15) {
 		luma_intra4x4_with_residual(mb, st, cbp, avail, avail_intra, pred4x4, stride, ResidualBlock);
