@@ -155,10 +155,43 @@ enum {
 	MODE_H264
 };
 
-class M2Decoder {
+struct Frames {
 	uint8_t **frame_org_;
 	uint8_t *second_frame_;
 	int frame_num_;
+	int len_;
+	int second_len_;
+	Frames(int frame_num, int len, int second_len)
+		: second_frame_(0), frame_num_(frame_num), len_(len), second_len_(second_len) {
+		frame_org_ = new uint8_t *[frame_num];
+		for (int i = 0; i < frame_num; ++i) {
+			frame_org_[i] = new uint8_t[len];
+		}
+		if (second_len) {
+			second_frame_ = new uint8_t[second_len];
+		}
+	}
+	~Frames() {
+		if (frame_org_) {
+			for (int i = 0; i < frame_num_; ++i) {
+				delete[] frame_org_[i];
+			}
+			delete[] frame_org_;
+		}
+		if (second_frame_) {
+			delete[] second_frame_;
+		}
+	}
+	bool sufficient(int bufnum, int luma_len, int additional_size) {
+		return (bufnum <= frame_num_)
+			&& ((((luma_len * 3) >> 1) + 31) <= len_)
+			&& (additional_size <= second_len_);
+	}
+};
+
+class M2Decoder {
+	Frames *frames_;
+	int codec_mode_;
 	FileQueueType& inqueue_;
 	FrameQueueType outqueue_;
 	byte_t *context_;
@@ -168,7 +201,7 @@ class M2Decoder {
 	int curr_data_len_;
 public:
 	M2Decoder(FileQueueType& inqueue, Frame *dst, int dstnum, int codec_mode)
-		: inqueue_(inqueue), outqueue_(FrameQueueType(dst, dstnum)), context_(0), curr_data_(0) {
+		: frames_(0), codec_mode_(codec_mode), inqueue_(inqueue), outqueue_(FrameQueueType(dst, dstnum)), context_(0), curr_data_(0) {
 		switch (codec_mode) {
 		case MODE_MPEG2:
 			/* FALLTHROUGH */
@@ -180,7 +213,7 @@ public:
 			break;
 		}
 		context_ = new byte_t[func_->context_size];
-		func_->init(context_, -1);
+		func_->init(context_, -1, header_callback, this);
 		memset(&demux_, 0, sizeof(demux_));
 		if (codec_mode == MODE_MPEG2PS) {
 			mpeg_demux_init(&demux_, reread_file, this);
@@ -190,29 +223,37 @@ public:
 			dec_bits_set_callback(func_->stream_pos(context_), reread_file, this);
 			reread_file((void *)this);
 		}
-		func_->read_header(context_, curr_data_, curr_data_len_);
-		m2d_info_t info;
-		func_->get_info(context_, &info);
-		int len = ((info.src_width + 15) & ~15) * ((info.src_height + 15) & ~15);
-		int bufnum = info.frame_num + ((codec_mode == MODE_H264) ? 16 : 0);
-		frame_num_ = bufnum;
-		std::vector<m2d_frame_t> frame(bufnum);
-		frame_org_ = new uint8_t *[bufnum];
-		for (int i = 0; i < bufnum; ++i) {
-			frame_org_[i] = new uint8_t[((len * 3) >> 1) + 31];
-			frame[i].luma = (uint8_t *)((((intptr_t)frame_org_[i]) + 15) & ~15);
-			frame[i].chroma = frame[i].luma + len;
-		}
-		second_frame_ = new byte_t[info.additional_size];
-		func_->set_frames(context_, bufnum, &frame[0], second_frame_, info.additional_size);
 	}
 	~M2Decoder() {
-		delete[] second_frame_;
-		for (int i = 0; i < frame_num_; ++i) {
-			delete[] frame_org_[i];
+		if (frames_) {
+			delete frames_;
 		}
-		delete[] frame_org_;
 		delete[] context_;
+	}
+	static int header_callback(void *arg, int id) {
+		((M2Decoder *)arg)->SetFrames(id);
+		return 0;
+	}
+	void SetFrames(int id) {
+		m2d_info_t info;
+		func_->get_info(context_, &info);
+		int luma_len = ((info.src_width + 15) & ~15) * ((info.src_height + 15) & ~15);
+		int bufnum = info.frame_num + ((codec_mode_ == MODE_H264) ? 16 : 0);
+		if (frames_) {
+			fprintf(stderr, "%d x %d x %d\n", info.src_width, info.src_height, info.frame_num);
+			if (frames_->sufficient(bufnum, luma_len, info.additional_size)) {
+				return;
+			}
+			delete frames_;
+		}
+		frames_ = new Frames(bufnum, ((luma_len * 3) >> 1) + 31, info.additional_size);
+		std::vector<m2d_frame_t> frame(bufnum);
+		for (int i = 0; i < bufnum; ++i) {
+			intptr_t org = (intptr_t)frames_->frame_org_[i];
+			frame[i].luma = (uint8_t *)((org + 15) & ~15);
+			frame[i].chroma = frame[i].luma + luma_len;
+		}
+		func_->set_frames(context_, bufnum, &frame[0], frames_->second_frame_, info.additional_size);
 	}
 	void memory_current(const byte_t *curr_data, int curr_data_len) {
 		curr_data_ = curr_data;
@@ -502,7 +543,6 @@ void run_loop(Options& opt) {
 				height = out.height - out.crop_bottom;
 				rect.w = width;
 				rect.h = height;
-				fprintf(stderr, "size: %d x %d\n", width, height);
 				surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);
 				if (yuv) {
 					SDL_FreeYUVOverlay(yuv);

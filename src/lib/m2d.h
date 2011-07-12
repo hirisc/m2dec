@@ -54,9 +54,8 @@ typedef struct {
 
 typedef struct {
 	size_t context_size;
-	int (*init)(void *, int);
+	int (*init)(void *, int, int (*)(void *, int), void *);
 	dec_bits *(*stream_pos)(void *);
-	int (*read_header)(void *, const byte_t *, size_t);
 	int (*get_info)(void *, m2d_info_t *);
 	int (*set_frames)(void *, int, m2d_frame_t *, uint8_t *, int);
 	int (*decode_picture)(void *);

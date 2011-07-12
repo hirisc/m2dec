@@ -10,6 +10,8 @@
 
 #ifdef __RENESAS_VERSION__
 
+#include <machine.h>
+
 extern "C" {
 #pragma section FILES
 
@@ -25,7 +27,7 @@ void abort() {while (1);}
 static int infilepos;
 
 static void exit(int err) {
-	while (err);
+	while (err) sleep();
 }
 
 int fseek(FILE *fp, long offset, int whence) {
@@ -269,7 +271,7 @@ int main(int argc, char *argv[])
 	if (data.len_ <= 0) {
 		return -1;
 	}
-	err = h264d_init(h2d, data.dpb_);
+	err = h264d_init(h2d, data.dpb_, 0, 0);
 	if (err) {
 		return err;
 	}
@@ -286,7 +288,6 @@ int main(int argc, char *argv[])
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
 	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? 16 : data.dpb_);
-//	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? (25 - info.frame_num) : data.dpb_);
 	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
 	uint8_t *second_frame = new uint8_t[info.additional_size];
 	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame, info.additional_size);

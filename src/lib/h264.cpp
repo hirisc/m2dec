@@ -419,7 +419,9 @@ void h264d_load_bytes_skip03(dec_bits *ths, int read_bytes)
 
 static inline void dpb_init(h264d_dpb_t *dpb, int maxsize);
 
-int h264d_init(h264d_context *h2d, int dpb_max)
+static int header_dummyfunc(void *arg, int seq_id) {return 0;}
+
+int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *, int), void *arg)
 {
 	if (!h2d) {
 		return -1;
@@ -429,6 +431,8 @@ int h264d_init(h264d_context *h2d, int dpb_max)
 	h2d->slice_header = &h2d->slice_header_i;
 	h2d->mb_current.frame = &h2d->mb_current.frame_i;
 	h2d->mb_current.cabac = &h2d->mb_current.cabac_i;
+	h2d->header_callback = header_callback ? header_callback : header_dummyfunc;
+	h2d->header_callback_arg = arg;
 	h2d->mb_current.num_ref_idx_lx_active_minus1[0] = &h2d->slice_header->num_ref_idx_lx_active_minus1[0];
 	h2d->mb_current.num_ref_idx_lx_active_minus1[1] = &h2d->slice_header->num_ref_idx_lx_active_minus1[1];
 	dpb_init(&h2d->mb_current.frame->dpb, dpb_max);
@@ -807,6 +811,10 @@ static int h2d_dispatch_one_nal(h264d_context *h2d, int code_type)
 		break;
 	case SPS_NAL:
 		err = read_seq_parameter_set(h2d->sps_i, st);
+		if (0 <= err) {
+			set_mb_size(&h2d->mb_current, h2d->sps_i[err].pic_width, h2d->sps_i[err].pic_height);
+			h2d->header_callback(h2d->header_callback_arg, err);
+		}
 		break;
 	case PPS_NAL:
 		err = read_pic_parameter_set(h2d->pps_i, st);
@@ -1113,9 +1121,9 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	} else {
 		hdr->marking.idr = 0;
 	}
-	set_mb_size(&h2d->mb_current, sps->pic_width, sps->pic_height);
+	set_mb_size(mb, sps->pic_width, sps->pic_height);
 	set_dpb_max(&mb->frame->dpb, sps);
-	set_mb_pos(&h2d->mb_current, hdr->first_mb_in_slice);
+	set_mb_pos(mb, hdr->first_mb_in_slice);
 	if (sps->poc_type == 0) {
 		uint32_t lsb = get_bits(st, sps->log2_max_poc_lsb);
 		if (!hdr->field_pic_flag && pps->pic_order_present_flag) {
@@ -9443,16 +9451,14 @@ static inline int macroblock_layer_cabac(h264d_mb_current *mb, int slice_type, d
 	avail = get_availability(mb);
 	mb->type = mbtype = adjust_mb_type(mb_type_cabac[slice_type](mb, st, avail, 3, slice_type), slice_type);
 	mbc = &mb_decode_cabac[mbtype];
-	if (!mbc->mb_dec) {return 0;}
 	mbc->mb_dec(mb, mbc, st, avail);
 	return 0;
 }
 
-static void * const h264d_func_[8] = {
+static void * const h264d_func_[7] = {
 	(void *)(sizeof(h264d_context)),
 	(void *)h264d_init,
 	(void *)h264d_stream_pos,
-	(void *)h264d_read_header,
 	(void *)h264d_get_info,
 	(void *)h264d_set_frames,
 	(void *)h264d_decode_picture,

@@ -213,7 +213,9 @@ static void m2d_frames_set_mb_pos(m2d_mb_current *mb, int mb_x, int mb_y, int wi
 
 void m2d_mb_set_default(m2d_mb_current *mb);
 
-__LIBM2DEC_API int m2d_init(m2d_context *m2d)
+static int header_dummyfunc(void *arg, int seq_id) {return 0;}
+
+__LIBM2DEC_API int m2d_init(m2d_context *m2d, int dummy, int (*header_callback)(void *arg, int seq_id), void *arg)
 {
 	memset(m2d, 0, sizeof(*m2d));
 	m2d->seq_header = &m2d->seq_header_i;
@@ -223,6 +225,8 @@ __LIBM2DEC_API int m2d_init(m2d_context *m2d)
 	m2d_mb_set_default(m2d->mb_current);
 	m2d->gop_header = &m2d->gop_header_i;
 	m2d->mb_current->frames = &m2d->frames_i;
+	m2d->header_callback = header_callback ? header_callback : header_dummyfunc;
+	m2d->header_callback_arg = arg;
 	VC_CHECK;
 	dec_bits_open(m2d->stream, 0);
 	return 0;
@@ -330,6 +334,7 @@ static int m2d_read_seq_header(m2d_context *m2d)
 	header->load_non_intra_quantizer_matrix = bit = get_onebit(stream);
 	m2d_set_qmat(m2d->mb_current, stream, m2d->qmat[1], bit, 1);
 	m2d_mb_set_frame_size(m2d->mb_current, header->horizontal_size_value, header->vertical_size_value);
+	m2d->header_callback(m2d->header_callback_arg, 0);
 	return err;
 }
 
@@ -363,6 +368,7 @@ static int m2d_read_sequence_extension(m2d_context *m2d)
 
 	m2d_mb_set_frame_size(m2d->mb_current, header->horizontal_size_value, header->vertical_size_value);
 	m2d_mb_set_mpeg2_mode(m2d->mb_current, 1);
+	m2d->header_callback(m2d->header_callback_arg, 0);
 	return err;
 }
 
@@ -1779,11 +1785,10 @@ int test_parse_coef()
 #endif /* FAST_DECODE */
 #endif /* NDEBUG */
 
-static void * const m2d_func_[8] = {
+static void * const m2d_func_[7] = {
 	(void *)(sizeof(m2d_context)),
 	(void *)m2d_init,
 	(void *)m2d_stream_pos,
-	(void *)m2d_read_header,
 	(void *)m2d_get_info,
 	(void *)m2d_set_frames,
 	(void *)m2d_decode_data,
