@@ -6704,6 +6704,13 @@ static int mb_inter8x8b_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_p_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
+static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type);
+
+static int mb_bdirect16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return skip_mbs(mb, 1, B_SLICE); /* FIXME */
+}
+
 static const mb_code mb_decode[] = {
 	{mb_intra4x4_cavlc, 0, 0},
 	{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0},
@@ -6730,13 +6737,13 @@ static const mb_code mb_decode[] = {
 	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_horiz, 0x2f},
 	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_dc, 0x2f},
 	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x2f},
-	{mb_intrapcm, 0, 0}, /* FIXME: IPCM */
+	{mb_intrapcm, 0, 0},
 	{mb_inter16x16_cavlc, 0, 1},
 	{mb_inter16x8_cavlc, 0, 3},
 	{mb_inter8x16_cavlc, 0, 3},
-	{mb_inter8x8p_cavlc, 0, 0},
-	{mb_inter8x8p_cavlc, 0, 0},
-	{0, 0, 0}, /* B_Direct_16x16 */
+	{mb_inter8x8p_cavlc, 0, 0xf},
+	{mb_inter8x8p_cavlc, 0, 0xf},
+	{mb_bdirect16x16, 0, 0},
 	{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
 	{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
 	{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
@@ -9409,7 +9416,7 @@ static const mb_code mb_decode_cabac[] = {
 	{mb_inter8x16_cabac, 0, 3},
 	{mb_inter8x8p_cabac, 0, 0xf},
 	{mb_inter8x8p_cabac, 0, 0xf},
-	{0, 0, 0}, /* B_Direct_16x16 */
+	{mb_bdirect16x16, 0, 0},
 	{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
 	{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
 	{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
