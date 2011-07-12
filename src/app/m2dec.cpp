@@ -396,7 +396,7 @@ int main(int argc, char **argv)
 	allocate_frames(&frm[0], &frm_align[0], frm.size(), LUMA_LEN);
 
 	int err = 0;
-	err |= m2d_init(m2d.get());
+	err |= m2d_init(m2d.get(), 0, 0, 0);
 	err |= m2d_set_frames(m2d.get(), FRAME_NUM, &frm_align[0]);
 
 	reread_t reread_data = {

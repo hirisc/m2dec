@@ -191,6 +191,8 @@ typedef struct {
 	dec_bits *stream;
 	m2d_mb_current *mb_current;
 	m2d_gop_header *gop_header;
+	int (*header_callback)(void *arg, int seq_id);
+	void *header_callback_arg;
 	int out_state;
 	m2d_seq_header seq_header_i;
 	m2d_gop_header gop_header_i;
@@ -208,7 +210,7 @@ enum {
 	M2D_ERR_UNKNOWN = -4
 };
 
-__LIBM2DEC_API int m2d_init(m2d_context *m2d);
+__LIBM2DEC_API int m2d_init(m2d_context *m2d, int dummy, int (*header_callback)(void *arg, int seq_id), void *arg);
 __LIBM2DEC_API int m2d_read_header(m2d_context *m2d, const byte_t *data, size_t len);
 __LIBM2DEC_API int m2d_get_info(m2d_context *m2d, m2d_info_t *info);
 __LIBM2DEC_API int m2d_set_frames(m2d_context *m2d, int num_mem, m2d_frame_t *mem);
