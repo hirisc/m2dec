@@ -24,7 +24,7 @@ int main(int argc, char *argv[]);
 
 void PowerON_Reset(void)
 {
-	char args[] = "main -i sp.m2v";
+	char args[] = "h264dec dummy.264";
 	char *arg[MAX_ARG];
 	int arg_num;
 

@@ -10,10 +10,8 @@
 "C:\cygwin\home\minegisi\programs\m2dec\src\app\optparser.h" 
 "C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" 
 [WORKSPACE_FILE_STATES]
-"C:\cygwin\home\minegisi\programs\m2dec\src\app\optparser.h" -4 -23 1017 388 1 1 
-"C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" -221 6 1017 388 0 0 
+"C:\cygwin\home\minegisi\programs\m2dec\src\app\optparser.h" 0 0 1017 388 0 1 
+"C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" -4 -23 820 445 1 0 
 [LOADED_PROJECTS]
 "h264dec" 
-"libm2dec" 
-"m2dec" 
 [END]
