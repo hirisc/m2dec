@@ -123,7 +123,12 @@ static inline int32_t me_golomb(dec_bits *stream, const int8_t *me_lut)
 
 static inline int32_t te_golomb(dec_bits *stream, int range)
 {
-	return (range == 1) ? (get_onebit_inline(stream) ^ 1) : ue_golomb(stream);
+	if (range == 1) {
+		return get_onebit_inline(stream) ^ 1;
+	} else {
+		int32_t ue = ue_golomb(stream);
+		return (ue <= range) ? ue : range;
+	}
 }
 
 static uint32_t get_32bits(dec_bits *stream)
