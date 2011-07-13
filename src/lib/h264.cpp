@@ -7911,23 +7911,17 @@ static inline int ref_list_order(h264d_ref_frame_t& lhs, h264d_ref_frame_t& rhs,
 	}
 }
 
-static inline void swap_ref(h264d_ref_frame_t *left, h264d_ref_frame_t *right) {
-	h264d_ref_frame_t tmp = *left;
-	*left = *right;
-	*right = tmp;
-}
-
 template <typename F0, typename F1>
 static inline void sort_ref_list(h264d_ref_frame_t *refs, int num_elem, int curr_num, int max_frame_num,
 				 F0 GetNum,
 				 F1 Order2nd)
 {
 	for (h264d_ref_frame_t *ref_end = refs + num_elem; refs != ref_end; --ref_end) {
-		int swapped = 0;
+		bool swapped = false;
 		for (h264d_ref_frame_t *p = refs;  p != ref_end - 1; ++p) {
 			if (ref_list_order(*p, *(p + 1), curr_num, max_frame_num, GetNum, Order2nd)) {
-				swap_ref(p, p + 1);
-				swapped = 1;
+				std::swap(*p, *(p + 1));
+				swapped = true;
 			}
 		}
 		if (!swapped) {
@@ -7959,7 +7953,7 @@ static inline void ref_pic_init_b(h264d_slice_header *hdr, int num_ref_frames)
 	sort_ref_list(ref0, num_ref_frames, hdr->poc, 0, get_poc(), poc_order_b_l0());
 	sort_ref_list(ref1, num_ref_frames, hdr->poc, 0, get_poc(), poc_order_b_l1());
 	if ((1 < num_ref_frames) && is_same_list(ref0, ref1, num_ref_frames)) {
-		swap_ref(&ref1[0], &ref1[1]);
+		std::swap(ref1[0], ref1[1]);
 	}
 	for (int i = num_ref_frames; i < 16; ++i) {
 		ref0[i].in_use = NOT_IN_USE;
