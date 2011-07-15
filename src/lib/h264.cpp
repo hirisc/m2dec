@@ -7130,22 +7130,14 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 
 static int more_rbsp_data(dec_bits *st)
 {
-	uint32_t dt;
 	int bits;
 
 	bits = not_aligned_bits(st);
 	if (bits == 0) {
 		bits = 8;
 	}
-	dt = show_bits(st, bits);
-	if (dt == (1U << (bits - 1))) {
-		/* FIXME */
-		dt = show_bits(st, bits + 24);
-		if (1 < (dt & 0xffffff)) {
-			return 1;
-		} else {
-			return 0;
-		}
+	if (show_bits(st, bits) == (1U << (bits - 1))) {
+		return (1 < (show_bits(st, bits + 24) & 0xffffff));
 	} else {
 		return 1;
 	}
