@@ -116,13 +116,14 @@ static int endofbuffer_check(dec_bits *ths, int data_remains)
 	if (ths->error_func_) {
 		cache_t cache_ = ths->cache_;
 		int cache_len_ = ths->cache_len_;
-		if (ths->error_func_(ths->error_arg_) < 0) {
+		int ret = ths->error_func_(ths->error_arg_);
+		if ((ret < 0) && (cache_len_ == 0)) {
 			longjmp(ths->jmp, 1);
 			/* NOTREACHED */
 		}
 		ths->cache_ = cache_;
 		ths->cache_len_ = cache_len_;
-		return 0;
+		return ret;
 	} else if (!data_remains) {
 		longjmp(ths->jmp, 1);
 		/* NOTREACHED */
@@ -289,4 +290,3 @@ void dec_bits_close(dec_bits *ths) {
 	assert(ths);
 	memset(ths, 0, sizeof(*ths));
 }
-
