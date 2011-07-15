@@ -9441,14 +9441,14 @@ static inline int macroblock_layer_cabac(h264d_mb_current *mb, int slice_type, d
 	return 0;
 }
 
-static void * const h264d_func_[7] = {
-	(void *)(sizeof(h264d_context)),
-	(void *)h264d_init,
-	(void *)h264d_stream_pos,
-	(void *)h264d_get_info,
-	(void *)h264d_set_frames,
-	(void *)h264d_decode_picture,
-	(void *)h264d_get_decoded_frame
+static const m2d_func_table_t h264d_func_ = {
+	sizeof(h264d_context),
+	(int (*)(void *, int, int (*)(void *, int), void *))h264d_init,
+	(dec_bits *(*)(void *))h264d_stream_pos,
+	(int (*)(void *, m2d_info_t *))h264d_get_info,
+	(int (*)(void *, int, m2d_frame_t *, uint8_t *, int))h264d_set_frames,
+	(int (*)(void *))h264d_decode_picture,
+	(int (*)(void *, m2d_frame_t *, int))h264d_get_decoded_frame
 };
 
-const m2d_func_table_t * const h264d_func = (const m2d_func_table_t *)h264d_func_;
+const m2d_func_table_t * const h264d_func = &h264d_func_;
