@@ -1785,14 +1785,14 @@ int test_parse_coef()
 #endif /* FAST_DECODE */
 #endif /* NDEBUG */
 
-static void * const m2d_func_[7] = {
-	(void *)(sizeof(m2d_context)),
-	(void *)m2d_init,
-	(void *)m2d_stream_pos,
-	(void *)m2d_get_info,
-	(void *)m2d_set_frames,
-	(void *)m2d_decode_data,
-	(void *)m2d_get_decoded_frame
+const m2d_func_table_t m2d_func_ = {
+	sizeof(m2d_context),
+	(int (*)(void *, int, int (*)(void *, int), void *))m2d_init,
+	(dec_bits *(*)(void *))m2d_stream_pos,
+	(int (*)(void *, m2d_info_t *))m2d_get_info,
+	(int (*)(void *, int, m2d_frame_t *, uint8_t *, int))m2d_set_frames,
+	(int (*)(void *))m2d_decode_data,
+	(int (*)(void *, m2d_frame_t *, int))m2d_get_decoded_frame
 };
 
-const m2d_func_table_t * const m2d_func = (const m2d_func_table_t *)m2d_func_;
+const m2d_func_table_t * const m2d_func = &m2d_func_;
