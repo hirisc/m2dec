@@ -659,7 +659,7 @@ int h264d_decode_picture(h264d_context *h2d)
 	}
 	stream = h2d->stream;
 	if (setjmp(stream->jmp) != 0) {
-		return -1;
+		return -2;
 	}
 	h2d->slice_header->first_mb_in_slice = UINT_MAX;
 	err = 0;
@@ -669,6 +669,7 @@ int h264d_decode_picture(h264d_context *h2d)
 			code_type = get_bits(stream, 8);
 			err = h2d_dispatch_one_nal(h2d, code_type);
 		} else {
+			err = -2;
 			break;
 		}
 		VC_CHECK;

@@ -115,10 +115,11 @@ struct input_data_t {
 	int dpb_;
 	bool raw_;
 	bool md5_;
-	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), dpb_(-1), raw_(false), md5_(false) {
+	bool force_exec_;
+	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), dpb_(-1), raw_(false), md5_(false), force_exec_(false) {
 		FILE *fi;
 		int opt;
-		while ((opt = getopt(argc, argv, "bd:oO")) != -1) {
+		while ((opt = getopt(argc, argv, "xbd:oO")) != -1) {
 			switch (opt) {
 			case 'b':
 				dpb_ = 1;
@@ -135,6 +136,9 @@ struct input_data_t {
 				break;
 			case 'o':
 				raw_ = true;
+				break;
+			case 'x':
+				force_exec_ = true;
 				break;
 			default:
 				BlameUser();
@@ -234,6 +238,7 @@ struct input_data_t {
 			"\t\t-d <dpb_size>: Specify number of DPB frames -1, 1..16 (default: -1(auto))\n"
 			"\t\t-o: RAW output\n"
 			"\t\t-O: MD5 output\n"
+			"\t\t-x: Mask SIGABRT on error."
 			);
 		exit(-1);
 	}
@@ -253,6 +258,14 @@ static int reread_file(void *var)
 
 #ifdef _M_IX86
 #include <crtdbg.h>
+#elif defined(__linux__)
+#include <pthread.h>
+#include <signal.h>
+static void trap(int no)
+{
+	fprintf(stderr, "trap %d\n", no);
+	exit(0);
+}
 #endif
 
 int main(int argc, char *argv[])
@@ -271,6 +284,14 @@ int main(int argc, char *argv[])
 	if (data.len_ <= 0) {
 		return -1;
 	}
+#ifdef __linux__
+	if (data.force_exec_) {
+		struct sigaction sa;
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = trap;
+		sigaction(SIGABRT, &sa, 0);
+	}
+#endif
 	err = h264d_init(h2d, data.dpb_, 0, 0);
 	if (err) {
 		return err;
@@ -319,6 +340,6 @@ int main(int argc, char *argv[])
 #ifdef _M_IX86
 	assert(_CrtCheckMemory());
 #endif
-	return err;
+	return (data.force_exec_) ? 0 : ((err == -2) ? 0 : err);
 }
 
