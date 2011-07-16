@@ -290,6 +290,7 @@ int main(int argc, char *argv[])
 		memset(&sa, 0, sizeof(sa));
 		sa.sa_handler = trap;
 		sigaction(SIGABRT, &sa, 0);
+		sigaction(SIGSEGV, &sa, 0);
 	}
 #endif
 	err = h264d_init(h2d, data.dpb_, 0, 0);
