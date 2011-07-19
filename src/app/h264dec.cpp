@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <vector>
+#include <algorithm>
 #include "getopt.h"
 #include "bitio.h"
 #include "h264.h"
@@ -62,29 +64,33 @@ char *getenv(const char *name) {return 0;}
 
 #endif /* __RENESAS_VERSION__ */
 
-static int alloc_frames(m2d_frame_t **mem, int width, int height, int num_mem)
-{
-	m2d_frame_t *m;
-	int luma_len = ((width + 15) & ~15) * ((height + 15) & ~15) + 15;
-
-	if (luma_len <= 0) {
-		return -1;
+struct Frames {
+	typedef std::vector<m2d_frame_t> frame_t;
+	frame_t frame;
+	Frames(int width, int height, int num_mem) : frame(num_mem) {
+		int luma_len = ((width + 15) & ~15) * ((height + 15) & ~15) + 15;
+		if (num_mem <= 0 || luma_len <= 0) {
+			return;
+		}
+		for (int i = 0; i < num_mem; ++i) {
+			frame[i].luma = new uint8_t[luma_len];
+			frame[i].chroma = new uint8_t[luma_len >> 1];
+		}
 	}
-	*mem = m = new m2d_frame_t[num_mem];
-	for (int i = 0; i < num_mem; ++i) {
-		m[i].luma = new uint8_t[luma_len];
-		m[i].chroma = new uint8_t[luma_len >> 1];
+	~Frames() {
+		if (!frame.empty()) {
+			for_each(frame.begin(), frame.end(), Delete());
+			frame.clear();
+		}
 	}
-	return 0;
-}
-
-static void free_frames(m2d_frame_t *mem, int num_mem)
-{
-	for (int i = 0; i < num_mem; ++i) {
-		delete[] mem[i].luma;
-		delete[] mem[i].chroma;
-	}
-}
+private:
+	struct Delete {
+		void operator()(m2d_frame_t& frm) {
+			delete[] frm.luma;
+			delete[] frm.chroma;
+		}
+	};
+};
 
 static bool outfilename(char *infilename, char *outfilename, size_t size)
 {
@@ -271,7 +277,6 @@ static void trap(int no)
 int main(int argc, char *argv[])
 {
 	h264d_context *h2d;
-	m2d_frame_t *mem;
 	int err;
 
 #ifdef _M_IX86
@@ -282,6 +287,7 @@ int main(int argc, char *argv[])
 	h2d = new h264d_context;
 	input_data_t data(argc, argv, (void *)h2d);
 	if (data.len_ <= 0) {
+		delete h2d;
 		return -1;
 	}
 #ifdef __linux__
@@ -310,9 +316,9 @@ int main(int argc, char *argv[])
 		"Context Size: %ld\n",
 		data.len_, info.src_width, info.src_height, info.frame_num, sizeof(h264d_context));
 	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? 16 : data.dpb_);
-	alloc_frames(&mem, info.src_width, info.src_height, info.frame_num);
-	uint8_t *second_frame = new uint8_t[info.additional_size];
-	err = h264d_set_frames(h2d, info.frame_num, mem, second_frame, info.additional_size);
+	Frames frm(info.src_width, info.src_height, info.frame_num);
+	std::vector<uint8_t> second_frame(info.additional_size);
+	err = h264d_set_frames(h2d, info.frame_num, &frm.frame[0], &second_frame[0], info.additional_size);
 	if (err) {
 		return err;
 	}
@@ -333,9 +339,6 @@ int main(int argc, char *argv[])
 	while (h264d_get_decoded_frame(h2d, &frame, 1)) {
 		data.writeframe(&frame);
 	}
-	delete[] second_frame;
-	free_frames(mem, info.frame_num);
-	delete[] mem;
 	delete h2d;
 
 #ifdef _M_IX86
