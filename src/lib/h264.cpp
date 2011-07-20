@@ -1559,8 +1559,7 @@ static inline void coeff_writeback(int *coeff, int total_coeff, const int8_t *ru
 }
 
 struct residual_block_cavlc {
-	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask)
-	{
+	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int level[16];
 		int8_t run[16];
 		int val;
@@ -1771,7 +1770,7 @@ static uint32_t sum_left(uint8_t *src, int stride)
 }
 
 struct intra4x4pred_mode_cavlc {
-	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb) {
+	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb) const {
 		int pred = MIN(a, b);
 		if (!get_onebit_inline(st)) {
 			int rem = get_bits(st, 3);
@@ -2552,7 +2551,7 @@ static inline int mb_intra4x4(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 }
 
 struct intra_chroma_pred_mode_cavlc {
-	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		uint32_t pred_mode = ue_golomb(st);
 		pred_mode = pred_mode <= 3 ? pred_mode : 0;
 		mb->chroma_pred_mode = pred_mode;
@@ -2561,19 +2560,19 @@ struct intra_chroma_pred_mode_cavlc {
 };
 
 struct cbp_intra_cavlc {
-	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		return me_golomb(st, me_golomb_lut[0]);
 	}
 };
 
 struct cbp_inter_cavlc {
-	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		return me_golomb(st, me_golomb_lut[1]);
 	}
 };
 
 struct qp_delta_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		int delta = se_golomb(st);
 		return (delta < -26) ? -26 : ((25 < delta) ? 25 : delta);
 	}
@@ -2776,7 +2775,7 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 }
 
 struct AddSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) {
+	uint32_t operator()(uint32_t x, uint32_t y) const {
 		uint32_t msk;
 		msk = ((x & y) + (((x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
 		msk = (msk << 1) - (msk >> 7);
@@ -2785,7 +2784,7 @@ struct AddSaturate {
 };
 
 struct SubSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) {
+	uint32_t operator()(uint32_t x, uint32_t y) const {
 		uint32_t msk;
 		msk = ((~x & y) + (((~x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
 		msk = (msk << 1) - (msk >> 7);
@@ -3977,7 +3976,7 @@ static inline void inter_pred_luma_filter22_vert(const uint8_t *src, uint8_t *ds
 }
 
 struct PPred12 {
-	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) {
+	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) const {
 		int t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 512) >> 10;
 		int c = (c2 + 16) >> 5;
 		return (CLIP255I(t) + CLIP255I(c) + 1) >> 1;
@@ -3985,14 +3984,14 @@ struct PPred12 {
 };
 
 struct PPred22 {
-	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) {
+	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) const {
 		int t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 512) >> 10;
 		return CLIP255C(t);
 	}
 };
 
 struct PPred32 {
-	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) {
+	int operator()(int c0, int c1, int c2, int c3, int c4, int c5) const {
 		int t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 512) >> 10;
 		int c = (c3 + 16) >> 5;
 		return (CLIP255I(t) + CLIP255I(c) + 1) >> 1;
@@ -6220,7 +6219,7 @@ static void sub_mb4x4_mv(h264d_mb_current *mb, dec_bits *st, int avail, int blk_
 }
 
 struct mvd_xy_cavlc {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int16_t mv[], const int16_t mva[], const int16_t mvb[]) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int16_t mv[], const int16_t mva[], const int16_t mvb[]) const {
 	       mv[0] = se_golomb(st);
 	       mv[1] = se_golomb(st);
 	}
@@ -6270,7 +6269,7 @@ static void (* const sub_mb_b_cavlc[13])(h264d_mb_current *mb, dec_bits *st, int
 };
 
 struct sub_mbs_p_cavlc {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) const {
 		for (int i = 0; i < 4; ++i) {
 			sub_mb_p_cavlc[sub_mb_type[i]](mb, st, avail, i, curr_blk, lx);
 		}
@@ -6278,7 +6277,7 @@ struct sub_mbs_p_cavlc {
 };
 
 struct sub_mbs_b_cavlc {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) const {
 		for (int i = 0; i < 4; ++i) {
 			sub_mb_b_cavlc[sub_mb_type[i]](mb, st, avail, i, curr_blk, lx);
 		}
@@ -6370,13 +6369,13 @@ static void (* const sub_mb_dec_b[13])(h264d_mb_current *mb, int blk_idx, prev8x
 };
 
 struct sub_mbs_dec_p {
-	void operator()(h264d_mb_current *mb, const int8_t sub_mb_type[], int blk_idx, prev8x8_t curr_blk[]) {
+	void operator()(h264d_mb_current *mb, const int8_t sub_mb_type[], int blk_idx, prev8x8_t curr_blk[]) const {
 		sub_mb_dec_p[sub_mb_type[blk_idx]](mb, blk_idx, curr_blk);
 	}
 };
 
 struct sub_mbs_dec_b {
-	void operator()(h264d_mb_current *mb, const int8_t sub_mb_type[], int blk_idx, prev8x8_t curr_blk[]) {
+	void operator()(h264d_mb_current *mb, const int8_t sub_mb_type[], int blk_idx, prev8x8_t curr_blk[]) const {
 		sub_mb_dec_b[sub_mb_type[blk_idx]](mb, blk_idx, curr_blk);
 	}
 };
@@ -6634,7 +6633,7 @@ static inline void fill_direct8x8_mv(prev8x8_t *pblk, int blk_idx, const int8_t 
 }
 
 struct sub_mb_type_b_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) const {
 		int b_direct_cnt = 0;
 		h264d_vector_t mv[2];
 		int8_t ref_idx[2];
@@ -6656,14 +6655,14 @@ struct sub_mb_type_b_cavlc {
 
 
 struct ref_idx16x16_cavlc {
-	 int operator()(h264d_mb_current *mb, dec_bits *st, int lx, int avail) {
+	 int operator()(h264d_mb_current *mb, dec_bits *st, int lx, int avail) const {
 		int t = *(mb->num_ref_idx_lx_active_minus1[lx]);
 		return t ? te_golomb(st, t) : 0;
 	}
 };
 
 struct ref_idx16x8_cavlc {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) const {
 		int8_t * const *num = mb->num_ref_idx_lx_active_minus1;
 		for (int lx = 0; lx < 2; ++lx) {
 			int t = *(num[0]);
@@ -6677,7 +6676,7 @@ struct ref_idx16x8_cavlc {
 };
 
 struct ref_idx8x8_cavlc {
-	void operator()(h264d_mb_current *mb, dec_bits *st, const int8_t *sub_mb_type, prev8x8_t *pblk, int avail, int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, const int8_t *sub_mb_type, prev8x8_t *pblk, int avail, int lx) const {
 		int t = (mb->type != MB_P8x8REF0) ? *(mb->num_ref_idx_lx_active_minus1[lx]) : 0;
 		int dir = 1 << lx;
 		const int8_t *sub_mb_ref_map = mb->sub_mb_ref_map;
@@ -6900,7 +6899,7 @@ static inline void fill_bskip_col(h264d_col_mb_t *col_mb, const int8_t *ref_idx,
 
 template <int SIZE>
 struct direct_mv_pred_col_ref4x4_ref0 {
-	void operator()(h264d_mb_current *mb, const h264d_vector_t *mvcol, const int8_t *ref_idx, h264d_vector_t *mv, int xoffset, int yoffset) {
+	void operator()(h264d_mb_current *mb, const h264d_vector_t *mvcol, const int8_t *ref_idx, h264d_vector_t *mv, int xoffset, int yoffset) const {
 		for (int i = 0; i < 64 / (SIZE * SIZE); ++i) {
 			int xofs = xoffset + (i & 1) * 4;
 			int yofs = yoffset + (i & 2) * 2;
@@ -6919,7 +6918,7 @@ struct direct_mv_pred_col_ref4x4_ref0 {
 
 template <int LX, int SIZE>
 struct direct_mv_pred_col_ref4x4_refx {
-	void operator()(h264d_mb_current *mb, const h264d_vector_t *mvcol, const int8_t *ref_idx, h264d_vector_t *mv, int xoffset, int yoffset) {
+	void operator()(h264d_mb_current *mb, const h264d_vector_t *mvcol, const int8_t *ref_idx, h264d_vector_t *mv, int xoffset, int yoffset) const {
 
 		for (int i = 0; i < 64 / (SIZE * SIZE); ++i) {
 			int xofs = xoffset + (i & 1) * 4;
@@ -7240,7 +7239,7 @@ static inline int SQUARE(int x) {
 
 template<int N>
 struct Strength4h {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) const {
 		int q2 = dst[0];
 		int p2 = dst[5 * N];
 		int aq = SQUARE(q0 - q2);
@@ -7271,7 +7270,7 @@ static inline int CLIP3(int x, int c) {
 
 template<int N>
 struct Strength1_3h {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) const {
 		int q2 = dst[0 * N];
 		int p2 = dst[5 * N];
 		int aq_smaller = SQUARE(q2 - q0) < b2;
@@ -7366,7 +7365,7 @@ static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0,
 
 template <int N>
 struct Strength4v {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) const {
 		int q2 = dst[0];
 		int p2 = dst[stride * 5];
 		int aq = SQUARE(q0 - q2);
@@ -7393,7 +7392,7 @@ struct Strength4v {
 
 template <int N>
 struct Strength1_3v {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) const {
 		int q2 = dst[0];
 		int p2 = dst[stride * 5];
 		int aq_smaller = SQUARE(q2 - q0) < b2;
@@ -7838,7 +7837,7 @@ static inline void insert_dpb(h264d_dpb_t *dpb, int poc, int frame_idx, int is_i
 }
 
 struct frame_num_order_p {
-	int operator()(int l, int r, int frame_num, int max_frame_num) {
+	int operator()(int l, int r, int frame_num, int max_frame_num) const {
 		l = (frame_num < l) ? l - max_frame_num : l;
 		r = (frame_num < r) ? r - max_frame_num : r;
 		return l < r;
@@ -7846,7 +7845,7 @@ struct frame_num_order_p {
 };
 
 struct poc_order_b_l0 {
-	int operator()(int l, int r, int curr_poc, int nan) {
+	int operator()(int l, int r, int curr_poc, int nan) const {
 		if (l < curr_poc) {
 			return (r < curr_poc) ? (l < r) : 0;
 		} else {
@@ -7856,7 +7855,7 @@ struct poc_order_b_l0 {
 };
 
 struct poc_order_b_l1 {
-	int operator()(int l, int r, int curr_poc, int nan) {
+	int operator()(int l, int r, int curr_poc, int nan) const {
 		if (l < curr_poc) {
 			return (r < curr_poc) ? (l < r) : 1;
 		} else {
@@ -7866,13 +7865,13 @@ struct poc_order_b_l1 {
 };
 
 struct get_frame_num {
-	int operator()(h264d_ref_frame_t&ref) {
+	int operator()(h264d_ref_frame_t&ref) const {
 		return ref.num;
 	}
 };
 
 struct get_poc {
-	int operator()(h264d_ref_frame_t&ref) {
+	int operator()(h264d_ref_frame_t&ref) const {
 		return ref.poc;
 	}
 };
@@ -8689,8 +8688,7 @@ static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type)
 }
 
 struct intra4x4pred_mode_cabac {
-	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb)
-	{
+	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb) const {
 		int pred = MIN(a, b);
 		if (!cabac_decode_decision(cb, st, 68)) {
 			int rem;
@@ -8704,7 +8702,7 @@ struct intra4x4pred_mode_cabac {
 };
 
 struct intra_chroma_pred_mode_cabac {
-	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		int ctx_idx = 64 + ((avail & 2) && (mb->top4x4inter->type < MB_IPCM) && mb->top4x4inter->chroma_pred_mode) + ((avail & 1) && (mb->left4x4inter->type < MB_IPCM) && mb->left4x4inter->chroma_pred_mode);
 		int pred_mode = cabac_decode_decision(cb, st, ctx_idx);
@@ -8719,7 +8717,7 @@ struct intra_chroma_pred_mode_cabac {
 };
 
 struct cbp_cabac {
-	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	uint32_t operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		int cbp;
 		int inc;
 		h264d_cabac_t *cb = mb->cabac;
@@ -8762,7 +8760,7 @@ static inline uint32_t unary_cabac(h264d_cabac_t *cb, dec_bits *st, int limit)
 }
 
 struct qp_delta_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int avail) const {
 		int ctx_idx = 60 + (mb->prev_qp_delta != 0);
 		h264d_cabac_t *cb = mb->cabac;
 		int qp_delta = cabac_decode_decision(cb, st, ctx_idx);
@@ -9068,8 +9066,7 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 }
 
 struct residual_block_cabac {
-	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask)
-	{
+	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int coeff_map[8 * 8];
 		h264d_cabac_t *cb = mb->cabac;
 		if (cat != 5) {
@@ -9106,7 +9103,7 @@ static int mb_intra16x16_acdc_cabac(h264d_mb_current *mb, const mb_code *mbc, de
 } 
 
 struct sub_mb_type_p_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		for (int i = 0; i < 4; ++i) {
 			int t;
@@ -9147,7 +9144,7 @@ static inline int sub_mb_type_b_one_cabac(h264d_cabac_t *cb, dec_bits *st)
 }
 
 struct sub_mb_type_b_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		int b_direct_cnt = 0;
 		h264d_vector_t mv[2];
@@ -9205,7 +9202,7 @@ static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *c
 }
 
 struct mvd_xy_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int16_t mv[], const int16_t mva[], const int16_t mvb[]) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int16_t mv[], const int16_t mva[], const int16_t mvb[]) const {
 		h264d_cabac_t *cb = mb->cabac;
 		mv[0] = mvd_cabac(mb, st, cb, 40, mva[0], mvb[0]);
 		mv[1] = mvd_cabac(mb, st, cb, 47, mva[1], mvb[1]);
@@ -9256,7 +9253,7 @@ static void (* const sub_mb_b_cabac[13])(h264d_mb_current *mb, dec_bits *st, int
 };
 
 struct sub_mbs_p_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) const {
 		for (int i = 0; i < 4; ++i) {
 			sub_mb_p_cabac[sub_mb_type[i]](mb, st, avail, i, curr_blk, lx);
 		}
@@ -9264,7 +9261,7 @@ struct sub_mbs_p_cabac {
 };
 
 struct sub_mbs_b_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int avail, int8_t sub_mb_type[], prev8x8_t curr_blk[], int lx) const {
 		for (int i = 0; i < 4; ++i) {
 			sub_mb_b_cabac[sub_mb_type[i]](mb, st, avail, i, curr_blk, lx);
 		}
@@ -9282,7 +9279,7 @@ static inline int ref_idx_cabac_sub(dec_bits *st, h264d_cabac_t *cb, int inc)
 }
 
 struct ref_idx16x16_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int lx, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int lx, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		if (*mb->num_ref_idx_lx_active_minus1[lx]) {
 			int inc = ((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[0][lx])) + ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[0][lx])) * 2;
@@ -9294,7 +9291,7 @@ struct ref_idx16x16_cabac {
 };
 
 struct ref_idx16x8_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		int8_t * const *num = mb->num_ref_idx_lx_active_minus1;
 		for (int lx = 0; lx < 2; ++lx) {
@@ -9317,7 +9314,7 @@ struct ref_idx16x8_cabac {
 };
 
 struct ref_idx8x16_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, int8_t *ref_idx, uint32_t blk_map, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
 		int8_t * const *num = mb->num_ref_idx_lx_active_minus1;
 		for (int lx = 0; lx < 2; ++lx) {
@@ -9340,7 +9337,7 @@ struct ref_idx8x16_cabac {
 };
 
 struct ref_idx8x8_cabac {
-	void operator()(h264d_mb_current *mb, dec_bits *st, const int8_t *sub_mb_type, prev8x8_t *pblk, int avail, int lx) {
+	void operator()(h264d_mb_current *mb, dec_bits *st, const int8_t *sub_mb_type, prev8x8_t *pblk, int avail, int lx) const {
 		int t = (mb->type != MB_P8x8REF0) ? *(mb->num_ref_idx_lx_active_minus1[lx]) : 0;
 		int dir = 1 << lx;
 		h264d_cabac_t *cb = mb->cabac;
