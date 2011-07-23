@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <vector>
 #include <algorithm>
+#include <functional>
 #include "getopt.h"
 #include "bitio.h"
 #include "h264.h"
@@ -28,7 +29,7 @@ char OutputFile[MAX_MD5SIZE];
 void abort() {while (1);}
 static int infilepos;
 
-static void exit(int err) {
+void exit(int err) {
 	while (err) sleep();
 }
 
@@ -65,27 +66,30 @@ char *getenv(const char *name) {return 0;}
 #endif /* __RENESAS_VERSION__ */
 
 struct Frames {
-	typedef std::vector<m2d_frame_t> frame_t;
-	frame_t frame;
+	std::vector<m2d_frame_t> frame;
 	Frames(int width, int height, int num_mem) : frame(num_mem) {
 		int luma_len = ((width + 15) & ~15) * ((height + 15) & ~15) + 15;
 		if (num_mem <= 0 || luma_len <= 0) {
 			return;
 		}
-		for (int i = 0; i < num_mem; ++i) {
-			frame[i].luma = new uint8_t[luma_len];
-			frame[i].chroma = new uint8_t[luma_len >> 1];
-		}
+		std::for_each(frame.begin(), frame.end(), std::bind2nd(Create(), luma_len));
 	}
 	~Frames() {
-		if (!frame.empty()) {
-			for_each(frame.begin(), frame.end(), Delete());
-			frame.clear();
+		if (frame.empty()) {
+			return;
 		}
+		std::for_each(frame.begin(), frame.end(), Delete());
+		frame.clear();
 	}
 private:
+	struct Create : std::binary_function<m2d_frame_t, int, void> {
+		void operator()(m2d_frame_t& frm, int luma_len) const {
+			frm.luma = new uint8_t[luma_len];
+			frm.chroma = new uint8_t[luma_len >> 1];
+		}
+	};
 	struct Delete {
-		void operator()(m2d_frame_t& frm) {
+		void operator()(m2d_frame_t& frm) const {
 			delete[] frm.luma;
 			delete[] frm.chroma;
 		}
@@ -125,7 +129,7 @@ struct input_data_t {
 	input_data_t(int argc, char *argv[], void *v) : pos_(0), var_(v), fo_(0), dpb_(-1), raw_(false), md5_(false), force_exec_(false) {
 		FILE *fi;
 		int opt;
-		while ((opt = getopt(argc, argv, "xbd:oO")) != -1) {
+		while ((opt = getopt(argc, argv, "bd:oOx")) != -1) {
 			switch (opt) {
 			case 'b':
 				dpb_ = 1;
@@ -246,7 +250,7 @@ struct input_data_t {
 			"\t\t-O: MD5 output\n"
 			"\t\t-x: Mask SIGABRT on error."
 			);
-		exit(-1);
+		exit(1);
 	}
 };
 
