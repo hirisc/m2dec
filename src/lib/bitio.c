@@ -290,3 +290,9 @@ void dec_bits_close(dec_bits *ths) {
 	assert(ths);
 	memset(ths, 0, sizeof(*ths));
 }
+
+void dec_bits_tell_error(dec_bits *ths)
+{
+	longjmp(ths->jmp, 1);
+	/* NOTREACHED */
+}
