@@ -70,6 +70,7 @@ void skip_bytes(dec_bits *ths, int byte_len);
 const byte_t *dec_bits_current(dec_bits *ths);
 const byte_t *dec_bits_tail(dec_bits *ths);
 const byte_t *dec_bits_load_next(dec_bits *ths, int *data_size);
+void dec_bits_tell_error(dec_bits *ths);
 
 void dec_bits_dump(dec_bits *ths);
 

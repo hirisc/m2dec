@@ -41,8 +41,7 @@ int m2d_dec_vld_unary(dec_bits *stream, const vlc_t *vld_tab, int bitlen)
 		int rest_len;
 		if (len == 0) {
 			/* invalid code */
-			assert(0);
-			return -1;
+			dec_bits_tell_error(stream);
 		}
 		skip_bits(stream, bitlen);
 		rest_len = -len;

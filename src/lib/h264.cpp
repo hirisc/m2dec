@@ -6609,8 +6609,64 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	return residual_chroma(mb, cbp, st, avail, ResidualBlock);
 }
 
+static void b_skip_mb(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_t *mv);
+
+static inline void b_skip_pred(h264d_mb_current *mb)
+{
+	h264d_vector_t mv[16 * 2];
+	int8_t ref_idx[2];
+
+	b_skip_mb(mb, ref_idx, mv);
+	mb->left4x4pred = 0x22222222;
+	*mb->top4x4pred = 0x22222222;
+	for (int i = 0; i < 2; ++i) {
+		mb->lefttop_ref[i] = mb->top4x4inter->ref[1][i];
+		mb->lefttop_mv[i].vector = mb->top4x4inter->mov[3].mv[i].vector;
+		mb->top4x4inter->ref[i][0] = ref_idx[0];
+		mb->top4x4inter->ref[i][1] = ref_idx[1];
+		mb->left4x4inter->ref[i][0] = ref_idx[0];
+		mb->left4x4inter->ref[i][1] = ref_idx[1];
+	}
+	memset(mb->top4x4inter->mov, 0, sizeof(mb->top4x4inter->mov));
+	memset(mb->left4x4inter->mov, 0, sizeof(mb->left4x4inter->mov));
+	for (int i = 0; i < 4; ++i) {
+		for (int lx = 0; lx < 2; ++lx) {
+			mb->top4x4inter->mov[i].mv[lx].vector = mv[(12 + i) * 2 + lx].vector;
+			mb->left4x4inter->mov[i].mv[lx].vector = mv[i * 4 + 3 * 2 + lx].vector;
+		}
+	}
+	mb->type = MB_BSKIP;
+	mb->left4x4inter->type = mb->type;
+	mb->top4x4inter->type = mb->type;
+}
+
+template <typename F0, typename F1, typename F2>
+static int mb_bdirect16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
+			   F0 CodedBlockPattern,
+			   F1 QpDelta,
+			   F2 ResidualBlock)
+{
+	uint32_t cbp;
+	b_skip_pred(mb);
+	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
+	if (cbp) {
+		residual_luma_inter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+//		str_vert = residual_luma_inter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+//		str_horiz = expand_coef_str(transposition(str_vert));
+//		str_vert = expand_coef_str(str_vert);
+	} else {
+		mb->prev_qp_delta = 0;
+		mb->left4x4coef = 0;
+		*mb->top4x4coef = 0;
+//		str_vert = 0;
+//		str_horiz = 0;
+	}
+
+	return residual_chroma(mb, cbp, st, avail, ResidualBlock);
+}
+
 struct sub_mb_type_p_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) const {
 		for (int i = 0; i < 4; ++i) {
 			READ_UE_RANGE(sub_mb_type[i], st, 3);
 		}
@@ -6710,14 +6766,12 @@ static int mb_inter8x8p_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 
 static int mb_inter8x8b_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_p_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_b_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
-static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type);
-
-static int mb_bdirect16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+static int mb_bdirect16x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return skip_mbs(mb, 1, B_SLICE); /* FIXME */
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static const mb_code mb_decode[] = {
@@ -6752,7 +6806,7 @@ static const mb_code mb_decode[] = {
 	{mb_inter8x16_cavlc, 0, 3},
 	{mb_inter8x8p_cavlc, 0, 0xf},
 	{mb_inter8x8p_cavlc, 0, 0xf},
-	{mb_bdirect16x16, 0, 0},
+	{mb_bdirect16x16_cavlc, 0, 0},
 	{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
 	{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
 	{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
@@ -9385,6 +9439,11 @@ static int mb_inter8x8b_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_b_cabac(), ref_idx8x8_cabac(), sub_mbs_b_cabac(), sub_mbs_dec_b(), cbp_cabac(), qp_delta_cabac(), residual_block_cabac());
 }
 
+static int mb_bdirect16x16_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_cabac(), qp_delta_cabac(), residual_block_cabac());
+}
+
 
 static const mb_code mb_decode_cabac[] = {
 	{mb_intra4x4_cabac, 0, 0},
@@ -9418,7 +9477,7 @@ static const mb_code mb_decode_cabac[] = {
 	{mb_inter8x16_cabac, 0, 3},
 	{mb_inter8x8p_cabac, 0, 0xf},
 	{mb_inter8x8p_cabac, 0, 0xf},
-	{mb_bdirect16x16, 0, 0},
+	{mb_bdirect16x16_cabac, 0, 0},
 	{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
 	{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
 	{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
