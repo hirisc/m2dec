@@ -34,6 +34,7 @@ void exit(int);
 }
 #endif
 
+#include <functional>
 #include <algorithm>
 #include "bitio.h"
 #include "h264.h"
@@ -7836,96 +7837,106 @@ static inline void insert_dpb(h264d_dpb_t *dpb, int poc, int frame_idx, int is_i
 	}
 }
 
-struct frame_num_order_p {
-	int operator()(int l, int r, int frame_num, int max_frame_num) const {
-		l = (frame_num < l) ? l - max_frame_num : l;
-		r = (frame_num < r) ? r - max_frame_num : r;
-		return l < r;
+struct frame_num_descent_p {
+	static int unwrap(int s, int frame_num, int max_frame_num) {
+		return (frame_num < s) ? s - max_frame_num : s;
+	}
+	bool operator()(const int& l, const int& r, int frame_num, int max_frame_num) const {
+		return unwrap(l, frame_num, max_frame_num) > unwrap(r, frame_num, max_frame_num);
 	}
 };
 
 struct poc_order_b_l0 {
-	int operator()(int l, int r, int curr_poc, int nan) const {
+	bool operator()(const int& l, const int& r, int curr_poc, int na) const {
 		if (l < curr_poc) {
-			return (r < curr_poc) ? (l < r) : 0;
+			return (curr_poc < r) || (l > r);
 		} else {
-			return (curr_poc < r) ? (r < l) : 1;
+			return (curr_poc < r) && (l < r);
 		}
 	}
 };
 
 struct poc_order_b_l1 {
-	int operator()(int l, int r, int curr_poc, int nan) const {
-		if (l < curr_poc) {
-			return (r < curr_poc) ? (l < r) : 1;
+	bool operator()(const int& l, const int& r, int curr_poc, int na) const {
+		if (l > curr_poc) {
+			return (curr_poc > r) || (l < r);
 		} else {
-			return (curr_poc < r) ? (r < l) : 0;
+			return (curr_poc > r) && (l > r);
 		}
 	}
 };
 
 struct get_frame_num {
-	int operator()(h264d_ref_frame_t&ref) const {
+	int operator()(const h264d_ref_frame_t&ref) const {
 		return ref.num;
 	}
 };
 
 struct get_poc {
-	int operator()(h264d_ref_frame_t&ref) const {
+	int operator()(const h264d_ref_frame_t&ref) const {
 		return ref.poc;
 	}
 };
 
 template <typename F0, typename F1>
-static inline int ref_list_order(h264d_ref_frame_t& lhs, h264d_ref_frame_t& rhs, int curr_num, int max_num,
+static inline bool ref_list_order(const h264d_ref_frame_t& lhs, const h264d_ref_frame_t& rhs, int curr_num, int max_num,
 				 F0 GetNum,
-				 F1 Order2nd)
+				 F1 LessShortTerm)
 {
 	int l_use = lhs.in_use;
 	int r_use = rhs.in_use;
 	if (l_use == SHORT_TERM) {
 		if (r_use == SHORT_TERM) {
-			return Order2nd(GetNum(lhs), GetNum(rhs), curr_num, max_num);
+			return LessShortTerm(GetNum(lhs), GetNum(rhs), curr_num, max_num);
 		} else {
-			return 0;
+			return true;
 		}
 	} else if (l_use == LONG_TERM) {
 		if (r_use == SHORT_TERM) {
-			return 1;
+			return false;
 		} else if (r_use == LONG_TERM) {
-			return GetNum(rhs) < GetNum(lhs);
+			return GetNum(lhs) < GetNum(rhs);
 		} else {
-			return 0;
+			return true;
 		}
 	} else {
-		return r_use;
+		return false;
 	}
 }
 
-template <typename F0, typename F1>
-static inline void sort_ref_list(h264d_ref_frame_t *refs, int num_elem, int curr_num, int max_frame_num,
-				 F0 GetNum,
-				 F1 Order2nd)
-{
-	for (h264d_ref_frame_t *ref_end = refs + num_elem; refs != ref_end; --ref_end) {
-		bool swapped = false;
-		for (h264d_ref_frame_t *p = refs;  p != ref_end - 1; ++p) {
-			if (ref_list_order(*p, *(p + 1), curr_num, max_frame_num, GetNum, Order2nd)) {
-				std::swap(*p, *(p + 1));
-				swapped = true;
-			}
-		}
-		if (!swapped) {
-			break;
-		}
+struct ref_list_less_p {
+	ref_list_less_p(int curr_num, int max_num) : curr_num_(curr_num), max_num_(max_num) {}
+	bool operator()(const h264d_ref_frame_t& lhs, const h264d_ref_frame_t& rhs) const {
+		return ref_list_order(lhs, rhs, curr_num_, max_num_, get_frame_num(), frame_num_descent_p());
 	}
-}
+private:
+	int curr_num_;
+	int max_num_;
+};
+
+struct ref_list_order_b_ref0 {
+	ref_list_order_b_ref0(int curr_poc) : curr_poc_(curr_poc) {}
+	bool operator()(const h264d_ref_frame_t& lhs, const h264d_ref_frame_t& rhs) const {
+		return ref_list_order(lhs, rhs, curr_poc_, 0, get_poc(), poc_order_b_l0());
+	}
+private:
+	int curr_poc_;
+};
+
+struct ref_list_order_b_ref1 {
+	ref_list_order_b_ref1(int curr_poc) : curr_poc_(curr_poc) {}
+	bool operator()(const h264d_ref_frame_t& lhs, const h264d_ref_frame_t& rhs) const {
+		return ref_list_order(lhs, rhs, curr_poc_, 0, get_poc(), poc_order_b_l1());
+	}
+private:
+	int curr_poc_;
+};
 
 static inline void ref_pic_init_p(h264d_slice_header *hdr, int max_frame_num, int num_ref_frames)
 {
 	h264d_ref_frame_t *ref = hdr->reorder[0].ref_frames;
 
-	sort_ref_list(ref, num_ref_frames, hdr->frame_num, max_frame_num, get_frame_num(), frame_num_order_p());
+	std::sort(ref, ref + num_ref_frames, ref_list_less_p(hdr->frame_num, max_frame_num));
 	for (int i = num_ref_frames; i < 16; ++i) {
 		ref[i].in_use = NOT_IN_USE;
 	}
@@ -7941,8 +7952,8 @@ static inline void ref_pic_init_b(h264d_slice_header *hdr, int num_ref_frames)
 	h264d_ref_frame_t *ref0 = hdr->reorder[0].ref_frames;
 	h264d_ref_frame_t *ref1 = hdr->reorder[1].ref_frames;
 
-	sort_ref_list(ref0, num_ref_frames, hdr->poc, 0, get_poc(), poc_order_b_l0());
-	sort_ref_list(ref1, num_ref_frames, hdr->poc, 0, get_poc(), poc_order_b_l1());
+	std::sort(ref0, ref0 + num_ref_frames, ref_list_order_b_ref0(hdr->poc));
+	std::sort(ref1, ref1 + num_ref_frames, ref_list_order_b_ref1(hdr->poc));
 	if ((1 < num_ref_frames) && is_same_list(ref0, ref1, num_ref_frames)) {
 		std::swap(ref1[0], ref1[1]);
 	}
