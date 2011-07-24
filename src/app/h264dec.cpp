@@ -4,6 +4,7 @@
 #include <string.h>
 #include <limits.h>
 #include <vector>
+#include <memory>
 #include <algorithm>
 #include <functional>
 #include "getopt.h"
@@ -280,7 +281,6 @@ static void trap(int no)
 
 int main(int argc, char *argv[])
 {
-	h264d_context *h2d;
 	int err;
 
 #ifdef _M_IX86
@@ -288,10 +288,9 @@ int main(int argc, char *argv[])
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
 #endif
-	h2d = new h264d_context;
-	input_data_t data(argc, argv, (void *)h2d);
+	std::auto_ptr<h264d_context> h2d(new h264d_context);
+	input_data_t data(argc, argv, (void *)h2d.get());
 	if (data.len_ <= 0) {
-		delete h2d;
 		return -1;
 	}
 #ifdef __linux__
@@ -303,17 +302,17 @@ int main(int argc, char *argv[])
 		sigaction(SIGSEGV, &sa, 0);
 	}
 #endif
-	err = h264d_init(h2d, data.dpb_, 0, 0);
+	err = h264d_init(h2d.get(), data.dpb_, 0, 0);
 	if (err) {
 		return err;
 	}
-	err = h264d_read_header(h2d, data.data_, data.len_);
+	err = h264d_read_header(h2d.get(), data.data_, data.len_);
 	data.pos_ = data.len_;
 	if (err) {
 		return err;
 	}
 	m2d_info_t info;
-	h264d_get_info(h2d, &info);
+	h264d_get_info(h2d.get(), &info);
 	fprintf(stderr,
 		"length: %ld\n"
 		"width x height x num: %d x %d x %d\n"
@@ -322,28 +321,27 @@ int main(int argc, char *argv[])
 	info.frame_num = (info.frame_num < 3 ? 3 : info.frame_num) + (data.dpb_ < 0 ? 16 : data.dpb_);
 	Frames frm(info.src_width, info.src_height, info.frame_num);
 	std::vector<uint8_t> second_frame(info.additional_size);
-	err = h264d_set_frames(h2d, info.frame_num, &frm.frame[0], &second_frame[0], info.additional_size);
+	err = h264d_set_frames(h2d.get(), info.frame_num, &frm.frame[0], &second_frame[0], info.additional_size);
 	if (err) {
 		return err;
 	}
-	dec_bits_set_callback(h2d->stream, reread_file, &data);
+	dec_bits_set_callback(h2d.get()->stream, reread_file, &data);
 	m2d_frame_t frame;
 	for (int i = 0; i < INT_MAX; ++i) {
-		err = h264d_decode_picture(h2d);
+		err = h264d_decode_picture(h2d.get());
 		if (err == -1) {
 			break;
 		}
-		while (h264d_get_decoded_frame(h2d, &frame, (data.dpb_ == 1))) {
+		while (h264d_get_decoded_frame(h2d.get(), &frame, (data.dpb_ == 1))) {
 			data.writeframe(&frame);
 		}
 		if (err < 0) {
 			break;
 		}
 	}
-	while (h264d_get_decoded_frame(h2d, &frame, 1)) {
+	while (h264d_get_decoded_frame(h2d.get(), &frame, 1)) {
 		data.writeframe(&frame);
 	}
-	delete h2d;
 
 #ifdef _M_IX86
 	assert(_CrtCheckMemory());
