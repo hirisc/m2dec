@@ -91,6 +91,7 @@ int m2d_next_start_code(const byte_t *org_src, int byte_len)
  */
 int m2d_find_mpeg_data(dec_bits *stream)
 {
+	byte_align(stream);
 	show_bits(stream, 8);
 	const byte_t *indata = dec_bits_current(stream);
 	const byte_t *tail = dec_bits_tail(stream);
