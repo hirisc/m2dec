@@ -193,6 +193,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\app\lowlevel.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\app\m2dec.cpp"
 				>
 			</File>
@@ -216,6 +220,10 @@
 			</File>
 			<File
 				RelativePath="..\..\src\app\display.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\app\frames.h"
 				>
 			</File>
 			<File

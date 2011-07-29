@@ -176,6 +176,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\app\lowlevel.c"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\app\md5.c"
 				>
 			</File>
@@ -190,7 +194,19 @@
 			UniqueIdentifier="{93995380-89BD-4b04-88EB-625FBE52EBFB}"
 			>
 			<File
+				RelativePath="..\..\src\app\filewrite.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\app\frames.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\app\getopt.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\src\app\m2decoder.h"
 				>
 			</File>
 			<File
