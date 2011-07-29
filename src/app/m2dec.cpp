@@ -28,11 +28,9 @@
 #include <string.h>
 #include <setjmp.h>
 #include <memory>
-#include <algorithm>
-#include <vector>
-#include <functional>
 #include "bitio.h"
 #include "mpeg2.h"
+#include "frames.h"
 #include "mpeg_demux.h"
 #include "txt2bin.h"
 #include "display.h"
@@ -40,49 +38,9 @@
 #include "aadisp.h"
 #endif
 
-
 #ifdef __RENESAS_VERSION__
-
-extern "C" {
-#pragma section FILES
-
-#define O_RDONLY 1
-#define O_WRONLY 2
-#define MAX_FILESIZE 8 * 1024 * 1024
-#define MAX_MD5SIZE 128 * 1024
-char InputFile[MAX_FILESIZE];
-char OutputFile[MAX_MD5SIZE];
-
-#pragma section
-void abort() {while (1);}
-static int infilepos;
-static int outfilepos;
-int open(char *name, int mode, int flg) {
-	if (mode & O_RDONLY) {
-		infilepos = 0;
-	} else if (mode & O_WRONLY) {
-		infilepos = 0;
-	}
-	return 4;
-}
-int close(int fineno) {return 0;}
-int read(int fileno, char *buf, unsigned int count) {
-	if (sizeof(InputFile) < infilepos + count) {
-		count = sizeof(InputFile) - infilepos;
-		if ((signed)count <= 0) {
-			return 0;
-		}
-	}
-	memcpy(buf, InputFile + infilepos, count);
-	infilepos += count;
-	return count;
-}
-int lseek() {return 0;}
-int write(int fileno, char *buf, unsigned int count) {return count;}
-char *getenv(const char *name) {return 0;}
-
-}
-
+extern char InputFile[];
+extern const int InputSize;
 #endif /* __RENESAS_VERSION__ */
 
 const int FRAME_NUM = 6;
@@ -280,14 +238,6 @@ static int test_all()
 #include <crtdbg.h>
 #endif
 
-class AllocateFrame : public binary_function<m2d_frame_t, size_t, void> {
-public:
-	void operator()(m2d_frame_t& frm, size_t len) {
-		frm.luma = new uint8_t[len];
-		frm.chroma = new uint8_t[len / 2];
-	}
-};
-
 #ifdef ENABLE_DISPLAY
 #include <SDL/SDL.h>
 #endif
@@ -355,22 +305,6 @@ int mpeg_demux_request_set_data(pes_demuxer_t *dmx, const byte_t **indata_p, int
 	}
 }
 
-void allocate_frames(m2d_frame_t *frm, m2d_frame_t *frm_align, int frame_num, size_t luma_len)
-{
-#if 0
-	for_each(frames.begin(), frames.end(), bind2nd(AllocateFrame(), luma_len));
-#else
-	for (int i = 0; i < frame_num; ++i) {
-		frm[i].luma = new uint8_t[luma_len + 15];
-		memset(&frm[i].luma[0], 0, LUMA_LEN + 15);
-		frm[i].chroma = new uint8_t[LUMA_LEN / 2 + 15];
-		memset(&frm[i].chroma[0], 0, LUMA_LEN / 2 + 15);
-		frm_align[i].luma = ALIGN16_U8(frm[i].luma);
-		frm_align[i].chroma = ALIGN16_U8(frm[i].chroma);
-	}
-#endif
-}
-
 #ifdef main
 #undef main
 #endif
@@ -391,13 +325,10 @@ int main(int argc, char **argv)
 		return -1;
 	}
 	auto_ptr<m2d_context> m2d(new m2d_context);
-	vector<m2d_frame_t> frm(FRAME_NUM);
-	vector<m2d_frame_t> frm_align(FRAME_NUM);
-	allocate_frames(&frm[0], &frm_align[0], frm.size(), LUMA_LEN);
-
+	Frames frms(WIDTH, HEIGHT, FRAME_NUM, 0);
 	int err = 0;
 	err |= m2d_init(m2d.get(), 0, 0, 0);
-	err |= m2d_set_frames(m2d.get(), FRAME_NUM, &frm_align[0]);
+	err |= m2d_set_frames(m2d.get(), FRAME_NUM, frms.aligned());
 
 	reread_t reread_data = {
 		m2d.get(),
@@ -428,10 +359,6 @@ int main(int argc, char **argv)
 				break;
 			}
 		}
-	}
-	for (int i = 0; i < frm.size(); ++i) {
-		delete[] frm[i].chroma;
-		delete[] frm[i].luma;
 	}
 
 	if (opt.verbose_) {
