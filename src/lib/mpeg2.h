@@ -22,14 +22,15 @@
  *  DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef _SEQ_H_
-#define _SEQ_H_
+#ifndef _MPEG2_H_
+#define _MPEG2_H_
   
+#include "m2d.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "m2d.h"
 #define __LIBM2DEC_API
 
 
@@ -225,5 +226,5 @@ extern const m2d_func_table_t * const m2d_func;
 }
 #endif
 
-#endif /* _SEQ_H_ */
+#endif /* _MPEG2_H_ */
 

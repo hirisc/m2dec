@@ -627,17 +627,17 @@ static inline void frames_init(h264d_mb_current *mb, int num_frame, const m2d_fr
 {
 	h264d_frame_info_t *frm = mb->frame;
 	frm->num = num_frame;
-	for (int i = 0; i < num_frame; ++i) {
-		frm->frames[i] = frame[i];
-	}
+	std::copy(frame, frame + num_frame, frm->frames);
 	memset(frm->lru, 0, sizeof(frm->lru));
 }
+
+#define NUM_ARRAY(x) (sizeof(x) / sizeof(x[0]))
 
 int h264d_set_frames(h264d_context *h2d, int num_frame, m2d_frame_t *frame, uint8_t *second_frame, int second_frame_size)
 {
 	h264d_mb_current *mb;
 
-	if (!h2d || (num_frame < 3) || !frame || !second_frame) {
+	if (!h2d || (num_frame < 3) || (NUM_ARRAY(mb->frame->frames) < num_frame) || !frame || !second_frame) {
 		return -1;
 	}
 	mb = &h2d->mb_current;
