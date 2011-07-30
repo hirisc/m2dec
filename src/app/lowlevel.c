@@ -1,10 +1,10 @@
 #include <stdlib.h>
+#include <stdio.h>
 
 #ifdef __RENESAS_VERSION__
 
 #include <machine.h>
 
-extern "C" {
 #pragma section FILES
 
 #define O_RDONLY 1
@@ -49,7 +49,5 @@ int read(int fileno, char *buf, unsigned int count) {
 int lseek() {return 0;}
 int write(int fileno, char *buf, unsigned int count) {return count;}
 char *getenv(const char *name) {return 0;}
-
-}
 
 #endif /* __RENESAS_VERSION__ */
