@@ -4954,12 +4954,71 @@ static inline int DIF_SQUARE(int a, int b) {
 	return t * t;
 }
 
+static inline int frame_idx_of_ref(const h264d_mb_current *mb, int ref_idx, int lx) {
+	return (0 <= ref_idx) ? mb->frame->refs[lx][ref_idx].frame_idx : -1;
+}
+
 static inline uint32_t str_mv_calc16x16(h264d_mb_current *mb, uint32_t str, const int16_t mvxy[], const int8_t ref_idx[], const prev_mb_t *prev)
 {
+#if 1
+	int ref0 = frame_idx_of_ref(mb, *ref_idx++, 0);
+	int ref1 = frame_idx_of_ref(mb, *ref_idx, 1);
+	for (int i = 0; i < 2; ++i) {
+		if (((str >> (i * 4)) & 0xa) != 0xa) {
+			int prev0 = frame_idx_of_ref(mb, prev->ref[i][0], 0);
+			int prev1 = frame_idx_of_ref(mb, prev->ref[i][1], 1);
+			if (((prev0 != ref0) || (prev1 != ref1)) && ((prev1 != ref0) || (prev0 != ref1))) {
+				uint32_t mask = 5 << (i * 4);
+				str = str | (((str >> 1) ^ mask) & mask);
+			} else {
+				if ((0 <= ref0) && (0 <= ref1)) {
+					int mv0x, mv0y, mv1x, mv1y;
+					if (ref0 == prev0) {
+						mv0x = mvxy[0];
+						mv0y = mvxy[1];
+						mv1x = mvxy[2];
+						mv1y = mvxy[3];
+					} else {
+						mv1x = mvxy[0];
+						mv1y = mvxy[1];
+						mv0x = mvxy[2];
+						mv0y = mvxy[3];
+					}
+					for (int j = 0; j < 2; ++j) {
+						if (((str & (2 << ((i * 2 + j) * 2))) == 0)
+							&& ((16 <= DIF_SQUARE(mv0x, prev->mov[i * 2 + j].mv[0].v[0]))
+							|| (16 <= DIF_SQUARE(mv0y, prev->mov[i * 2 + j].mv[0].v[1]))
+							|| (16 <= DIF_SQUARE(mv1x, prev->mov[i * 2 + j].mv[1].v[0]))
+							|| (16 <= DIF_SQUARE(mv1y, prev->mov[i * 2 + j].mv[1].v[1])))) {
+								str = str | (1 << ((i * 2 + j) * 2));
+						}
+					}
+				} else {
+					int mvx, mvy, lx;
+					if (0 <= ref0) {
+						mvx = mvxy[0];
+						mvy = mvxy[1];
+						lx = (ref0 == prev1);
+					} else {
+						mvx = mvxy[2];
+						mvy = mvxy[3];
+						lx = (ref1 == prev1);
+					}
+					for (int j = 0; j < 2; ++j) {
+						if (((str & (2 << ((i * 2 + j) * 2))) == 0)
+							&& ((16 <= DIF_SQUARE(mvx, prev->mov[i * 2 + j].mv[lx].v[0]))
+							|| (16 <= DIF_SQUARE(mvy, prev->mov[i * 2 + j].mv[lx].v[1])))) {
+								str = str | (1 << ((i * 2 + j) * 2));
+						}
+					}
+				}
+			}
+		}
+	}
+#else
 	int mvx = mvxy[0];
 	int mvy = mvxy[1];
-	int ref0 = *ref_idx++;
-	int ref1 = *ref_idx;
+	int ref0 = ref_idx[0];
 	int lx = 0;
 	for (int i = 0; i < 4; ++i) {
 		if (!(str & (3 << (i * 2)))) {
@@ -4971,6 +5030,7 @@ static inline uint32_t str_mv_calc16x16(h264d_mb_current *mb, uint32_t str, cons
 		}
 
 	}
+#endif
 	return str;
 }
 
@@ -5028,18 +5088,20 @@ static int mb_inter16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st,
 		if (mb->top4x4inter->type <= MB_IPCM) {
 			deb->str4_vert = 1;
 			str_vert |= 1;
+		} else {
+			str_vert = str_previous_coef(str_vert, top4x4);
+			str_vert = str_mv_calc16x16(mb, str_vert, mv[0][0].v, ref_idx, mb->top4x4inter);
 		}
-		str_vert = str_previous_coef(str_vert, top4x4);
-		str_vert = str_mv_calc16x16(mb, str_vert, mv[0][0].v, ref_idx, mb->top4x4inter);
 	}
 	deb->str_vert = str_vert;
 	if (mb->x != 0) {
 		if (mb->left4x4inter->type <= MB_IPCM) {
 			deb->str4_horiz = 1;
 			str_horiz |= 1;
+		} else {
+			str_horiz = str_previous_coef(str_horiz, left4x4);
+			str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0][0].v, ref_idx, mb->left4x4inter);
 		}
-		str_horiz = str_previous_coef(str_horiz, left4x4);
-		str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0][0].v, ref_idx, mb->left4x4inter);
 	}
 	deb->str_horiz = str_horiz;
 
@@ -5201,7 +5263,7 @@ static inline void store_col16x8(h264d_col_mb_t *col, const int8_t *ref_idx, con
 			refcol = ref_idx[0];
 			mvcol = mv[0].vector;
 		} else {
-			refcol = ref_idx[2];
+			refcol = ref_idx[1];
 			mvcol = mv[1].vector;
 		}
 		refdst[0] = refcol;
@@ -5209,7 +5271,7 @@ static inline void store_col16x8(h264d_col_mb_t *col, const int8_t *ref_idx, con
 		for (int i = 0; i < 16 / 2; ++i) {
 			mvdst[i].vector = mvcol; 
 		}
-		ref_idx += 1;
+		ref_idx += 2;
 		refdst += 2;
 		mv += 4;
 		mvdst += 8;
@@ -5240,19 +5302,19 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 	bidir1 = 0;
 	for (int lx = 0; lx < 2; ++lx) {
 		if (refmap & 1) {
-			calc_mv16x8top(mb, mv[0][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx * 2], avail);
+			calc_mv16x8top(mb, mv[0][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx], avail);
 			MvdXY(mb, st, mv[0][lx][1].v, mvd_a, mvd_b);
 			mv[0][lx][0].v[0] += mv[0][lx][1].v[0];
 			mv[0][lx][0].v[1] += mv[0][lx][1].v[1];
-			inter_pred8x8(mb, mv[0][lx][0].v, 16, 8, mb->frame->refs[lx][ref_idx[lx * 2]].frame_idx, 0, 0, bidir0);
+			inter_pred8x8(mb, mv[0][lx][0].v, 16, 8, mb->frame->refs[lx][ref_idx[lx]].frame_idx, 0, 0, bidir0);
 			bidir0++;
 		}
 		if (refmap & 2) {
-			calc_mv16x8bottom(mb, mv[1][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx * 2 + 1], avail, ref_idx[lx * 2], mv[0][lx][0].v);
+			calc_mv16x8bottom(mb, mv[1][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx + 2], avail, ref_idx[lx], mv[0][lx][0].v);
 			MvdXY(mb, st, mv[1][lx][1].v, mvd_a, mvd_b);
 			mv[1][lx][0].v[0] += mv[1][lx][1].v[0];
 			mv[1][lx][0].v[1] += mv[1][lx][1].v[1];
-			inter_pred8x8(mb, mv[1][lx][0].v, 16, 8, mb->frame->refs[lx][ref_idx[lx * 2 + 1]].frame_idx, 0, 8, bidir1);
+			inter_pred8x8(mb, mv[1][lx][0].v, 16, 8, mb->frame->refs[lx][ref_idx[lx + 2]].frame_idx, 0, 8, bidir1);
 			bidir1++;
 		}
 		refmap >>= 2;
@@ -5280,18 +5342,19 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 		if (mb->top4x4inter->type <= MB_IPCM) {
 			deb->str4_vert = 1;
 			str_vert |= 1;
+		} else {
+			str_vert = str_previous_coef(str_vert, top4x4);
+			str_vert = str_mv_calc16x16(mb, str_vert, mv[0][l0][0].v, ref_idx, mb->top4x4inter);
 		}
-		str_vert = str_previous_coef(str_vert, top4x4);
-		str_vert = str_mv_calc16x16(mb, str_vert, mv[0][l0][0].v, ref_idx, mb->top4x4inter);
 	}
-	deb->str_vert = str_mv_calc16x8_vert(str_vert, ref_idx[0], ref_idx[1], mv[0][l0][0].v, mv[1][l0][0].v);
+	deb->str_vert = str_mv_calc16x8_vert(str_vert, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v);
 	if (mb->x != 0) {
 		if (mb->left4x4inter->type <= MB_IPCM) {
 			deb->str4_horiz = 1;
 			str_horiz |= 1;
 		}
 		str_horiz = str_previous_coef(str_horiz, left4x4);
-		str_horiz = str_mv_calc16x8_left(str_horiz, l0, ref_idx[0], ref_idx[1], mv[0][l0][0].v, mv[1][l0][0].v, mb->left4x4inter);
+		str_horiz = str_mv_calc16x8_left(str_horiz, l0, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v, mb->left4x4inter);
 	}
 	deb->str_horiz = str_horiz;
 
@@ -5308,7 +5371,7 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 		}
 	}
 	for (int i = 0; i < 2; ++i) {
-		mb->top4x4inter->ref[i][0] = ref_idx[1];
+		mb->top4x4inter->ref[i][0] = ref_idx[2];
 		mb->top4x4inter->ref[i][1] = ref_idx[3];
 		for (int j = 0; j < 2; ++j) {
 			mb->left4x4inter->mov[i].mv[j].vector = mv[0][j][0].vector;
@@ -5318,8 +5381,8 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 		}
 	}
 	mb->left4x4inter->ref[0][0] = ref_idx[0];
-	mb->left4x4inter->ref[0][1] = ref_idx[2];
-	mb->left4x4inter->ref[1][0] = ref_idx[1];
+	mb->left4x4inter->ref[0][1] = ref_idx[1];
+	mb->left4x4inter->ref[1][0] = ref_idx[2];
 	mb->left4x4inter->ref[1][1] = ref_idx[3];
 	store_col16x8(mb->col_curr, ref_idx, &mv[0][0][0]);
 	return residual_chroma(mb, cbp, st, avail, ResidualBlock);
@@ -5426,7 +5489,7 @@ static inline void store_col8x16(h264d_col_mb_t *col, const int8_t *ref_idx, con
 			refcol = ref_idx[0];
 			mvcol = mv[0].vector;
 		} else {
-			refcol = ref_idx[2];
+			refcol = ref_idx[1];
 			mvcol = mv[1].vector;
 		}
 		refdst[0] = refcol;
@@ -5438,7 +5501,7 @@ static inline void store_col8x16(h264d_col_mb_t *col, const int8_t *ref_idx, con
 			dst[1] = mvcol;
 			dst += 4;
 		} while (--i);
-		ref_idx += 1;
+		ref_idx += 2;
 		refdst += 1;
 		mv += 4;
 		mvdst += 2;
@@ -5469,19 +5532,19 @@ static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 	bidir1 = 0;
 	for (int lx = 0; lx < 2; ++lx) {
 		if (refmap & 1) {
-			calc_mv8x16left(mb, mv[0][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx * 2], avail);
+			calc_mv8x16left(mb, mv[0][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx], avail);
 			MvdXY(mb, st, mv[0][lx][1].v, mvd_a, mvd_b);
 			mv[0][lx][0].v[0] += mv[0][lx][1].v[0];
 			mv[0][lx][0].v[1] += mv[0][lx][1].v[1];
-			inter_pred8x8(mb, mv[0][lx][0].v, 8, 16, mb->frame->refs[lx][ref_idx[lx * 2]].frame_idx, 0, 0, bidir0);
+			inter_pred8x8(mb, mv[0][lx][0].v, 8, 16, mb->frame->refs[lx][ref_idx[lx]].frame_idx, 0, 0, bidir0);
 			bidir0++;
 		}
 		if (refmap & 2) {
-			calc_mv8x16right(mb, mv[1][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx * 2 + 1], avail, ref_idx[lx * 2], mv[0][lx][0].v);
+			calc_mv8x16right(mb, mv[1][lx][0].v, mvd_a, mvd_b, lx, ref_idx[lx + 2], avail, ref_idx[lx], mv[0][lx][0].v);
 			MvdXY(mb, st, mv[1][lx][1].v, mvd_a, mvd_b);
 			mv[1][lx][0].v[0] += mv[1][lx][1].v[0];
 			mv[1][lx][0].v[1] += mv[1][lx][1].v[1];
-			inter_pred8x8(mb, mv[1][lx][0].v, 8, 16, mb->frame->refs[lx][ref_idx[lx * 2 + 1]].frame_idx, 8, 0, bidir1);
+			inter_pred8x8(mb, mv[1][lx][0].v, 8, 16, mb->frame->refs[lx][ref_idx[lx + 2]].frame_idx, 8, 0, bidir1);
 			bidir1++;
 		}
 		refmap >>= 2;
@@ -5512,26 +5575,27 @@ static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 			str_vert |= 1;
 		}
 		str_vert = str_previous_coef(str_vert, top4x4);
-		str_vert = str_mv_calc16x8_left(str_vert, l0, ref_idx[0], ref_idx[1], mv[0][l0][0].v, mv[1][l0][0].v, mb->top4x4inter); /* same as 16x8 left */
+		str_vert = str_mv_calc16x8_left(str_vert, l0, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v, mb->top4x4inter); /* same as 16x8 left */
 	}
 	deb->str_vert = str_vert;
 	if (mb->x != 0) {
 		if (mb->left4x4inter->type <= MB_IPCM) {
 			deb->str4_horiz = 1;
 			str_horiz |= 1;
+		} else {
+			str_horiz = str_previous_coef(str_horiz, left4x4);
+			str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0][l0][0].v, ref_idx, mb->left4x4inter);
 		}
-		str_horiz = str_previous_coef(str_horiz, left4x4);
-		str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0][l0][0].v, ref_idx, mb->left4x4inter);
 	}
-	deb->str_horiz = str_mv_calc16x8_vert(str_horiz, ref_idx[0], ref_idx[1], mv[0][l0][0].v, mv[1][l0][0].v); /* same as 16x8 vert */
+	deb->str_horiz = str_mv_calc16x8_vert(str_horiz, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v); /* same as 16x8 vert */
 
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
 	for (int i = 0; i < 2; ++i) {
 		mb->lefttop_ref[i] = mb->top4x4inter->ref[1][i];
-		mb->top4x4inter->ref[i][0] = ref_idx[0 + i];
-		mb->top4x4inter->ref[i][1] = ref_idx[2 + i];
-		mb->left4x4inter->ref[i][0] = ref_idx[1];
+		mb->top4x4inter->ref[i][0] = ref_idx[i * 2];
+		mb->top4x4inter->ref[i][1] = ref_idx[i * 2 + 1];
+		mb->left4x4inter->ref[i][0] = ref_idx[2];
 		mb->left4x4inter->ref[i][1] = ref_idx[3];
 		mb->lefttop_mv[i].vector = mb->top4x4inter->mov[3].mv[i].vector;
 		for (int j = 0; j < 2; ++j) {
@@ -6724,9 +6788,9 @@ struct ref_idx16x8_cavlc {
 		for (int lx = 0; lx < 2; ++lx) {
 			int t = *(num[0]);
 			ref_idx[0] = (blk_map & 1) ? (t ? te_golomb(st, t) : 0) : -1;
-			ref_idx[1] = (blk_map & 2) ? (t ? te_golomb(st, t) : 0) : -1;
+			ref_idx[2] = (blk_map & 2) ? (t ? te_golomb(st, t) : 0) : -1;
 			blk_map >>= 2;
-			ref_idx += 2;
+			ref_idx++;
 			num++;
 		}
 	}
@@ -7130,18 +7194,20 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 			if (mb->top4x4inter->type <= MB_IPCM) {
 				deb->str4_vert = 1;
 				str_vert = 1;
+			} else {
+				str_vert = str_previous_coef(str_vert, top4x4);
+				str_vert = str_mv_calc16x16(mb, str_vert, mv[0].v, ref_idx, mb->top4x4inter);
 			}
-			str_vert = str_previous_coef(str_vert, top4x4);
-			str_vert = str_mv_calc16x16(mb, str_vert, mv[0].v, ref_idx, mb->top4x4inter);
 		}
 		deb->str_vert = str_vert;
 		if (mb->x != 0) {
 			if (mb->left4x4inter->type <= MB_IPCM) {
 				deb->str4_horiz = 1;
 				str_horiz = 1;
+			} else {
+				str_horiz = str_previous_coef(str_horiz, left4x4);
+				str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0].v, ref_idx, mb->left4x4inter);
 			}
-			str_horiz = str_previous_coef(str_horiz, left4x4);
-			str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0].v, ref_idx, mb->left4x4inter);
 		}
 		deb->str_horiz = str_horiz;
 		left4x4 = 0;
@@ -9366,13 +9432,13 @@ struct ref_idx16x8_cabac {
 							((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[0][lx]))
 							+ ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[0][lx])) * 2) : 0)
 				: -1;
-			ref_idx[1] = (blk_map & 2) ?
+			ref_idx[2] = (blk_map & 2) ?
 				(t ? ref_idx_cabac_sub(st, cb,
 							((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[1][lx]))
 							+ (0 < ref_idx[0]) * 2) : 0)
 				: -1;
 			blk_map >>= 2;
-			ref_idx += 2;
+			ref_idx++;
 			num++;
 		}
 	}
@@ -9389,13 +9455,13 @@ struct ref_idx8x16_cabac {
 							((avail & 1) && (mb->left4x4inter->type != MB_PSKIP) && (0 < mb->left4x4inter->ref[0][lx]))
 							+ ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[0][lx])) * 2) : 0)
 				: -1;
-			ref_idx[1] = (blk_map & 2) ?
+			ref_idx[2] = (blk_map & 2) ?
 				(t ? ref_idx_cabac_sub(st, cb,
 							(0 < ref_idx[0])
 							+ ((avail & 2) && (mb->top4x4inter->type != MB_PSKIP) && (0 < mb->top4x4inter->ref[1][lx])) * 2) : 0)
 				: -1;
 			blk_map >>= 2;
-			ref_idx += 2;
+			ref_idx++;
 			num++;
 		}
 	}
