@@ -47,23 +47,19 @@ static  void BIT_SANITY_CHECK(dec_bits *ths)
 #define BIT_SANITY_CHECK(x)
 #endif
 
-static int endofbuffer_check(dec_bits *ths, int data_remains);
+static int endofbuffer_check(dec_bits *ths);
 static void load_bytes(dec_bits *ths, int read_bytes);
 
 const byte_t *dec_bits_load_next(dec_bits *ths, int *data_size)
 {
-	if (ths->error_func_) {
-		const byte_t *data;
-		if (ths->error_func_(ths->error_arg_) < 0) {
-			return 0;
-		}
-		ths->cache_len_ = 0;
-		data = dec_bits_current(ths);
-		*data_size = (int)(dec_bits_tail(ths) - data);
-		return data;
-	} else {
+	const byte_t *data;
+	if (ths->error_func_(ths->error_arg_) < 0) {
 		return 0;
 	}
+	ths->cache_len_ = 0;
+	data = dec_bits_current(ths);
+	*data_size = (int)(dec_bits_tail(ths) - data);
+	return data;
 }
 
 void dec_bits_cachefill(dec_bits *ths) {
@@ -79,7 +75,7 @@ void dec_bits_cachefill(dec_bits *ths) {
 	if (available_bytes < read_bytes) {
 		if (0 < available_bytes) {
 			ths->load_bytes(ths, (int)available_bytes);
-		} else if (endofbuffer_check(ths, cache_len) < 0) {
+		} else if (endofbuffer_check(ths) < 0) {
 			return;
 		} else {
 			ths->load_bytes(ths, (int)read_bytes);
@@ -110,26 +106,18 @@ static void load_bytes(dec_bits *ths, int read_bytes)
 
 /** Check whether extra data are available
  */
-static int endofbuffer_check(dec_bits *ths, int data_remains)
+static int endofbuffer_check(dec_bits *ths)
 {
-	/* Assume that previous buffer are already emptified */
-	if (ths->error_func_) {
-		cache_t cache_ = ths->cache_;
-		int cache_len_ = ths->cache_len_;
-		int ret = ths->error_func_(ths->error_arg_);
-		if ((ret < 0) && (cache_len_ == 0)) {
-			longjmp(ths->jmp, 1);
-			/* NOTREACHED */
-		}
-		ths->cache_ = cache_;
-		ths->cache_len_ = cache_len_;
-		return ret;
-	} else if (!data_remains) {
+	cache_t cache_ = ths->cache_;
+	int cache_len_ = ths->cache_len_;
+	int ret = ths->error_func_(ths->error_arg_);
+	if ((ret < 0) && (cache_len_ == 0)) {
 		longjmp(ths->jmp, 1);
 		/* NOTREACHED */
-	} else {
-		return -1;
 	}
+	ths->cache_ = cache_;
+	ths->cache_len_ = cache_len_;
+	return ret;
 }
 
 /**Returns specified number of bits, while read position shall be unchanged.
@@ -277,10 +265,14 @@ int dec_bits_open(dec_bits *ths, void (*loadbytes_func)(dec_bits *, int bytes))
 	return 0;
 }
 
+static int error_func_dummy(void *p) {
+	return -1;
+}
+
 void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg)
 {
-	assert(error_func || error_arg);
-	ths->error_func_ = error_func ? error_func : ths->error_func_;
+	assert(ths != 0);
+	ths->error_func_ = error_func ? error_func : error_func_dummy;
 	ths->error_arg_ = error_arg ? error_arg : ths->error_arg_;
 }
 
