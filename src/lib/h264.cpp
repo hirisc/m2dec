@@ -4958,6 +4958,54 @@ static inline int frame_idx_of_ref(const h264d_mb_current *mb, int ref_idx, int 
 	return (0 <= ref_idx) ? mb->frame->refs[lx][ref_idx].frame_idx : -1;
 }
 
+static inline uint32_t str_mv_calc16x16_bidir(uint32_t str, int ref0, int prev_ref0, int offset, const int16_t mvxy[], const prev_mb_t *prev)
+{
+	int mv0x, mv0y, mv1x, mv1y;
+	if (ref0 == prev_ref0) {
+		mv0x = mvxy[0];
+		mv0y = mvxy[1];
+		mv1x = mvxy[2];
+		mv1y = mvxy[3];
+	} else {
+		mv1x = mvxy[0];
+		mv1y = mvxy[1];
+		mv0x = mvxy[2];
+		mv0y = mvxy[3];
+	}
+	for (int j = 0; j < 2; ++j) {
+		if (((str & (2 << ((j + offset) * 2))) == 0)
+			&& ((16 <= DIF_SQUARE(mv0x, prev->mov[j + offset].mv[0].v[0]))
+			|| (16 <= DIF_SQUARE(mv0y, prev->mov[j + offset].mv[0].v[1]))
+			|| (16 <= DIF_SQUARE(mv1x, prev->mov[j + offset].mv[1].v[0]))
+			|| (16 <= DIF_SQUARE(mv1y, prev->mov[j + offset].mv[1].v[1])))) {
+				str = str | (1 << ((j + offset) * 2));
+		}
+	}
+	return str;
+}
+
+static inline uint32_t str_mv_calc16x16_onedir(uint32_t str, int ref0, int ref1, int prev_ref0, int offset, const int16_t mvxy[], const prev_mb_t *prev)
+{
+	int mvx, mvy, lx;
+	if (0 <= ref0) {
+		mvx = mvxy[0];
+		mvy = mvxy[1];
+		lx = (ref0 != prev_ref0);
+	} else {
+		mvx = mvxy[2];
+		mvy = mvxy[3];
+		lx = (ref1 != prev_ref0);
+	}
+	for (int j = 0; j < 2; ++j) {
+		if (((str & (2 << ((j + offset) * 2))) == 0)
+			&& ((16 <= DIF_SQUARE(mvx, prev->mov[j + offset].mv[lx].v[0]))
+			|| (16 <= DIF_SQUARE(mvy, prev->mov[j + offset].mv[lx].v[1])))) {
+				str = str | (1 << ((j + offset) * 2));
+		}
+	}
+	return str;
+}
+
 static inline uint32_t str_mv_calc16x16(h264d_mb_current *mb, uint32_t str, const int16_t mvxy[], const int8_t ref_idx[], const prev_mb_t *prev)
 {
 #if 1
@@ -4972,45 +5020,9 @@ static inline uint32_t str_mv_calc16x16(h264d_mb_current *mb, uint32_t str, cons
 				str = str | (((str >> 1) ^ mask) & mask);
 			} else {
 				if ((0 <= ref0) && (0 <= ref1)) {
-					int mv0x, mv0y, mv1x, mv1y;
-					if (ref0 == prev0) {
-						mv0x = mvxy[0];
-						mv0y = mvxy[1];
-						mv1x = mvxy[2];
-						mv1y = mvxy[3];
-					} else {
-						mv1x = mvxy[0];
-						mv1y = mvxy[1];
-						mv0x = mvxy[2];
-						mv0y = mvxy[3];
-					}
-					for (int j = 0; j < 2; ++j) {
-						if (((str & (2 << ((i * 2 + j) * 2))) == 0)
-							&& ((16 <= DIF_SQUARE(mv0x, prev->mov[i * 2 + j].mv[0].v[0]))
-							|| (16 <= DIF_SQUARE(mv0y, prev->mov[i * 2 + j].mv[0].v[1]))
-							|| (16 <= DIF_SQUARE(mv1x, prev->mov[i * 2 + j].mv[1].v[0]))
-							|| (16 <= DIF_SQUARE(mv1y, prev->mov[i * 2 + j].mv[1].v[1])))) {
-								str = str | (1 << ((i * 2 + j) * 2));
-						}
-					}
+					str |= str_mv_calc16x16_bidir(str, ref0, prev0, i * 2, mvxy, prev);
 				} else {
-					int mvx, mvy, lx;
-					if (0 <= ref0) {
-						mvx = mvxy[0];
-						mvy = mvxy[1];
-						lx = (ref0 == prev1);
-					} else {
-						mvx = mvxy[2];
-						mvy = mvxy[3];
-						lx = (ref1 == prev1);
-					}
-					for (int j = 0; j < 2; ++j) {
-						if (((str & (2 << ((i * 2 + j) * 2))) == 0)
-							&& ((16 <= DIF_SQUARE(mvx, prev->mov[i * 2 + j].mv[lx].v[0]))
-							|| (16 <= DIF_SQUARE(mvy, prev->mov[i * 2 + j].mv[lx].v[1])))) {
-								str = str | (1 << ((i * 2 + j) * 2));
-						}
-					}
+					str |= str_mv_calc16x16_onedir(str, ref0, ref1, prev0, i * 2, mvxy, prev);
 				}
 			}
 		}
@@ -5236,9 +5248,58 @@ static inline uint32_t str_mv_calc16x8_left(uint32_t str, int lx, int ref_idx0, 
 	return str;
 }
 
-static inline uint32_t str_mv_calc16x8_vert(uint32_t str, int ref_idx0, int ref_idx1, const int16_t mvxy0[], const int16_t mvxy1[])
+
+static inline bool is_str_mv_calc16x8_center_bidir(int top_ref0, int bot_ref0, const int16_t mvxy[])
 {
-	if ((ref_idx0 != ref_idx1)
+	const int16_t *mv0, *mv1;
+	if (top_ref0 == bot_ref0) {
+		mv0 = &mvxy[0];
+		mv1 = &mvxy[4];
+	} else {
+		mv1 = &mvxy[0];
+		mv0 = &mvxy[4];
+	}
+	mvxy += 8;
+	return ((16 <= DIF_SQUARE(*mv0++, mvxy[0]))
+		|| (16 <= DIF_SQUARE(*mv0, mvxy[1]))
+		|| (16 <= DIF_SQUARE(*mv1++, mvxy[4]))
+		|| (16 <= DIF_SQUARE(*mv1, mvxy[5])));
+}
+
+static inline bool is_str_mv_calc16x8_center_onedir(int top_ref0, int bot_ref0, const int16_t mvxy[])
+{
+	const int16_t *top_mv, *bot_mv;
+	if (0 <= top_ref0) {
+		top_mv = &mvxy[0];
+	} else {
+		top_mv = &mvxy[4];
+	}
+	if (0 <= bot_ref0) {
+		bot_mv = &mvxy[8];
+	} else {
+		bot_mv = &mvxy[12];
+	}
+	return ((16 <= DIF_SQUARE(*top_mv++, *bot_mv++))
+		|| (16 <= DIF_SQUARE(*top_mv, *bot_mv)));
+}
+
+static inline uint32_t str_mv_calc16x8_vert(const h264d_mb_current *mb, uint32_t str, const int8_t ref_idx[], const int16_t mvxy[])
+{
+#if 1
+	if ((str & 0xaa0000) == 0xaa0000) {
+		return str;
+	}
+	int top_ref0 = frame_idx_of_ref(mb, *ref_idx++, 0);
+	int top_ref1 = frame_idx_of_ref(mb, *ref_idx++, 1);
+	int bot_ref0 = frame_idx_of_ref(mb, *ref_idx++, 0);
+	int bot_ref1 = frame_idx_of_ref(mb, *ref_idx, 1);
+	if ((((top_ref0 != bot_ref0) || (top_ref1 != bot_ref1)) && ((top_ref1 != bot_ref0) || (top_ref0 != bot_ref1)))
+		|| (((0 <= top_ref0) && (0 <= top_ref1)) ? is_str_mv_calc16x8_center_bidir : is_str_mv_calc16x8_center_onedir)(top_ref0, bot_ref0, mvxy)) {
+		uint32_t mask = 0x550000;
+		return str | (((str >> 1) ^ mask) & mask);
+	}
+#else
+	if ((ref_idx[0] != ref_idx[2])
 	    || (16 <= DIF_SQUARE(mvxy0[0], mvxy1[0]))
 	    || (16 <= DIF_SQUARE(mvxy0[1], mvxy1[1]))) {
 		for (int i = 0; i < 4; ++i) {
@@ -5248,6 +5309,7 @@ static inline uint32_t str_mv_calc16x8_vert(uint32_t str, int ref_idx0, int ref_
 			}
 		}
 	}
+#endif
 	return str;
 }
 
@@ -5347,7 +5409,7 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 			str_vert = str_mv_calc16x16(mb, str_vert, mv[0][l0][0].v, ref_idx, mb->top4x4inter);
 		}
 	}
-	deb->str_vert = str_mv_calc16x8_vert(str_vert, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v);
+	deb->str_vert = str_mv_calc16x8_vert(mb, str_vert, ref_idx, mv[0][l0][0].v);
 	if (mb->x != 0) {
 		if (mb->left4x4inter->type <= MB_IPCM) {
 			deb->str4_horiz = 1;
@@ -5587,7 +5649,7 @@ static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 			str_horiz = str_mv_calc16x16(mb, str_horiz, mv[0][l0][0].v, ref_idx, mb->left4x4inter);
 		}
 	}
-	deb->str_horiz = str_mv_calc16x8_vert(str_horiz, ref_idx[0], ref_idx[2], mv[0][l0][0].v, mv[1][l0][0].v); /* same as 16x8 vert */
+	deb->str_horiz = str_mv_calc16x8_vert(mb, str_horiz, ref_idx, mv[0][l0][0].v);
 
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
