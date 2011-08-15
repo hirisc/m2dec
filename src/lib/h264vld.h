@@ -474,7 +474,7 @@ static const int8_t sub_mb_ref_map_p[4] = {
 };
 
 static const int8_t sub_mb_ref_map_b[13] = {
-	0,
+	-1,
 	1, 2, 3,
 	1, 1,
 	2, 2,
