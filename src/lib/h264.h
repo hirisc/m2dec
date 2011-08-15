@@ -78,12 +78,15 @@ enum {
 	MB_PSKIP = 31,
 	MB_BSKIP = 31,
 	MB_BDIRECT16x16 = 31,
+	EXTENDED_SAR = 255
+};
+
+typedef enum {
 	COL_MB16x16 = 0,
 	COL_MB16x8,
 	COL_MB8x16,
-	COL_MB8x8,
-	EXTENDED_SAR = 255
-};
+	COL_MB8x8
+} col_mbtype_t;
 
 typedef struct {
 	int8_t cpb_cnt_minus1; /* [0, 31] */
@@ -187,7 +190,7 @@ typedef union {
 } h264d_vector_t;
 
 typedef struct {
-	int8_t type;
+	col_mbtype_t type;
 	int8_t ref[4];
 	h264d_vector_t mv[16];
 } h264d_col_mb_t;
