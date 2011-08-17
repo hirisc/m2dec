@@ -4922,18 +4922,6 @@ static inline void direct_zero_pred(h264d_mb_current *mb, int width, int height,
 	direct_zero_pred_block(frms0->chroma + offset, frms1->chroma + offset, mb->chroma + ((yoffset * stride) >> 1) + xoffset, width, height >> 1, stride);
 }
 
-static inline void direct_zero_pred_lx(h264d_mb_current *mb, int lx, int width, int height, int xoffset, int yoffset)
-{
-	m2d_frame_t *frms = &(mb->frame->frames[mb->frame->refs[lx][0].frame_idx]);
-	int stride = mb->max_x * 16;
-	int offset;
-
-	offset = (mb->y * 16 + yoffset) * stride + mb->x * 16 + xoffset;
-	copy_inter_align[(unsigned)width >> 3](frms->luma + offset, mb->luma + yoffset * stride + xoffset, height, stride, stride);
-	offset = (((mb->y * 16 + yoffset) * stride) >> 1) + mb->x * 16 + xoffset;
-	copy_inter_align[(unsigned)width >> 3](frms->chroma + offset, mb->chroma + ((yoffset * stride) >> 1) + xoffset, height >> 1, stride, stride);
-};
-
 static inline uint32_t spread(uint32_t a)
 {
 	return ((a & 0xc0) << 18) | ((a & 0x30) << 12) | ((a & 0xc) << 6) | (a & 3);
