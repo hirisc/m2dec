@@ -637,7 +637,7 @@ int h264d_set_frames(h264d_context *h2d, int num_frame, m2d_frame_t *frame, uint
 {
 	h264d_mb_current *mb;
 
-	if (!h2d || (num_frame < 3) || (NUM_ARRAY(mb->frame->frames) < num_frame) || !frame || !second_frame) {
+	if (!h2d || (num_frame < 3) || (NUM_ARRAY(mb->frame->frames) < (size_t)num_frame) || !frame || !second_frame) {
 		return -1;
 	}
 	mb = &h2d->mb_current;
