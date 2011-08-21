@@ -4954,8 +4954,13 @@ static inline int DIF_SQUARE(int a, int b) {
 	return t * t;
 }
 
-static inline int frame_idx_of_ref(const h264d_mb_current *mb, int ref_idx, int lx) {
-	return (0 <= ref_idx) ? mb->frame->refs[lx][ref_idx].frame_idx : -1;
+static inline bool DIF_ABS_LARGER_THAN4(int a, int b) {
+	return 16 <= DIF_SQUARE(a, b);
+}
+
+static inline bool ABS_LARGER_THAN4(uint32_t x)
+{
+	return 16 <= x * x;
 }
 
 static inline uint32_t str_mv_calc16x16_bidir_both(uint32_t str, int offset, const int16_t mvxy[], const prev_mb_t *prev, int step)
@@ -4968,14 +4973,14 @@ static inline uint32_t str_mv_calc16x16_bidir_both(uint32_t str, int offset, con
 			int prev0y = *mv_prev++;
 			int prev1x = *mv_prev++;
 			int prev1y = *mv_prev;
-			if (((16 <= DIF_SQUARE(mvxy[0], prev0x))
-				|| (16 <= DIF_SQUARE(mvxy[1], prev0y))
-				|| (16 <= DIF_SQUARE(mvxy[2], prev1x))
-				|| (16 <= DIF_SQUARE(mvxy[3], prev1y)))
-				&& ((16 <= DIF_SQUARE(mvxy[0], prev1x))
-				|| (16 <= DIF_SQUARE(mvxy[1], prev1y))
-				|| (16 <= DIF_SQUARE(mvxy[2], prev0x))
-				|| (16 <= DIF_SQUARE(mvxy[3], prev0y)))) {
+			if ((DIF_ABS_LARGER_THAN4(mvxy[0], prev0x)
+				|| DIF_ABS_LARGER_THAN4(mvxy[1], prev0y)
+				|| DIF_ABS_LARGER_THAN4(mvxy[2], prev1x)
+				|| DIF_ABS_LARGER_THAN4(mvxy[3], prev1y))
+				&& (DIF_ABS_LARGER_THAN4(mvxy[0], prev1x)
+				|| DIF_ABS_LARGER_THAN4(mvxy[1], prev1y)
+				|| DIF_ABS_LARGER_THAN4(mvxy[2], prev0x)
+				|| DIF_ABS_LARGER_THAN4(mvxy[3], prev0y))) {
 				str = str | (mask >> 1);
 			}
 		}
@@ -4998,10 +5003,10 @@ static inline uint32_t str_mv_calc16x16_bidir_one(uint32_t str, int ref0, int pr
 	for (int j = 0; j < 2; ++j) {
 		if (!(str & mask)) {
 			const int16_t *mv_prev = &(prev->mov[j + offset].mv[0].v[0]);
-			if (((16 <= DIF_SQUARE(mvxy[0], *mv_prev++))
-				|| (16 <= DIF_SQUARE(mvxy[1], *mv_prev++))
-				|| (16 <= DIF_SQUARE(mvxy2[0], *mv_prev++))
-				|| (16 <= DIF_SQUARE(mvxy2[1], *mv_prev)))) {
+			if (DIF_ABS_LARGER_THAN4(mvxy[0], *mv_prev++)
+				|| DIF_ABS_LARGER_THAN4(mvxy[1], *mv_prev++)
+				|| DIF_ABS_LARGER_THAN4(mvxy2[0], *mv_prev++)
+				|| DIF_ABS_LARGER_THAN4(mvxy2[1], *mv_prev)) {
 				str = str | (mask >> 1);
 			}
 		}
@@ -5034,14 +5039,18 @@ static inline uint32_t str_mv_calc16x16_onedir(uint32_t str, int ref0, int ref1,
 		if ((str & (2 << ((j + offset) * 2))) == 0) {
 			int mvx = mvxy[0];
 			int mvy = mvxy[1];
-			if ((16 <= DIF_SQUARE(mvx, prev->mov[j + offset].mv[lx].v[0]))
-				|| (16 <= DIF_SQUARE(mvy, prev->mov[j + offset].mv[lx].v[1]))) {
+			if (DIF_ABS_LARGER_THAN4(mvx, prev->mov[j + offset].mv[lx].v[0])
+				|| DIF_ABS_LARGER_THAN4(mvy, prev->mov[j + offset].mv[lx].v[1])) {
 				str = str | (1 << ((j + offset) * 2));
 			}
 		}
 		mvxy += step;
 	}
 	return str;
+}
+
+static inline int frame_idx_of_ref(const h264d_mb_current *mb, int ref_idx, int lx) {
+	return (0 <= ref_idx) ? mb->frame->refs[lx][ref_idx].frame_idx : -1;
 }
 
 static inline uint32_t str_mv_calc16x16_mv(uint32_t str, int ref0, int ref1, int prev_ref0, int offset, const int16_t mvxy[], const prev_mb_t *prev, int step)
@@ -5284,18 +5293,18 @@ static inline bool is_str_mv_calc16x8_center_bidir(int top_ref0, int bot_ref0, c
 	}
 	mv_bot0 = mv[1].mv[0].v;
 	mv_bot1 = mv[1].mv[1].v;
-	return ((16 <= DIF_SQUARE(*mv_top0++, *mv_bot0++))
-		|| (16 <= DIF_SQUARE(*mv_top1++, *mv_bot1++))
-		|| (16 <= DIF_SQUARE(*mv_top0, *mv_bot0))
-		|| (16 <= DIF_SQUARE(*mv_top1, *mv_bot1)));
+	return (DIF_ABS_LARGER_THAN4(*mv_top0++, *mv_bot0++)
+		|| DIF_ABS_LARGER_THAN4(*mv_top1++, *mv_bot1++)
+		|| DIF_ABS_LARGER_THAN4(*mv_top0, *mv_bot0)
+		|| DIF_ABS_LARGER_THAN4(*mv_top1, *mv_bot1));
 }
 
 static inline bool is_str_mv_calc16x8_center_onedir(int top_ref0, int bot_ref0, const h264d_vector_set_t *mv)
 {
 	const int16_t *top_mv = mv[0].mv[top_ref0 < 0].v;
 	const int16_t *bot_mv = mv[1].mv[bot_ref0 < 0].v;
-	return ((16 <= DIF_SQUARE(*top_mv++, *bot_mv++))
-		|| (16 <= DIF_SQUARE(*top_mv, *bot_mv)));
+	return (DIF_ABS_LARGER_THAN4(*top_mv++, *bot_mv++)
+		|| DIF_ABS_LARGER_THAN4(*top_mv, *bot_mv));
 }
 
 static inline uint32_t str_mv_calc16x8_vert(const h264d_mb_current *mb, uint32_t str, const int8_t ref_idx[], const h264d_vector_set_t *mv)
@@ -6208,10 +6217,6 @@ static inline void direct_mv_pred(h264d_mb_current *mb, const int8_t *ref_idx, c
  16x16: 0x55555555
 */
 #define COLBITS(X, Y) ((((X) == 4) ? 1 : (((X) == 8) ? 5 : 0x55)) * (((Y) == 4) ? 1 : (((Y) == 8) ? 0x101 : 0x01010101)))
-static inline bool ABS_LARGER_THAN4(uint32_t x)
-{
-	return 16 <= x * x;
-}
 
 template <int N, int X, int Y>
 struct pred_direct_col_block_bidir {
@@ -6635,10 +6640,10 @@ static inline uint32_t str_mv_calc8x8_edge_bidir(uint32_t str, int ref0, int pre
 	int lx = (ref0 != prev_ref0);
 	for (int j = 0; j < 2; ++j) {
 		if (((str & (2 << ((j + offset) * 2))) == 0)
-			&& ((16 <= DIF_SQUARE(p->mv[j * N][lx].v[0], prev->mov[j + offset].mv[0].v[0]))
-			|| (16 <= DIF_SQUARE(p->mv[j * N][lx].v[1], prev->mov[j + offset].mv[0].v[1]))
-			|| (16 <= DIF_SQUARE(p->mv[j * N][lx ^ 1].v[0], prev->mov[j + offset].mv[1].v[0]))
-			|| (16 <= DIF_SQUARE(p->mv[j * N][lx ^ 1].v[1], prev->mov[j + offset].mv[1].v[1])))) {
+			&& (DIF_ABS_LARGER_THAN4(p->mv[j * N][lx].v[0], prev->mov[j + offset].mv[0].v[0])
+			|| DIF_ABS_LARGER_THAN4(p->mv[j * N][lx].v[1], prev->mov[j + offset].mv[0].v[1])
+			|| DIF_ABS_LARGER_THAN4(p->mv[j * N][lx ^ 1].v[0], prev->mov[j + offset].mv[1].v[0])
+			|| DIF_ABS_LARGER_THAN4(p->mv[j * N][lx ^ 1].v[1], prev->mov[j + offset].mv[1].v[1]))) {
 			str = str | (1 << ((j + offset) * 2));
 		}
 	}
@@ -6658,8 +6663,8 @@ static inline uint32_t str_mv_calc8x8_edge_onedir(uint32_t str, int ref0, int re
 	}
 	for (int j = 0; j < 2; ++j) {
 		if (((str & (2 << ((j + offset) * 2))) == 0)
-			&& ((16 <= DIF_SQUARE(p->mv[j * N][lx_s].v[0], prev->mov[j + offset].mv[lx_d].v[0]))
-			|| (16 <= DIF_SQUARE(p->mv[j * N][lx_s].v[1], prev->mov[j + offset].mv[lx_d].v[1])))) {
+			&& (DIF_ABS_LARGER_THAN4(p->mv[j * N][lx_s].v[0], prev->mov[j + offset].mv[lx_d].v[0])
+			|| DIF_ABS_LARGER_THAN4(p->mv[j * N][lx_s].v[1], prev->mov[j + offset].mv[lx_d].v[1]))) {
 			str = str | (1 << ((j + offset) * 2));
 		}
 	}
@@ -6702,10 +6707,10 @@ static inline uint32_t str_mv_calc8x8_mid_bidir(uint32_t str, int offset, const 
 {
 	for (int j = 0; j < 2; ++j) {
 		if ((str & (2 << ((j + offset) * 2))) == 0) {
-			if ((16 <= DIF_SQUARE(p->mv[j * N][0].v[0], p->mv[j * N + (3 - N)][0].v[0]))
-				|| (16 <= DIF_SQUARE(p->mv[j * N][0].v[1], p->mv[j * N + (3 - N)][0].v[1]))
-				|| (16 <= DIF_SQUARE(p->mv[j * N][1].v[0], p->mv[j * N + (3 - N)][1].v[0]))
-				|| (16 <= DIF_SQUARE(p->mv[j * N][1].v[1], p->mv[j * N + (3 - N)][1].v[1]))) {
+			if (DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[0], p->mv[j * N + (3 - N)][0].v[0])
+				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[1], p->mv[j * N + (3 - N)][0].v[1])
+				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[0], p->mv[j * N + (3 - N)][1].v[0])
+				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[1], p->mv[j * N + (3 - N)][1].v[1])) {
 				str = str | (1 << ((j + offset) * 2));
 			}
 		}
@@ -6718,8 +6723,8 @@ static inline uint32_t str_mv_calc8x8_mid_onedir(uint32_t str, int lx, int offse
 {
 	for (int j = 0; j < 2; ++j) {
 		if ((str & (2 << ((j + offset) * 2))) == 0) {
-			if ((16 <= DIF_SQUARE(p->mv[j * N][lx].v[0], p->mv[j * N + (3 - N)][lx].v[0]))
-				|| (16 <= DIF_SQUARE(p->mv[j * N][lx].v[1], p->mv[j * N + (3 - N)][lx].v[1]))) {
+			if (DIF_ABS_LARGER_THAN4(p->mv[j * N][lx].v[0], p->mv[j * N + (3 - N)][lx].v[0])
+				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][lx].v[1], p->mv[j * N + (3 - N)][lx].v[1])) {
 				str = str | (1 << ((j + offset) * 2));
 			}
 		}
@@ -6746,10 +6751,10 @@ static inline uint32_t str_mv_calc8x8_half_bidir(uint32_t str, int ref0, int pre
 			const int16_t *mv0 = p[0].mv[j * N + (3 - N)][0].v;
 			const int16_t *mv1a = p[3 - N].mv[j * N][lx].v;
 			const int16_t *mv1b = p[3 - N].mv[j * N][lx ^ 1].v;
-			if ((16 <= DIF_SQUARE(*mv0++, *mv1a++))
-				|| (16 <= DIF_SQUARE(*mv0++, *mv1a))
-				|| (16 <= DIF_SQUARE(*mv0++, *mv1b++))
-				|| (16 <= DIF_SQUARE(*mv0++, *mv1b))) {
+			if (DIF_ABS_LARGER_THAN4(*mv0++, *mv1a++)
+				|| DIF_ABS_LARGER_THAN4(*mv0++, *mv1a)
+				|| DIF_ABS_LARGER_THAN4(*mv0++, *mv1b++)
+				|| DIF_ABS_LARGER_THAN4(*mv0, *mv1b)) {
 				str = str | (1 << ((j + offset) * 2));
 			}
 		}
@@ -6772,7 +6777,7 @@ static inline uint32_t str_mv_calc8x8_half_onedir(uint32_t str, int ref0, int re
 		if ((str & (2 << ((j + offset) * 2))) == 0) {
 			const int16_t *mv0 = p[0].mv[j * N + (3 - N)][lx_s].v;
 			const int16_t *mv1 = p[3 - N].mv[j * N][lx_d].v;
-			if ((16 <= DIF_SQUARE(*mv0++, *mv1++)) || (16 <= DIF_SQUARE(*mv0, *mv1))) {
+			if (DIF_ABS_LARGER_THAN4(*mv0++, *mv1++) || DIF_ABS_LARGER_THAN4(*mv0, *mv1)) {
 				str = str | (1 << ((j + offset) * 2));
 			}
 		}
