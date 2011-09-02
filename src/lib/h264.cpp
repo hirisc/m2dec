@@ -8404,7 +8404,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				}
 			}
 			str = curr->str_vert;
-			if ((y != 0) && (!idc || !mb->firstline) && (str & 255)) {
+			if ((y != 0) && (!idc || mb->firstline < 0) && (str & 255)) {
 				/* top edge of MB */
 				qp = (curr->qpy + (curr - max_x)->qpy + 1) >> 1;
 				AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
