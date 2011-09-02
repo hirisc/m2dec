@@ -7302,12 +7302,12 @@ struct sub_mb_type_p_cavlc {
 };
 
 
-static inline void fill_direct8x8_mv(prev8x8_t *pblk, const int8_t *ref_idx, const h264d_vector_t *mv)
+static inline void fill_direct8x8_mv(prev8x8_t *pblk, const prev8x8_t *src)
 {
-	uint32_t mov0 = mv[0].vector;
-	uint32_t mov1 = mv[1].vector;
-	pblk->ref[0] = ref_idx[0];
-	pblk->ref[1] = ref_idx[1];
+	uint32_t mov0 = src->mv[0][0].vector;
+	uint32_t mov1 = src->mv[0][1].vector;
+	pblk->ref[0] = src->ref[0];
+	pblk->ref[1] = src->ref[1];
 	for (int i = 0; i < 4; ++i) {
 		pblk->mv[i][0].vector = mov0;
 		pblk->mv[i][1].vector = mov1;
@@ -7318,8 +7318,7 @@ template <typename F>
 static inline int sub_mb_type_b_base(h264d_mb_current *mb, dec_bits *st, int8_t sub_mb_type[], prev8x8_t curr_blk[], int avail,
 				      F SubMbTypeB)
 {
-	const h264d_vector_t *mv;
-	const int8_t *ref_idx;
+	const prev8x8_t *ref_blk;
 	int b_direct_cnt = 0;
 
 	for (int i = 0; i < 4; ++i) {
@@ -7331,10 +7330,9 @@ static inline int sub_mb_type_b_base(h264d_mb_current *mb, dec_bits *st, int8_t 
 		if (type == 0) {
 			if (b_direct_cnt++ == 0) {
 				b_direct_ref_mv_calc(mb, avail, curr_blk[i].ref, curr_blk[i].mv[0][0].v);
-				ref_idx = curr_blk[i].ref;
-				mv = curr_blk[i].mv[0];
+				ref_blk = &curr_blk[i];
 			}
-			fill_direct8x8_mv(&curr_blk[i], ref_idx, mv);
+			fill_direct8x8_mv(&curr_blk[i], ref_blk);
 		}
 	}
 	return 0;
