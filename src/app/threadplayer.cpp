@@ -81,6 +81,9 @@ public:
 		UniUnlockMutex(mutex_);
 	}
 	T& getfilled() {
+		if (empty() && terminated()) {
+			return data_[tail_];
+		}
 		UniLockMutex(mutex_);
 		while (empty() && !terminated()) {
 			UniCondWait(cond_, mutex_);
@@ -140,11 +143,14 @@ private:
 	int run_impl() {
 		int err;
 		RecordTime(1);
-		do {
+		for (;;) {
 			Buffer& buf = outqueue_.emptybuf();
 			err = fr_.read_block(buf);
+			if (err < 0) {
+				break;
+			}
 			outqueue_.setfilled(buf);
-		} while (0 <= err);
+		}
 		outqueue_.terminate();
 		fprintf(stderr, "File terminate.\n");
 		RecordTime(0);
