@@ -216,18 +216,18 @@ void skip_bytes(dec_bits *ths, int bytes)
 	int rest;
 
 	assert(0 < bytes);
-	do {
-		tail = dec_bits_tail(ths);
+	tail = dec_bits_tail(ths);
+	for (;;) {
 		current = dec_bits_current(ths);
 		rest = (int)(tail - current);
 		if (bytes <= rest) {
 			dec_bits_set_data(ths, current + bytes, (size_t)(rest - bytes));
 			break;
 		}
-		skip_bytes(ths, rest);
-		show_onebit(ths);
 		bytes -= rest;
-	} while (rest < bytes);
+		dec_bits_set_data(ths, current + rest, (size_t)bytes);
+		show_bits(ths, 8);
+	}
 }
 
 /**Returns current read position with adjustment for caching.
