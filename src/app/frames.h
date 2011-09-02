@@ -37,7 +37,7 @@ public:
 		: luma_len_(((width + 15) & ~15) * ((height + 15) & ~15)),
 		frame_(num_mem),
 		aligned_(num_mem),
-		second_(second_len) {
+		second_(second_len ? second_len : 1) {
 		if (num_mem <= 0 || luma_len_ <= 0) {
 			return;
 		}
