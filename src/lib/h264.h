@@ -303,8 +303,9 @@ typedef struct {
 	int8_t mb_skip;
 	int8_t chroma_pred_mode;
 	int8_t cbp;
-	int8_t ref[2][2];
 	uint16_t cbf;
+	int8_t ref[2][2];
+	int8_t frmidx[2][2];
 	h264d_vector_set_t mov[4];
 	h264d_vector_set_t mvd[4];
 } prev_mb_t;
@@ -380,7 +381,7 @@ typedef struct mb_current {
 } h264d_mb_current;
 
 struct h264d_bdirect_functions_t{
-	void (*direct8x8)(h264d_mb_current *mb, int blk_idx, prev8x8_t *pblk);
+	const prev8x8_t *(*direct8x8)(h264d_mb_current *mb, int blk_idx, prev8x8_t *curr_blk, int avail, const prev8x8_t *ref_blk);
 	void (*direct16x16)(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_set_t *mv);
 };
 
