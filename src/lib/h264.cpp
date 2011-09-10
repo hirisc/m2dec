@@ -7470,7 +7470,7 @@ static const mb_code mb_decode[] = {
 static int adjust_mb_type(int mb_type, int slice_type)
 {
 	if (slice_type == P_SLICE) {
-		if (mb_type < 30) {
+		if (mb_type <= 30) {
 			mb_type -= 5;
 			return mb_type < 0 ? mb_type + MB_BDIRECT16x16 : mb_type;
 		} else {
@@ -8843,7 +8843,7 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 		if (nal_id & 0x60) {
 			post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, mb, 0);
 			post_ref_pic_marking(hdr, nal_id & 31, max_frame_num, num_ref_frames, mb, 1);
-			record_map_col_ref_frameidx(mb->frame->curr_col->map_col_frameidx, mb->frame->refs[1], num_ref_frames);
+			record_map_col_ref_frameidx(mb->frame->curr_col->map_col_frameidx, mb->frame->refs[0], num_ref_frames);
 			std::swap(mb->frame->curr_col, find_l1_curr_pic(mb->frame->refs[1], hdr->marking.mmco5 ? 0 : hdr->poc)->col);
 			insert_dpb(&frame->dpb, hdr->poc, frame->index, hdr->marking.idr | hdr->marking.mmco5);
 		} else {
