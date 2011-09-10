@@ -3364,6 +3364,7 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	mb->prev_qp_delta = 0;
 	mb->cbp = 0x3f;
 	mb->cbf = 0xffff;
+	mb_intra_save_info(mb);
 	return 0;
 }
 
