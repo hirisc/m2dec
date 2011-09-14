@@ -3363,7 +3363,7 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	mb->deblock_curr->qpc = 0;
 	mb->prev_qp_delta = 0;
 	mb->cbp = 0x3f;
-	mb->cbf = 0xffff;
+	mb->cbf = 0x7ffffff;
 	mb_intra_save_info(mb);
 	return 0;
 }
@@ -9789,20 +9789,12 @@ static int ctxidxinc_cbf_chroma_dc(h264d_mb_current *mb, uint32_t cbf, int avail
 {
 	int ab;
 	if (avail & 1) {
-		if (mb->left4x4inter->type == MB_IPCM) {
-			ab = 1;
-		} else {
-			ab = (mb->left4x4inter->cbf >> (4 + N)) & 1;
-		}
+		ab = (mb->left4x4inter->cbf >> (4 + N)) & 1;
 	} else {
 		ab = (mb->type < MB_IPCM);
 	}
 	if (avail & 2) {
-		if (mb->top4x4inter->type == MB_IPCM) {
-			ab += 2;
-		} else {
-			ab += (mb->top4x4inter->cbf >> (3 + N)) & 2;
-		}
+		ab += (mb->top4x4inter->cbf >> (3 + N)) & 2;
 	} else {
 		ab += (mb->type < MB_IPCM) * 2;
 	}
