@@ -1123,20 +1123,33 @@ static void create_map_col_to_list0(int8_t *map_col_to_list0, int16_t *scale, co
 	}
 }
 
+static const prev8x8_t *pred_direct4x4_temporal(h264d_mb_current *mb, int blk_idx, prev8x8_t *curr_blk, int avail, const prev8x8_t *ref_blk);
 static const prev8x8_t *pred_direct8x8_temporal(h264d_mb_current *mb, int blk_idx, prev8x8_t *curr_blk, int avail, const prev8x8_t *ref_blk);
 static void b_skip_mb_temporal(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_set_t *mv);
 static const prev8x8_t *pred_direct8x8_spatial(h264d_mb_current *mb, int blk_idx, prev8x8_t *curr_blk, int avail, const prev8x8_t *ref_blk);
 static void b_skip_mb_spatial(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_set_t *mv);
 
-const h264d_bdirect_functions_t bdirect_functions[2] = {
+const h264d_bdirect_functions_t bdirect_functions[2][2] = {
 	{
-		pred_direct8x8_temporal,
-		b_skip_mb_temporal
+		{
+			pred_direct4x4_temporal,
+			b_skip_mb_temporal
+		},
+		{
+			pred_direct8x8_spatial,
+			b_skip_mb_spatial
+		}
 	},
 	{
-		pred_direct8x8_spatial,
-		b_skip_mb_spatial
-	}
+		{
+			pred_direct8x8_temporal,
+			b_skip_mb_temporal
+		},
+		{
+			pred_direct8x8_spatial,
+			b_skip_mb_spatial
+		}
+	},
 };
 
 static int slice_header(h264d_context *h2d, dec_bits *st)
@@ -1243,11 +1256,9 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 			}
 			mb->sub_mb_ref_map = sub_mb_ref_map_b;
 			if (hdr->direct_spatial_mv_pred_flag == 0) {
-				mb->bdirect->func = &bdirect_functions[0];
 				create_map_col_to_list0(mb->bdirect->map_col_to_list0, mb->bdirect->scale, mb->frame->refs[0], mb->frame->refs[1], hdr->poc, sps->num_ref_frames);
-			} else {
-				mb->bdirect->func = &bdirect_functions[1];
 			}
+			mb->bdirect->func = &bdirect_functions[sps->direct_8x8_inference_flag][hdr->direct_spatial_mv_pred_flag];
 			if (pps->weighted_bipred_idc == 1) {
 				pred_weight_table(&hdr->pred_weight_table[0], st, hdr->num_ref_idx_lx_active_minus1[0]);
 				pred_weight_table(&hdr->pred_weight_table[1], st, hdr->num_ref_idx_lx_active_minus1[1]);
@@ -7877,7 +7888,7 @@ static inline void temporal_direct_block(h264d_mb_current *mb, const h264d_col_m
 	}
 }
 
-static const prev8x8_t *pred_direct8x8_temporal(h264d_mb_current *mb, int blk_idx, prev8x8_t *pblk, int avail, const prev8x8_t *ref_blk)
+static const prev8x8_t *pred_direct4x4_temporal(h264d_mb_current *mb, int blk_idx, prev8x8_t *pblk, int avail, const prev8x8_t *ref_blk)
 {
 	const h264d_ref_frame_t *colpic = &(mb->frame->refs[1][0]);
 	const h264d_col_mb_t *col_mb = &colpic->col->col_mb[mb->y * mb->max_x + mb->x];
@@ -7890,6 +7901,18 @@ static const prev8x8_t *pred_direct8x8_temporal(h264d_mb_current *mb, int blk_id
 		memcpy(pblk->mv[2], pblk->mv[0], sizeof(pblk->mv[0]));
 		memcpy(pblk->mv[3], pblk->mv[0], sizeof(pblk->mv[0]));
 	}
+	return 0;
+}
+
+static const prev8x8_t *pred_direct8x8_temporal(h264d_mb_current *mb, int blk_idx, prev8x8_t *pblk, int avail, const prev8x8_t *ref_blk)
+{
+	const h264d_ref_frame_t *colpic = &(mb->frame->refs[1][0]);
+	const h264d_col_mb_t *col_mb = &colpic->col->col_mb[mb->y * mb->max_x + mb->x];
+	pblk += blk_idx;
+	temporal_direct_block<8, 8, 8, 8>(mb, col_mb, pblk->ref, pblk->mv[0], blk_idx);
+	memcpy(pblk->mv[1], pblk->mv[0], sizeof(pblk->mv[0]));
+	memcpy(pblk->mv[2], pblk->mv[0], sizeof(pblk->mv[0]));
+	memcpy(pblk->mv[3], pblk->mv[0], sizeof(pblk->mv[0]));
 	return 0;
 }
 
