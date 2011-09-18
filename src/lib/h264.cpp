@@ -340,17 +340,23 @@ static int skip_sei(dec_bits *stream)
 	do {
 		skip_sei_message(stream);
 		byte_align(stream);
-	} while (show_bits(stream, 8) != 0);
+	} while (show_bits(stream, 8) != 0x80);
 	return 0;
+}
+
+static void skip_sei_data(dec_bits *st, int byte_len)
+{
+	while (byte_len-- != 0) {
+		skip_bits(st, 8);
+	}
 }
 
 static int skip_sei_message(dec_bits *stream)
 {
 	int d;
 	d = get_sei_message_size(stream);
-	skip_bits(stream, d * 8);
 	d = get_sei_message_size(stream);
-	skip_bits(stream, d * 8);
+	skip_sei_data(stream, d);
 	return 0;
 }
 
