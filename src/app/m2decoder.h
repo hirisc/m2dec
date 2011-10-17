@@ -99,18 +99,20 @@ public:
 	int decode(void *obj, void (*post_dst)(void *, m2d_frame_t&)) {
 		m2d_frame_t frm;
 		int err = -1;
-		while (func()->get_decoded_frame(context(), &frm, 0) <= 0) {
+		while (func()->peek_decoded_frame(context(), &frm, 0) <= 0) {
 			err = func()->decode_picture(context());
 			if (err < 0) {
-				while (func()->get_decoded_frame(context(), &frm, 1)) {
+				while (func()->peek_decoded_frame(context(), &frm, 1)) {
 					post_dst(obj, frm);
+					func()->get_decoded_frame(context(), &frm, 1);
 				}
 				return err;
 			}
 		}
 		do {
+			func()->get_decoded_frame(context(), &frm, 0);
 			post_dst(obj, frm);
-		} while (func()->get_decoded_frame(context(), &frm, 0));
+		} while (func()->peek_decoded_frame(context(), &frm, 0));
 		return 0;
 	}
 };
