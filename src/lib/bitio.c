@@ -186,6 +186,7 @@ void skip_bits(dec_bits *ths, int pat_len)
 	} else {
 		unsigned bits_shortage = (unsigned)(-cache_len);
 		ths->buf_ += bits_shortage / 8;
+		ths->cache_ = 0;
 		ths->cache_len_ = 0;
 		dec_bits_cachefill(ths);
 		bits_shortage &= 7;
