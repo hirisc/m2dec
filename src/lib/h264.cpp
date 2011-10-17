@@ -278,6 +278,65 @@ static inline int max_dpb_mbs(int profile_idc, int level_idc, unsigned constrain
 	return max_dpb;
 }
 
+
+static inline bool is_high_profile(uint32_t profile_idc)
+{
+	return (profile_idc == 44) || (profile_idc == 83) || (profile_idc == 86) || (profile_idc == 100) || (profile_idc == 110) || (profile_idc == 118) || (profile_idc == 128) || (profile_idc == 122) || (profile_idc == 244);
+}
+
+static inline int scaling_list(dec_bits *st, int size, bool& use_default)
+{
+	int last_scale = 8;
+	int next_scale = 8;
+	int scale;
+	for (int i = 0; i < size; ++i) {
+		if (next_scale != 0) {
+			int32_t delta_scale;
+			READ_SE_RANGE(delta_scale, st, -128, 127);
+			next_scale = (last_scale + delta_scale + 256) & 255;
+			if ((i == 0) && (next_scale == 0)) {
+				use_default = true;
+			}
+		}
+		scale = (next_scale == 0) ? last_scale : next_scale;
+		last_scale = scale;
+	}
+	return 0;
+}
+
+static inline int read_seq_high_extension(h264d_sps *sps, dec_bits *stream)
+{
+	uint32_t chroma_idc;
+	uint32_t tmp;
+
+	READ_UE_RANGE(chroma_idc, stream, 3);
+	if (chroma_idc == 3) {
+		get_onebit(stream);
+	}
+	READ_UE_RANGE(tmp, stream, 6);
+	READ_UE_RANGE(tmp, stream, 6);
+	get_onebit(stream);
+	if (get_onebit(stream)) {
+		int max = (chroma_idc != 3) ? 8 : 12;
+		bool use_default;
+		for (int i = 0; i < 6; ++i) {
+			if (get_onebit(stream)) {
+				if (scaling_list(stream, 16, use_default) < 0) {
+					return -1;
+				}
+			}
+		}
+		for (int i = 0; i < max; ++i) {
+			if (get_onebit(stream)) {
+				if (scaling_list(stream, 64, use_default) < 0) {
+					return -1;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
 static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 {
 	uint32_t sps_profile_idc, sps_constraint_set_flag;
@@ -292,7 +351,11 @@ static int read_seq_parameter_set(h264d_sps *sps, dec_bits *stream)
 	sps->profile_idc = sps_profile_idc;
 	sps->constraint_set_flag = sps_constraint_set_flag;
 	sps->level_idc = sps_level_idc;
-	if ((80 <= sps->profile_idc) && (sps->profile_idc <= 83)) {
+	sps->is_high_profile = is_high_profile(sps->profile_idc);
+	if (sps->is_high_profile) {
+		if (read_seq_high_extension(sps, stream) < 0) {
+			return -1;
+		}
 	}
 	READ_UE_RANGE(tmp, stream, 27);
 	sps->log2_max_frame_num = tmp + 4;
@@ -746,7 +809,6 @@ static inline void dpb_insert_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 	dpb->data[size].poc = poc;
 	dpb->data[size].frame_idx = frame_idx;
 }
-
 
 static int dpb_force_pop(h264d_dpb_t *dpb)
 {
