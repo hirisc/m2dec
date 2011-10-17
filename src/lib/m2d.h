@@ -59,6 +59,7 @@ typedef struct {
 	int (*get_info)(void *, m2d_info_t *);
 	int (*set_frames)(void *, int, m2d_frame_t *, uint8_t *, int);
 	int (*decode_picture)(void *);
+	int (*peek_decoded_frame)(void *, m2d_frame_t *, int);
 	int (*get_decoded_frame)(void *, m2d_frame_t *, int);
 } m2d_func_table_t;
 

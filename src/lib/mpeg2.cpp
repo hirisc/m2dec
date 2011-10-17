@@ -1518,6 +1518,43 @@ static int m2d_decode_macroblocks(m2d_context *m2d)
 	return err;
 }
 
+__LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
+{
+	m2d_seq_header *header;
+	m2d_mb_current *mb;
+	m2d_frames *frames;
+	int idx;
+
+	if ((m2d == 0) || ((intptr_t)m2d & 3) || (frame == 0) || ((intptr_t)frame & 3)) {
+		return -1;
+	}
+	mb = m2d->mb_current;
+	frames = mb->frames;
+	if (is_end) {
+		idx = frames->idx_of_ref[1];
+	} else if (m2d->picture->picture_coding_type == B_VOP) {
+		idx = frames->index;
+	} else {
+		idx = frames->idx_of_ref[0];
+	}
+	*frame = frames->frames[idx];
+
+	header = m2d->seq_header;
+	frame->width =
+#ifdef FAST_DECODE
+		mb->mbmax_x * 2;
+#else
+		header->horizontal_size_value;
+#endif
+	frame->height =
+#ifdef FAST_DECODE
+		mb->mbmax_y * 2;
+#else
+		header->vertical_size_value;
+#endif
+	return 1;
+}
+
 __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
 	m2d_seq_header *header;
@@ -1792,6 +1829,7 @@ const m2d_func_table_t m2d_func_ = {
 	(int (*)(void *, m2d_info_t *))m2d_get_info,
 	(int (*)(void *, int, m2d_frame_t *, uint8_t *, int))m2d_set_frames,
 	(int (*)(void *))m2d_decode_data,
+	(int (*)(void *, m2d_frame_t *, int))m2d_peek_decoded_frame,
 	(int (*)(void *, m2d_frame_t *, int))m2d_get_decoded_frame
 };
 
