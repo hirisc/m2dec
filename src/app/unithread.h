@@ -56,7 +56,8 @@ struct LogRecord {
 	LogRecord(unsigned long long t, int id, int m) : time(t), threadid(id), mark(m) {}
 };
 
-static std::vector<LogRecord> LogList;
+typedef std::vector<LogRecord> LogListType;
+static LogListType LogList;
 
 static void LogInit()
 {
@@ -102,21 +103,40 @@ static void RecordTime(int mark)
 
 #ifndef __RENESAS_VERSION__
 
-#include <functional>
-
-class LogDumpEach : public std::binary_function<LogRecord, unsigned long long, void> {
-public:
-	void operator() (LogRecord& rec, const unsigned long long& start_time) const {
-		printf("%lld, %s, %d\n", rec.time - start_time, LogTags.find(rec.threadid)->second, rec.mark);
+struct PrintLabel {
+	void operator() (std::pair<int, const char *> el) const {
+		printf("\"%s\",", el.second);
 	}
 };
+
+struct PrintMark {
+	void operator() (int mark) const {
+		printf("%d,", mark);
+	}
+};
+
 #endif
 
 static void LogDump()
 {
 #ifndef __RENESAS_VERSION__
+	printf("\"time\",");
+	std::for_each(LogTags.begin(), LogTags.end(), PrintLabel());
+	printf("\n");
+	std::map<int, int> LogCnv;
+	int i = 0;
+	for (Logmap::iterator p = LogTags.begin(); p != LogTags.end(); ++p) {
+		LogCnv[p->first] = i++;
+	}
+	std::vector<int> marks(LogTags.size());
+	std::fill(marks.begin(), marks.end(), 0);
 	unsigned long long start = LogList.front().time;
-	std::for_each(LogList.begin(), LogList.end(), std::bind2nd(LogDumpEach(), start));
+	for (LogListType::iterator p = LogList.begin(); p != LogList.end(); ++p) {
+		marks[LogCnv[p->threadid]] = p->mark;
+		printf("%lld,", p->time - start);
+		std::for_each(marks.begin(), marks.end(), PrintMark());
+		printf("\n");
+	}
 #endif
 }
 

@@ -236,8 +236,9 @@ void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_ch
 const int MAX_WIDTH = 1920;
 const int MAX_HEIGHT = 1088;
 const int MAX_LEN = (MAX_WIDTH * MAX_HEIGHT * 3) >> 1;
-const int FILE_READ_SIZE = 65536 * 7;
-const int BUFNUM = 5;
+const int FILE_READ_SIZE = 65536 * 3;
+const int IBUFNUM = 2;
+const int OBUFNUM = 7;
 
 static void BlameUser() {
 	fprintf(stderr,
@@ -372,18 +373,18 @@ void run_loop(Options& opt) {
 	RecordTime(1);
 
 	/* Run File Loader */
-	Buffer src[BUFNUM];
-	for (int i = 0; i < BUFNUM; ++i) {
+	Buffer src[IBUFNUM];
+	for (int i = 0; i < IBUFNUM; ++i) {
 		src[i].data = new unsigned char[FILE_READ_SIZE];
 		src[i].len = FILE_READ_SIZE;
 	}
-	FileReaderUnit fr(src, BUFNUM,  FILE_READ_SIZE, opt.infile_list_);
+	FileReaderUnit fr(src, IBUFNUM,  FILE_READ_SIZE, opt.infile_list_);
 	UniThread *thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr);
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
 
 	/* Run Video Decoder */
-	Frame dst_align[BUFNUM];
- 	M2DecoderUnit m2dec(fr.outqueue(), dst_align, BUFNUM, opt.codec_mode_);
+	Frame dst_align[OBUFNUM];
+ 	M2DecoderUnit m2dec(fr.outqueue(), dst_align, OBUFNUM, opt.codec_mode_);
 	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec);
 	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
@@ -431,7 +432,7 @@ endloop:
 		SDL_FreeYUVOverlay(yuv);
 		yuv = 0;
 	}
-	for (int i = 0; i < BUFNUM; ++i) {
+	for (int i = 0; i < IBUFNUM; ++i) {
 		delete[] src[i].data;
 	}
 }
