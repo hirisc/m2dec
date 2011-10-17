@@ -157,6 +157,7 @@ typedef struct {
 	unsigned direct_8x8_inference_flag : 1;
 	unsigned frame_cropping_flag : 1;
 	unsigned vui_parameters_present_flag : 1;
+	unsigned is_high_profile : 1;
 	int32_t offset_for_non_ref_pic;
 	int32_t offset_for_top_to_bottom_field;
 	int32_t offset_for_ref_frame[256];
