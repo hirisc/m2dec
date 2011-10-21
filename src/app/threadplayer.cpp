@@ -172,7 +172,7 @@ class M2DecoderUnit {
 public:
 	typedef Queue<Frame> QueueType;
 	M2DecoderUnit(FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, int codec_mode)
-		: m2dec_(codec_mode, reread_file, this),
+		: m2dec_(codec_mode, dstnum, reread_file, this),
 		  inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)) {}
 	FileReaderUnit::QueueType& inqueue() {
 		return inqueue_;
@@ -249,7 +249,6 @@ const int MAX_HEIGHT = 1088;
 const int MAX_LEN = (MAX_WIDTH * MAX_HEIGHT * 3) >> 1;
 const int FILE_READ_SIZE = 65536 * 2;
 const int IBUFNUM = 3;
-const int OBUFNUM = 8;
 
 static void BlameUser() {
 	fprintf(stderr,
@@ -371,7 +370,7 @@ struct DeleteFw {
 	}
 };
 
-void run_loop(Options& opt) {
+void run_loop(Options& opt, int outbuf) {
 	int width = 0;
 	int height = 0;
 	SDL_Surface *surface;
@@ -394,8 +393,8 @@ void run_loop(Options& opt) {
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
 
 	/* Run Video Decoder */
-	Frame dst_align[OBUFNUM];
- 	M2DecoderUnit m2dec(fr.outqueue(), dst_align, OBUFNUM, opt.codec_mode_);
+	std::vector<Frame> dst_align(outbuf);
+ 	M2DecoderUnit m2dec(fr.outqueue(), &dst_align[0], outbuf, opt.codec_mode_);
 	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec);
 	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
@@ -497,8 +496,9 @@ int main(int argc, char **argv)
 	if (opt.interval_) {
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
+	int outbuf = 8;
 	do {
-		run_loop(opt);
+		run_loop(opt, outbuf);
 	} while (opt.repeat_);
 
 	if (opt.interval_) {

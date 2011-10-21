@@ -140,7 +140,7 @@ public:
 		fread(input_data_, 1, input_len_, fi);
 #endif
 		fclose(fi);
-		dec_ = new M2Decoder(codec_, reread_file, this);
+		dec_ = new M2Decoder(codec_, 0, reread_file, this);
 	}
 	~option_t() {
 		if (dec_) {
