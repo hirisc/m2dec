@@ -11,6 +11,7 @@ typedef m2d_frame_t Frame;
 class M2Decoder {
 	Frames *frames_;
 	int codec_mode_;
+	int outbuf_;
 	byte_t *context_;
 	const m2d_func_table_t *func_;
 	pes_demuxer_t demux_;
@@ -39,8 +40,8 @@ public:
 		MODE_MPEG2PS,
 		MODE_H264
 	};
-	M2Decoder(int codec_mode, int (*reread_file)(void *arg), void *reread_arg)
-		: frames_(0), codec_mode_(codec_mode), context_(0) {
+	M2Decoder(int codec_mode, int outbuf, int (*reread_file)(void *arg), void *reread_arg)
+		: frames_(0), codec_mode_(codec_mode), outbuf_(outbuf), context_(0) {
 		switch (codec_mode) {
 		case MODE_MPEG2:
 			/* FALLTHROUGH */
@@ -73,7 +74,7 @@ public:
 		int width = (info.src_width + 15) & ~15;
 		int height = (info.src_height + 15) & ~15;
 		int luma_len = width * height;
-		int bufnum = info.frame_num + ((codec_mode_ == MODE_H264) ? 16 : 0);
+		int bufnum = outbuf_ + info.frame_num + ((codec_mode_ == MODE_H264) ? 16 : 0);
 		if (frames_) {
 			if (frames_->sufficient(bufnum, luma_len, info.additional_size)) {
 				return;
