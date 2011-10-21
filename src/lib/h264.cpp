@@ -775,25 +775,34 @@ static void dump_dpb(h264d_dpb_t *dpb)
 static inline void dpb_insert_non_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 {
 	int size = dpb->size;
-	h264d_dpb_elem_t *d = dpb->data;
-	h264d_dpb_elem_t *end = d + size;
-	if (size < dpb->max) {
-		dpb->size = size + 1;
-		dpb->output = -1;
-		while (d->poc < poc && d != end) {
-			++d;
+	h264d_dpb_elem_t *end = dpb->data + size;
+	h264d_dpb_elem_t *d = end;
+	if (0 < size) {
+		while (d != dpb->data && !d->is_idr) {
+			--d;
 		}
-		memmove(d + 1, d, (end - d) * sizeof(*d));
+		if (size < dpb->max) {
+			dpb->size = size + 1;
+			dpb->output = -1;
+			while ((d->poc < poc) && (d != end)) {
+				++d;
+			}
+			memmove(d + 1, d, (end - d) * sizeof(*d));
+		} else {
+			dpb->output = dpb->data[0].frame_idx;
+			do {
+				++d;
+			} while (d->poc < poc && d != end);
+			--d;
+			memmove(dpb->data, dpb->data + 1, (d - dpb->data) * sizeof(*d));
+		}
 	} else {
-		dpb->output = dpb->data[0].frame_idx;
-		do {
-			++d;
-		} while (d->poc < poc && d != end);
-		--d;
-		memmove(dpb->data, dpb->data + 1, (d - dpb->data) * sizeof(*d));
+		dpb->size = 1;
+		dpb->output = -1;
 	}
 	d->poc = poc;
 	d->frame_idx = frame_idx;
+	d->is_idr = 0;
 }
 
 static inline void dpb_insert_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
@@ -806,8 +815,10 @@ static inline void dpb_insert_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 		dpb->output = dpb->data[0].frame_idx;
 		memmove(dpb->data, dpb->data + 1, size * sizeof(dpb->data[0]));
 	}
-	dpb->data[size].poc = poc;
-	dpb->data[size].frame_idx = frame_idx;
+	h264d_dpb_elem_t *d = &dpb->data[size];
+	d->poc = poc;
+	d->frame_idx = frame_idx;
+	d->is_idr = 1;
 }
 
 static int dpb_force_pop(h264d_dpb_t *dpb)
@@ -1363,6 +1374,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	} else {
 		calc_poc2(hdr, sps, h2d->id);
 	}
+	mb->frame->frames[mb->frame->index].cnt = hdr->poc;
 	if (pps->redundant_pic_cnt_present_flag) {
 		hdr->redundant_pic_cnt = ue_golomb(st);
 	}
