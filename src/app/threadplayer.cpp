@@ -27,6 +27,7 @@ template <typename T>
 class Queue {
 	T *data_;
 	int max_;
+	int size_;
 	int head_;
 	int tail_;
 	UniMutex *mutex_;
@@ -38,18 +39,19 @@ class Queue {
 	}
 public:
 	Queue(T *data, int buf_num)
-		: data_(data), max_(buf_num), head_(0), tail_(0),
-		  mutex_(UniCreateMutex()), cond_(UniCreateCond()),
+		: data_(data), max_(buf_num), size_(1), head_(0), tail_(buf_num - 1),
+		  mutex_(UniCreateMutex()),
+		  cond_(UniCreateCond()),
 		  terminated_(false) {}
 	~Queue() {
 		UniDestroyCond(cond_);
 		UniDestroyMutex(mutex_);
 	}
 	bool full() const {
-		return next(head_) == tail_;
+		return (head_ == tail_) && (size_ != 0);
 	}
 	bool empty() const {
-		return head_ == tail_;
+		return (head_ == tail_) && (size_ == 0);
 	}
 	int size() const {
 		return max_;
@@ -63,37 +65,45 @@ public:
 		UniCondSignal(cond_);
 		UniUnlockMutex(mutex_);
 	}
-	T& emptybuf() {
+	T& front() {
 		UniLockMutex(mutex_);
 		while (full()) {
 			UniCondWait(cond_, mutex_);
 		}
-		T& d = data_[head_];
 		UniUnlockMutex(mutex_);
-		return d;
+		return data_[head_];
 	}
-	void setfilled(T& dat) {
-		assert(!full());
+	void push_front(const T& dat) {
 		UniLockMutex(mutex_);
+		while (full()) {
+			UniCondWait(cond_, mutex_);
+		}
+		size_++;
 		data_[head_] = dat;
 		head_ = next(head_);
 		UniCondSignal(cond_);
 		UniUnlockMutex(mutex_);
 	}
-	T& getfilled() {
-		if (empty() && terminated()) {
-			return data_[tail_];
-		}
+	T& back() {
 		UniLockMutex(mutex_);
 		while (empty() && !terminated()) {
 			UniCondWait(cond_, mutex_);
 		}
-		int tail = tail_;
+		UniUnlockMutex(mutex_);
+		return data_[tail_];
+	}
+	bool pop_back() {
+		UniLockMutex(mutex_);
+		if (empty() && terminated()) {
+			UniUnlockMutex(mutex_);
+			return false;
+		}
+		assert(!empty());
+		size_--;
 		tail_ = next(tail_);
-		T& d = data_[tail];
 		UniCondSignal(cond_);
 		UniUnlockMutex(mutex_);
-		return d;
+		return true;
 	}
 };
 
@@ -144,12 +154,12 @@ private:
 		int err;
 		RecordTime(1);
 		for (;;) {
-			Buffer& buf = outqueue_.emptybuf();
+			Buffer& buf = outqueue_.front();
 			err = fr_.read_block(buf);
 			if (err < 0) {
 				break;
 			}
-			outqueue_.setfilled(buf);
+			outqueue_.push_front(buf);
 		}
 		outqueue_.terminate();
 		fprintf(stderr, "File terminate.\n");
@@ -182,15 +192,16 @@ private:
 	M2DecoderUnit::QueueType outqueue_;
 	static void post_dst(void *obj, Frame& frm) {
 		M2DecoderUnit *ths = (M2DecoderUnit *)obj;
-		Frame& dst = ths->outqueue().emptybuf();
-		dst = frm;
-		ths->outqueue().setfilled(dst);
+		ths->outqueue().push_front(frm);
 	}
 	static int reread_file(void *arg) {
 		return ((M2DecoderUnit *)arg)->reread_file_impl();
 	}
 	int reread_file_impl() {
-		Buffer& src = inqueue().getfilled();
+		if (!inqueue().pop_back()) {
+			return -1;
+		}
+		Buffer& src = inqueue().back();
 		if (src.len <= 0) {
 			return -1;
 		} else {
@@ -236,9 +247,9 @@ void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_ch
 const int MAX_WIDTH = 1920;
 const int MAX_HEIGHT = 1088;
 const int MAX_LEN = (MAX_WIDTH * MAX_HEIGHT * 3) >> 1;
-const int FILE_READ_SIZE = 65536 * 3;
-const int IBUFNUM = 2;
-const int OBUFNUM = 7;
+const int FILE_READ_SIZE = 65536 * 2;
+const int IBUFNUM = 3;
+const int OBUFNUM = 8;
 
 static void BlameUser() {
 	fprintf(stderr,
@@ -394,10 +405,10 @@ void run_loop(Options& opt) {
 	int suspended = 0;
 	while (1) {
 		if (!suspended) {
-			if (outqueue.terminated() && outqueue.empty()) {
+			if (!outqueue.pop_back()) {
 				goto endloop;
 			}
-			Frame& out = outqueue.getfilled();
+			Frame& out = outqueue.back();
 			if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
 				width = out.width - out.crop[1];
 				height = out.height - out.crop[3];
@@ -411,6 +422,7 @@ void run_loop(Options& opt) {
 			}
 			SDL_LockYUVOverlay(yuv);
 			display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
+			fprintf(stderr, "cnt: %d\n", out.cnt);
 			SDL_UnlockYUVOverlay(yuv);
 			for_each(opt.fw_.begin(), opt.fw_.end(), std::bind2nd(WriteFrame(), &out));
 		} else {

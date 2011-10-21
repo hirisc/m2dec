@@ -272,7 +272,8 @@ typedef struct {
 
 typedef struct {
 	int poc;
-	int frame_idx;
+	int16_t frame_idx;
+	int16_t is_idr;
 } h264d_dpb_elem_t;
 
 typedef struct {

@@ -35,6 +35,7 @@ extern "C" {
 typedef struct {
 	uint8_t *luma;
 	uint8_t *chroma;
+	int32_t cnt;
 	int16_t width, height;
 	int16_t crop[4];
 } m2d_frame_t;

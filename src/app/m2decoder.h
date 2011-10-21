@@ -109,11 +109,9 @@ public:
 				return err;
 			}
 		}
-		do {
-			func()->get_decoded_frame(context(), &frm, 0);
-			post_dst(obj, frm);
-		} while (func()->peek_decoded_frame(context(), &frm, 0));
-		return 0;
+		func()->get_decoded_frame(context(), &frm, 0);
+		post_dst(obj, frm);
+		return func()->decode_picture(context());
 	}
 };
 
