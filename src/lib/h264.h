@@ -78,7 +78,8 @@ enum {
 	MB_PSKIP = 31,
 	MB_BSKIP = 31,
 	MB_BDIRECT16x16 = 31,
-	EXTENDED_SAR = 255
+	EXTENDED_SAR = 255,
+	H264D_MAX_FRAME_NUM = 64
 };
 
 typedef enum {
@@ -290,8 +291,8 @@ typedef struct {
 	int num;
 	int index;
 	h264d_ref_frame_t refs[2][16];
-	m2d_frame_t frames[32];
-	int8_t lru[32];
+	m2d_frame_t frames[H264D_MAX_FRAME_NUM];
+	int8_t lru[H264D_MAX_FRAME_NUM];
 	h264d_dpb_t dpb;
 } h264d_frame_info_t;
 

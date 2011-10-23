@@ -24,6 +24,7 @@ class option_t {
 	int codec_;
 	int dpb_;
 	bool force_exec_;
+	bool dpb_emptify_;
 	M2Decoder *dec_;
 	static bool outfilename(char *infilename, char *outfilename, size_t size) {
 		char *start;
@@ -86,11 +87,11 @@ class option_t {
 	}
 public:
 	option_t(int argc, char *argv[])
-		: pos_(0), fw_(0), codec_(M2Decoder::MODE_H264), dpb_(-1), force_exec_(false), dec_(0) {
+		: pos_(0), fw_(0), codec_(M2Decoder::MODE_H264), dpb_(-1), force_exec_(false), dpb_emptify_(false), dec_(0) {
 		FILE *fi;
 		int opt;
 		int filewrite_mode = FileWriter::WRITE_NONE;
-		while ((opt = getopt(argc, argv, "bd:moOsx")) != -1) {
+		while ((opt = getopt(argc, argv, "bd:emoOsx")) != -1) {
 			switch (opt) {
 			case 'b':
 				dpb_ = 1;
@@ -101,6 +102,9 @@ public:
 					BlameUser();
 					/* NOTREACHED */
 				}
+				break;
+			case 'e':
+				dpb_emptify_ = true;
 				break;
 			case 'm':
 				codec_ = M2Decoder::MODE_MPEG2;
@@ -168,6 +172,9 @@ public:
 	bool force_exec() const {
 		return force_exec_;
 	}
+	bool dpb_emptify() const {
+		return dpb_emptify_;
+	}
 };
 
 #ifdef _M_IX86
@@ -210,8 +217,9 @@ int main(int argc, char *argv[])
 	}
 #endif
 	for (int i = 0; i < INT_MAX; ++i) {
-		err = opt.dec()->decode(&opt, write_frame);
+		err = opt.dec()->decode(&opt, write_frame, opt.dpb_emptify());
 		if (err < 0) {
+			opt.dec()->decode_residual(&opt, write_frame);
 			break;
 		}
 	}

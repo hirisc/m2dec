@@ -171,9 +171,10 @@ private:
 class M2DecoderUnit {
 public:
 	typedef Queue<Frame> QueueType;
-	M2DecoderUnit(FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, int codec_mode)
+	M2DecoderUnit(FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, int codec_mode, bool dpb_emptify)
 		: m2dec_(codec_mode, dstnum, reread_file, this),
-		  inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)) {}
+		  inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)),
+		  dpb_emptify_(dpb_emptify) {}
 	FileReaderUnit::QueueType& inqueue() {
 		return inqueue_;
 	}
@@ -190,6 +191,7 @@ private:
 	M2Decoder m2dec_;
 	FileReaderUnit::QueueType& inqueue_;
 	M2DecoderUnit::QueueType outqueue_;
+	bool dpb_emptify_;
 	static void post_dst(void *obj, Frame& frm) {
 		M2DecoderUnit *ths = (M2DecoderUnit *)obj;
 		ths->outqueue().push_front(frm);
@@ -213,7 +215,10 @@ private:
 	}
 	int run_impl() {
 		RecordTime(1);
-		while (0 <= dec().decode(this, post_dst)) {}
+		while (0 <= dec().decode(this, post_dst, dpb_emptify_)) {}
+		dec().decode_residual(this, post_dst);
+		static Frame nullframe = {0,};
+		post_dst(this, nullframe);
 		outqueue().terminate();
 		RecordTime(0);
 		return 0;
@@ -257,6 +262,8 @@ static void BlameUser() {
 		"\t-s : MPEG-2 Program Stream (PS)\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
+		"\t-f frame_num(3-256) : specify number of frames before display.\n"
+		"\t-e : DPB emptify mode\n"
 		"\t-t interval : specify interval of each frame in ms unit\n");
 	exit(-1);
 }
@@ -266,16 +273,27 @@ struct Options {
 	std::list<char *> infile_list_;
 	std::list<FileWriter *> fw_;
 	int codec_mode_;
+	int outbuf_;
 	bool repeat_;
 	bool logdump_;
+	bool dpb_mode_;
 
 	Options(int argc, char **argv)
 		: interval_(0),
-		  codec_mode_(M2Decoder::MODE_MPEG2), repeat_(false), logdump_(false) {
+		  codec_mode_(M2Decoder::MODE_MPEG2), outbuf_(3), repeat_(false), logdump_(false), dpb_mode_(false) {
 		int opt;
-		while ((opt = getopt(argc, argv, "hlm:o:rst:")) != -1) {
+		while ((opt = getopt(argc, argv, "ef:hlm:o:rst:")) != -1) {
 			FILE *fo;
 			switch (opt) {
+			case 'e':
+				dpb_mode_ = true;
+				break;
+			case 'f':
+				outbuf_ = strtoul(optarg, 0, 0);
+				if (253U < (unsigned)(outbuf_ - 3)) {
+					BlameUser();
+				}
+				break;
 			case 'h':
 				codec_mode_ = M2Decoder::MODE_H264;
 				break;
@@ -394,7 +412,7 @@ void run_loop(Options& opt, int outbuf) {
 
 	/* Run Video Decoder */
 	std::vector<Frame> dst_align(outbuf);
- 	M2DecoderUnit m2dec(fr.outqueue(), &dst_align[0], outbuf, opt.codec_mode_);
+ 	M2DecoderUnit m2dec(fr.outqueue(), &dst_align[0], outbuf, opt.codec_mode_, opt.dpb_mode_);
 	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec);
 	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
@@ -408,6 +426,9 @@ void run_loop(Options& opt, int outbuf) {
 				goto endloop;
 			}
 			Frame& out = outqueue.back();
+			if (out.luma == 0) {
+				goto endloop;
+			}
 			if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
 				width = out.width - out.crop[1];
 				height = out.height - out.crop[3];
@@ -421,7 +442,6 @@ void run_loop(Options& opt, int outbuf) {
 			}
 			SDL_LockYUVOverlay(yuv);
 			display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
-			fprintf(stderr, "cnt: %d\n", out.cnt);
 			SDL_UnlockYUVOverlay(yuv);
 			for_each(opt.fw_.begin(), opt.fw_.end(), std::bind2nd(WriteFrame(), &out));
 		} else {
@@ -496,9 +516,8 @@ int main(int argc, char **argv)
 	if (opt.interval_) {
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
-	int outbuf = 8;
 	do {
-		run_loop(opt, outbuf);
+		run_loop(opt, opt.outbuf_);
 	} while (opt.repeat_);
 
 	if (opt.interval_) {

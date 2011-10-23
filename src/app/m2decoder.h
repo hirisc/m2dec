@@ -75,6 +75,13 @@ public:
 		int height = (info.src_height + 15) & ~15;
 		int luma_len = width * height;
 		int bufnum = outbuf_ + info.frame_num + ((codec_mode_ == MODE_H264) ? 16 : 0);
+		if (codec_mode_ == MODE_H264) {
+			if (H264D_MAX_FRAME_NUM < bufnum) {
+				bufnum = H264D_MAX_FRAME_NUM;
+			}
+		} else if (MAX_FRAME_NUM < bufnum) {
+			bufnum = MAX_FRAME_NUM;
+		}
 		if (frames_) {
 			if (frames_->sufficient(bufnum, luma_len, info.additional_size)) {
 				return;
@@ -97,7 +104,7 @@ public:
 	pes_demuxer_t *demuxer() {
 		return &demux_;
 	}
-	int decode(void *obj, void (*post_dst)(void *, m2d_frame_t&)) {
+	int decode(void *obj, void (*post_dst)(void *, m2d_frame_t&), bool emptify_mode) {
 		m2d_frame_t frm;
 		int err = -1;
 		while (func()->peek_decoded_frame(context(), &frm, 0) <= 0) {
@@ -110,9 +117,18 @@ public:
 				return err;
 			}
 		}
-		func()->get_decoded_frame(context(), &frm, 0);
-		post_dst(obj, frm);
+		do {
+			func()->get_decoded_frame(context(), &frm, 0);
+			post_dst(obj, frm);
+		} while (emptify_mode && (0 < func()->peek_decoded_frame(context(), &frm, 0)));
 		return func()->decode_picture(context());
+	}
+	void decode_residual(void *obj, void (*post_dst)(void *, m2d_frame_t&)) {
+		m2d_frame_t frm;
+		while (0 < func()->peek_decoded_frame(context(), &frm, 1)) {
+			post_dst(obj, frm);
+			func()->get_decoded_frame(context(), &frm, 1);
+		}
 	}
 };
 
