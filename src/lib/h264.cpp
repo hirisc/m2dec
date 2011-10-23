@@ -777,23 +777,20 @@ static inline void dpb_insert_non_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 	int size = dpb->size;
 	h264d_dpb_elem_t *end = dpb->data + size;
 	h264d_dpb_elem_t *d = end;
+
 	if (0 < size) {
-		while (d != dpb->data && !d->is_idr) {
+		do {
 			--d;
-		}
+		} while (d != dpb->data && !d->is_idr && (poc < d->poc));
 		if (size < dpb->max) {
 			dpb->size = size + 1;
 			dpb->output = -1;
-			while ((d->poc < poc) && (d != end)) {
+			if (d->is_idr || (d->poc < poc)) {
 				++d;
 			}
 			memmove(d + 1, d, (end - d) * sizeof(*d));
 		} else {
 			dpb->output = dpb->data[0].frame_idx;
-			do {
-				++d;
-			} while (d->poc < poc && d != end);
-			--d;
 			memmove(dpb->data, dpb->data + 1, (d - dpb->data) * sizeof(*d));
 		}
 	} else {
