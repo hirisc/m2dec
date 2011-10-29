@@ -495,7 +495,7 @@ int main(int argc, char **argv)
 #ifdef ENABLE_DISPLAY
 	SDL_TimerID timer;
 
-#ifdef _M_IX86
+#if defined(_M_IX86) && !defined(NDEBUG)
 	_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_WNDW);
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
