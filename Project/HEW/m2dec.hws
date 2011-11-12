@@ -22,13 +22,14 @@
 "c:\hew3\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
 "c:\program files (x86)\renesas\hew\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
 "c:\program files (x86)\renesas\hew\tools\renesas\sh\9_1_1\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
+"c:\program files (x86)\renesas\hew\tools\renesas\sh\9_3_2\hew\stdlib.chm" "C/C++ Standard Library Help" 1 
 "c:\program files\renesas\hew\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
-"c:\program files\renesas\hew\tools\renesas\sh\9_3_2\hew\stdlib.chm" "C/C++ Standard Library Help" 1 
+"c:\program files\renesas\hew\tools\renesas\sh\9_3_2\hew\stdlib.chm" "C/C++ Standard Library Help" 0 
 [GENERAL_DATA_PROJECT]
 [USERMENUTOOLS]
 [CUSTOMPLACEHOLDERS]
 [MAKEFILE_BUILD_INFO]
-"$(PROJECTNAME)_$(CONFIGNAME).mak" "" "$(WORKSPDIR)\make" 0 0 0 
+"$(WORKSPNAME).mak" "" "$(WORKSPDIR)\make" 0 0 0 
 [VD_CONFIGURATION_OPTIONS]
 "ACTIVE_DESKTOP" "0" 
 [VD_CONFIGURATIONS]
