@@ -156,7 +156,7 @@ static void set_ptrdiff(m2d_frames *frames, int ref, int frm_idx, m2d_frame_t *c
 	frames->diff_to_ref[ref][1] = frames->frames[frm_idx].chroma - curr_frame->chroma;
 }
 
-static void m2d_update_frames(m2d_frames *frames, int next_coding_type)
+static void m2d_update_frames(m2d_context *m2d, m2d_frames *frames, int next_coding_type, int temporal_reference)
 {
 	int curr_idx;
 	int ref0_idx, ref1_idx;
@@ -165,6 +165,7 @@ static void m2d_update_frames(m2d_frames *frames, int next_coding_type)
 	curr_idx = frames->index;
 	if (curr_idx < 0) {
 		/* Just after initialization */
+		m2d->out_state = 0;
 		frames->index = 0;
 		return;
 	}
@@ -177,9 +178,16 @@ static void m2d_update_frames(m2d_frames *frames, int next_coding_type)
 		ref1_idx = curr_idx;
 		frames->idx_of_ref[0] = ref0_idx;
 		frames->idx_of_ref[1] = ref1_idx;
+		if (m2d->out_state < (2 * 2)) {
+			m2d->out_state += 2;
+		}
+	} else {
+		/* B_VOP */
+		m2d->out_state |= 1;
 	}
 
 	frames->index = curr_idx;
+	frames->frames[curr_idx].cnt = temporal_reference;
 	curr_frame = &frames->frames[curr_idx];
 	set_ptrdiff(frames, 0, ref0_idx, curr_frame);
 	set_ptrdiff(frames, 1, ref1_idx, curr_frame);
@@ -598,7 +606,6 @@ static int m2d_read_picture_header(m2d_context *m2d)
 	pic->vbv_delay = get_bits(stream, 16);
 	mb = m2d->mb_current;
 	set_coding_type(mb, coding_type);
-//	m2d_update_frames(mb->frames, coding_type);
 	m2d_init_mb_pos(m2d->mb_current);
 	if ((coding_type == P_VOP) || (coding_type == B_VOP)) {
 		int r_size;
@@ -634,7 +641,7 @@ static int m2d_read_slice(m2d_context *m2d, int code_type)
 	mb->q_scale = mb->q_mapping[get_bits(stream, 5)];
 	vertical_pos = (code_type & 255) - 1;
 	if (vertical_pos == 0) {
-		m2d_update_frames(mb->frames, pic->picture_coding_type);
+		m2d_update_frames(m2d, mb->frames, pic->picture_coding_type, pic->temporal_reference);
 	}
 	if (mb->mbmax_y <= vertical_pos) {
 		return 0;
@@ -1530,10 +1537,10 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 	}
 	mb = m2d->mb_current;
 	frames = mb->frames;
-	if (is_end) {
-		idx = frames->idx_of_ref[1];
-	} else if (m2d->picture->picture_coding_type == B_VOP) {
+	if (m2d->picture->picture_coding_type == B_VOP) {
 		idx = frames->index;
+	} else if (is_end && (0 < m2d->out_state) && (m2d->out_state < (2 * 2))) {
+		idx = frames->idx_of_ref[1];
 	} else {
 		idx = frames->idx_of_ref[0];
 	}
@@ -1552,7 +1559,19 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 #else
 		header->vertical_size_value;
 #endif
-	return 1;
+	if (m2d->picture->picture_coding_type != B_VOP) {
+		switch (m2d->out_state >> 1) {
+		case 0:
+			/* FALLTHROUGH */
+		case 1:
+			return 0;
+		case 2:
+			/* FALLTHROUGH */
+		case 3:
+			return 1;
+		}
+	}
+	return (m2d->out_state & 1);
 }
 
 __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
@@ -1567,13 +1586,11 @@ __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, i
 	}
 	mb = m2d->mb_current;
 	frames = mb->frames;
-	if (is_end) {
-		if (m2d->out_state < 3) {
-			m2d->out_state = 3;
-		}
-		idx = frames->idx_of_ref[1];
-	} else if (m2d->picture->picture_coding_type == B_VOP) {
+	if (m2d->picture->picture_coding_type == B_VOP) {
 		idx = frames->index;
+	} else if (is_end && (0 < m2d->out_state) && (m2d->out_state < (2 * 2))) {
+		m2d->out_state = 3 * 2;
+		idx = frames->idx_of_ref[1];
 	} else {
 		idx = frames->idx_of_ref[0];
 	}
@@ -1592,23 +1609,26 @@ __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, i
 #else
 		header->vertical_size_value;
 #endif
-	switch (m2d->out_state) {
-	case 0:
-		m2d->out_state = 1;
-		return 0;
-	case 1:
-		m2d->out_state = 2;
-		return 1;
-	case 2:
-		m2d->out_state = 1;
-		return 0;
-	case 3:
-		m2d->out_state = 4;
-		return 1;
-	case 4:
-		return 0;
+	if (m2d->picture->picture_coding_type != B_VOP) {
+		switch (m2d->out_state >> 1) {
+		case 0:
+			/* FALLTHROUGH */
+		case 1:
+			return 0;
+		case 2:
+			m2d->out_state = 1 * 2;
+			return 1;
+		case 3:
+			m2d->out_state = 0;
+			return 1;
+		}
+	} else {
+		if (m2d->out_state & 1) {
+			m2d->out_state &= ~1;
+			return 1;
+		}
 	}
-	return 1;
+	return 0;
 }
 
 __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int indata_bytes)
