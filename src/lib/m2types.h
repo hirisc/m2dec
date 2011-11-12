@@ -75,7 +75,6 @@ typedef unsigned int cache_t;
 
 #if defined(__RENESAS_VERSION__) && (defined(_SH4ALDSP) || defined(_SH4A))
 #include <umachine.h>
-#define ABS(a) ((0 <= (a)) ? (a) : -(a))
 #define bswap32(a) end_cnvl(a)
 #define MUL_EXTEND
 
