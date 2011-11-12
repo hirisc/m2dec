@@ -41,6 +41,7 @@ void exit(int);
 #include "h264vld.h"
 
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
+
 static inline int ABS(int a) {
 	return (0 <= a) ? a : -a;
 }
@@ -5191,10 +5192,6 @@ static inline bool DIF_ABS_LARGER_THAN4(int a, int b) {
 	return 16 <= DIF_SQUARE(a, b);
 }
 
-static inline bool ABS_LARGER_THAN4(uint32_t x)
-{
-	return 16 <= x * x;
-}
 
 template <int MV_STEP>
 static inline uint32_t str_mv_calc16x16_bidir_both(uint32_t str, int offset, const h264d_vector_set_t *mvxy, const prev_mb_t *prev)
