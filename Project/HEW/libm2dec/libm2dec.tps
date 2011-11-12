@@ -8,7 +8,7 @@
 "Debug" 
 "Release" 
 [CURRENT_CONFIGURATION]
-"Debug" 
+"Release" 
 [CURRENT_SESSION]
 "DefaultSession" 
 [GENERAL_DATA_PROJECT]
@@ -17,7 +17,7 @@
 [SESSIONS_Debug]
 "DefaultSession" 
 [GENERAL_DATA_CONFIGURATION_Release]
-"PROJECT_FILES_MODIFIED_DATA_TAG" "TRUE" 
+"PROJECT_FILES_MODIFIED_DATA_TAG" "FALSE" 
 [SESSIONS_Release]
 "DefaultSession" 
 [GENERAL_DATA_SESSION_DefaultSession]
