@@ -26,7 +26,6 @@
 #include <assert.h>
 
 #include "bitio.h"
-#include "config.h"
 
 #ifdef DEBUG_BITIO
 static  void BIT_SANITY_CHECK(dec_bits *ths)
