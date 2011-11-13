@@ -68,31 +68,27 @@ LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE=shc.exe
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0="..\libm2dec\Debug\bitio.src"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\setjmp.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1="..\libm2dec\Debug\h264.src"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\lib\bitio.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2="..\libm2dec\Debug\idct.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\config.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\libm2dec\Debug\m2d.src"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\setjmp.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4="..\libm2dec\Debug\motioncomp.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\config.h"
+LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5="..\libm2dec\Debug\mpeg2.src"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\bitio.h" "..\..\..\src\lib\config.h"
+	"..\..\..\src\lib\bitio.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6="..\libm2dec\Debug\mpeg_demux.src"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\mpeg_demux.h" \
-	"..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\config.h"
+	"..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h"
 
 # Renesas SH Assembler03 phase
 
@@ -149,7 +145,7 @@ LIBM2DEC_DEBUG_SH_CC_COMPILER02_ENVC0 :
 	set PATH=$(TC_INSTALL_DIR)\bin
 	set SHC_LIB=$(TC_INSTALL_DIR)\bin
 	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
-
+	echo "$(TC_INSTALL_DIR)\include\stlport"
 $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0) : "..\..\..\src\lib\bitio.c" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
@@ -208,7 +204,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1) : "..\..\..\src\lib\h264.cpp" $(LI
 -nologo
 <<
 
-$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2)
+$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp"
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
 -endian=little
@@ -544,33 +540,33 @@ LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE=shc.exe
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0="..\libm2dec\Release\bitio.src"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h" \
+	"$(TC_INSTALL_DIR)\include\setjmp.h"
 	"..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\libm2dec\Release\h264.src"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
 	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\config.h" "..\..\..\src\lib\m2types.h" \
+	"..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\h264.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\h264vld.h"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\libm2dec\Release\idct.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\config.h" "..\..\..\src\lib\m2types.h" \
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"..\..\..\src\lib\idct.h" "$(TC_INSTALL_DIR)\include\string.h"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\libm2dec\Release\m2d.src"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\setjmp.h"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4="..\libm2dec\Release\motioncomp.src"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\config.h" "..\..\..\src\lib\m2types.h" \
+	"..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"..\..\..\src\lib\motioncomp.h" "$(TC_INSTALL_DIR)\include\string.h"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5="..\libm2dec\Release\mpeg2.src"
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\bitio.h" "..\..\..\src\lib\config.h" \
+	"..\..\..\src\lib\bitio.h" \
 	"..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
 	"..\..\..\src\lib\mpeg2.h" "..\..\..\src\lib\m2d.h" \
 	"..\..\..\src\lib\vld.h" "..\..\..\src\lib\motioncomp.h" \
@@ -579,7 +575,7 @@ LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6="..\libm2dec\Release\mpeg_demux.src
 LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\mpeg_demux.h" \
 	"..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\config.h" "..\..\..\src\lib\m2types.h" \
+	"..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\mpeg2.h" \
 	"..\..\..\src\lib\m2d.h"
 
@@ -638,6 +634,7 @@ LIBM2DEC_RELEASE_SH_CC_COMPILER02_ENVC0 :
 	set PATH=$(TC_INSTALL_DIR)\bin
 	set SHC_LIB=$(TC_INSTALL_DIR)\bin
 	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
+	echo "$(TC_INSTALL_DIR)\include\stlport"
 
 $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) : "..\..\..\src\lib\bitio.c" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0)
 	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
@@ -1000,8 +997,7 @@ M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stdio.h" "$(T
 M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\m2dec\Debug\m2dec.obj"
 M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\bitio.h"
 M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4="..\m2dec\Debug\md5.obj"
 M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" \
 	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h"
@@ -1321,14 +1317,14 @@ M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h"
 M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\m2dec\Release\sbrk.obj"
 M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
 M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\m2dec\Release\display.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\config.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
+M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stdio.h" \
 	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" \
 	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\display.h"
 M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\m2dec\Release\m2dec.obj"
 M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
 	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\config.h" "..\..\..\src\lib\m2types.h" \
+	"..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\mpeg2.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\app\frames.h" \
 	"..\..\..\src\lib\mpeg_demux.h" "..\..\..\src\lib\txt2bin.h" \
@@ -1599,7 +1595,7 @@ H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\assert.h" "
 	"$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\app\frames.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h"
+	"$(TC_INSTALL_DIR)\include\setjmp.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\h264dec\Debug\lowlevel.obj"
 H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
 	"$(TC_INSTALL_DIR)\include\machine.h" "$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
@@ -1847,7 +1843,7 @@ H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\assert.h"
 	"$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\app\frames.h" \
 	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\config.h" \
+	"$(TC_INSTALL_DIR)\include\setjmp.h" \
 	"..\..\..\src\app\filewrite.h" "..\..\..\src\app\md5.h" \
 	"..\..\..\src\app\m2decoder.h" "..\..\..\src\lib\mpeg2.h" \
 	"..\..\..\src\lib\h264.h" "..\..\..\src\lib\mpeg_demux.h" \
