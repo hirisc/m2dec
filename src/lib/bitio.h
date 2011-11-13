@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 #include <setjmp.h>
-#ifndef _M_IX86
+#ifdef __GNUC__
 #include "config.h"
 #endif
 #include "m2types.h"
