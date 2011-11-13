@@ -28,7 +28,6 @@
  * This implementation is same as fast idct of reference decoder.
  */
 
-#include "config.h"
 #include "m2types.h"
 #include "idct.h"
 
