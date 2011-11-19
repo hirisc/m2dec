@@ -165,7 +165,7 @@ static void m2d_update_frames(m2d_context *m2d, m2d_frames *frames, int next_cod
 	curr_idx = frames->index;
 	if (curr_idx < 0) {
 		/* Just after initialization */
-		m2d->out_state = 0;
+		m2d->out_state = ((next_coding_type == I_VOP) || (next_coding_type == P_VOP)) ? 1 * 2 : 0;
 		frames->index = 0;
 		return;
 	}
@@ -1525,9 +1525,25 @@ static int m2d_decode_macroblocks(m2d_context *m2d)
 	return err;
 }
 
+static void store_frame_info(m2d_frame_t *frame, const m2d_frames *frames, int idx, const m2d_seq_header *header)
+{
+	*frame = frames->frames[idx];
+	frame->width =
+#ifdef FAST_DECODE
+		(unsigned)((header->horizontal_size_value + 15) & ~15) >> 3;
+#else
+		header->horizontal_size_value;
+#endif
+	frame->height =
+#ifdef FAST_DECODE
+		(unsigned)((header->vertical_size_value + 15) & ~15) >> 3;
+#else
+		header->vertical_size_value;
+#endif
+}
+
 __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
-	m2d_seq_header *header;
 	m2d_mb_current *mb;
 	m2d_frames *frames;
 	int idx;
@@ -1544,21 +1560,7 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 	} else {
 		idx = frames->idx_of_ref[0];
 	}
-	*frame = frames->frames[idx];
-
-	header = m2d->seq_header;
-	frame->width =
-#ifdef FAST_DECODE
-		mb->mbmax_x * 2;
-#else
-		header->horizontal_size_value;
-#endif
-	frame->height =
-#ifdef FAST_DECODE
-		mb->mbmax_y * 2;
-#else
-		header->vertical_size_value;
-#endif
+	store_frame_info(frame, frames, idx, m2d->seq_header);
 	if (m2d->picture->picture_coding_type != B_VOP) {
 		switch (m2d->out_state >> 1) {
 		case 0:
@@ -1576,7 +1578,6 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 
 __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
-	m2d_seq_header *header;
 	m2d_mb_current *mb;
 	m2d_frames *frames;
 	int idx;
@@ -1594,21 +1595,7 @@ __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, i
 	} else {
 		idx = frames->idx_of_ref[0];
 	}
-	*frame = frames->frames[idx];
-
-	header = m2d->seq_header;
-	frame->width =
-#ifdef FAST_DECODE
-		mb->mbmax_x * 2;
-#else
-		header->horizontal_size_value;
-#endif
-	frame->height =
-#ifdef FAST_DECODE
-		mb->mbmax_y * 2;
-#else
-		header->vertical_size_value;
-#endif
+	store_frame_info(frame, frames, idx, m2d->seq_header);
 	if (m2d->picture->picture_coding_type != B_VOP) {
 		switch (m2d->out_state >> 1) {
 		case 0:
