@@ -1544,15 +1544,13 @@ static void store_frame_info(m2d_frame_t *frame, const m2d_frames *frames, int i
 
 __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
-	m2d_mb_current *mb;
 	m2d_frames *frames;
 	int idx;
 
 	if ((m2d == 0) || ((intptr_t)m2d & 3) || (frame == 0) || ((intptr_t)frame & 3)) {
 		return -1;
 	}
-	mb = m2d->mb_current;
-	frames = mb->frames;
+	frames = m2d->mb_current->frames;
 	if (m2d->picture->picture_coding_type == B_VOP) {
 		idx = frames->index;
 	} else if (is_end && (0 < m2d->out_state) && (m2d->out_state < (2 * 2))) {
@@ -1564,12 +1562,10 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 	if (m2d->picture->picture_coding_type != B_VOP) {
 		switch (m2d->out_state >> 1) {
 		case 0:
-			/* FALLTHROUGH */
-		case 1:
 			return 0;
+		case 1:
+			return (is_end != 0);
 		case 2:
-			/* FALLTHROUGH */
-		case 3:
 			return 1;
 		}
 	}
@@ -1578,44 +1574,18 @@ __LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, 
 
 __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end)
 {
-	m2d_mb_current *mb;
-	m2d_frames *frames;
-	int idx;
-
-	if ((m2d == 0) || ((intptr_t)m2d & 3) || (frame == 0) || ((intptr_t)frame & 3)) {
-		return -1;
+	int ret = m2d_peek_decoded_frame(m2d, frame, is_end);
+	if (ret < 0) {
+		return ret;
 	}
-	mb = m2d->mb_current;
-	frames = mb->frames;
-	if (m2d->picture->picture_coding_type == B_VOP) {
-		idx = frames->index;
-	} else if (is_end && (0 < m2d->out_state) && (m2d->out_state < (2 * 2))) {
-		m2d->out_state = 3 * 2;
-		idx = frames->idx_of_ref[1];
-	} else {
-		idx = frames->idx_of_ref[0];
-	}
-	store_frame_info(frame, frames, idx, m2d->seq_header);
-	if (m2d->picture->picture_coding_type != B_VOP) {
-		switch (m2d->out_state >> 1) {
-		case 0:
-			/* FALLTHROUGH */
-		case 1:
-			return 0;
-		case 2:
-			m2d->out_state = 1 * 2;
-			return 1;
-		case 3:
-			m2d->out_state = 0;
-			return 1;
-		}
-	} else {
-		if (m2d->out_state & 1) {
+	if (ret != 0) {
+		if (m2d->picture->picture_coding_type == B_VOP) {
 			m2d->out_state &= ~1;
-			return 1;
+		} else {
+			m2d->out_state -= 2;
 		}
 	}
-	return 0;
+	return ret;
 }
 
 __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int indata_bytes)
