@@ -114,23 +114,30 @@ class FileReader {
 	FILE *fd_;
 	int insize_;
 	int file_open() {
-		if (!infiles_.empty()) {
-			codec_ = detect_file(infiles_.front());
-			fd_ = fopen(infiles_.front(), "rb");
+		while (!infiles_.empty()) {
+			const char *filename = infiles_.front();
+			codec_ = detect_file(filename);
+			fd_ = fopen(filename, "rb");
 			infiles_.pop_front();
 			if (fd_) {
 				return 0;
+			} else {
+				fprintf(stderr, "Error on %s.\n", filename);
 			}
-		} else {
-			return -1;
 		}
-		fprintf(stderr, "Error on Input File.\n");
+		fd_ = 0;
 		return -1;
 	}
 public:
 	FileReader(std::list<char *> &infiles, int insize)
-		: infiles_(infiles), codec_(M2Decoder::MODE_NONE), fd_(0), insize_(insize) {}
-
+		: infiles_(infiles), codec_(M2Decoder::MODE_NONE), fd_(0), insize_(insize) {
+		file_open();
+	}
+	~FileReader() {
+		if (fd_) {
+			fclose(fd_);
+		}
+	}
 	int read_block(Buffer& dst) {
 		if ((fd_ == 0) && (file_open() < 0)) {
 			return -1;
@@ -148,7 +155,7 @@ public:
 		return read_size;
 	}
 	M2Decoder::type_t next_codec() {
-		return infiles_.empty() ? M2Decoder::MODE_NONE : detect_file(infiles_.front());
+		return codec_;
 	}
 	static void to_lower_ext(const char *src, char *dst, int len) {
 		for (int i = 0; i < len; ++i) {
