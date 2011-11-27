@@ -21,7 +21,7 @@ class option_t {
 	size_t input_len_;
 	size_t pos_;
 	FileWriter *fw_;
-	int codec_;
+	M2Decoder::type_t codec_;
 	int dpb_;
 	bool force_exec_;
 	bool dpb_emptify_;

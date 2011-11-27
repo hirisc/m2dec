@@ -18,11 +18,6 @@
 
 #include "unithread.h"
 
-struct Buffer {
-	uint8_t *data;
-	int len;
-};
-
 template <typename T>
 class Queue {
 	T *data_;
@@ -107,49 +102,107 @@ public:
 	}
 };
 
+struct Buffer {
+	uint8_t *data;
+	int len;
+	int type;
+};
+
 class FileReader {
 	std::list<char *> infiles_;
+	M2Decoder::type_t codec_;
 	FILE *fd_;
 	int insize_;
+	int file_open() {
+		if (!infiles_.empty()) {
+			codec_ = detect_file(infiles_.front());
+			fd_ = fopen(infiles_.front(), "rb");
+			infiles_.pop_front();
+			if (fd_) {
+				return 0;
+			}
+		} else {
+			return -1;
+		}
+		fprintf(stderr, "Error on Input File.\n");
+		return -1;
+	}
 public:
 	FileReader(std::list<char *> &infiles, int insize)
-		: infiles_(infiles), fd_(0), insize_(insize) {
-		if (infiles_.empty() || !(fd_ = fopen(infiles_.front(), "rb"))) {
-			fprintf(stderr, "Error on Input File.\n");
-			return;
-		}
-		infiles_.pop_front();
-	}
+		: infiles_(infiles), codec_(M2Decoder::MODE_NONE), fd_(0), insize_(insize) {}
+
 	int read_block(Buffer& dst) {
+		if ((fd_ == 0) && (file_open() < 0)) {
+			return -1;
+		}
 		int read_size = fread(dst.data, 1, insize_, fd_);
 		dst.len = read_size;
 		if (read_size == 0) {
 			fclose(fd_);
-			if (!infiles_.empty() && (fd_ = fopen(infiles_.front(), "rb"))) {
-				infiles_.pop_front();
-				dst.len = read_size = fread(dst.data, 1, insize_, fd_);
-			} else {
+			if (file_open() < 0) {
 				return -1;
 			}
+			dst.len = read_size = fread(dst.data, 1, insize_, fd_);
 		}
+		dst.type = (int)codec_;
 		return read_size;
+	}
+	M2Decoder::type_t next_codec() {
+		return infiles_.empty() ? M2Decoder::MODE_NONE : detect_file(infiles_.front());
+	}
+	static void to_lower_ext(const char *src, char *dst, int len) {
+		for (int i = 0; i < len; ++i) {
+			const char s = src[i];
+			if (s == '\0') {
+				dst[i] = s;
+				break;
+			}
+			dst[i] = tolower(s);
+		}
+	}
+	static M2Decoder::type_t detect_file(const char *filename) {
+		static const struct {
+			M2Decoder::type_t type;
+			const char *ext;
+		} ext_map[] = {
+			{ M2Decoder::MODE_MPEG2, "m2v"},
+			{ M2Decoder::MODE_MPEG2PS, "vob"},
+			{ M2Decoder::MODE_H264, "264"},
+			{ M2Decoder::MODE_H264, "jsv"},
+			{ M2Decoder::MODE_NONE, ""}
+		};
+		char ext[16];
+		const char *ext_p = strrchr(filename, '.');
+		if (ext_p++ != 0) {
+			to_lower_ext(ext_p, ext, sizeof(ext));
+			int i = -1;
+			while (ext_map[++i].type != M2Decoder::MODE_NONE) {
+				if (strcmp(ext_map[i].ext, ext) == 0) {
+					return ext_map[i].type;
+				}
+			}
+		}
+		return M2Decoder::MODE_MPEG2;
 	}
 };
 
 class FileReaderUnit {
 public:
 	typedef Queue<Buffer> QueueType;
-	FileReaderUnit(Buffer *src_p, int buf_num, int insize, std::list<char *> &infiles)
-		: fr_(infiles, insize), outqueue_(FileReaderUnit::QueueType(src_p, buf_num)) {}
+	FileReaderUnit(int insize, std::list<char *> &infiles, FileReaderUnit::QueueType& outqueue)
+		: fr_(infiles, insize), outqueue_(outqueue) {}
 	FileReaderUnit::QueueType& outqueue() {
 		return outqueue_;
+	}
+	M2Decoder::type_t next_codec() {
+		return fr_.next_codec();
 	}
 	static int run(void *data) {
 		return ((FileReaderUnit *)data)->run_impl();
 	}
 private:
 	FileReader fr_;
-	QueueType outqueue_;
+	QueueType& outqueue_;
 	int run_impl() {
 		int err;
 		RecordTime(1);
@@ -171,10 +224,11 @@ private:
 class M2DecoderUnit {
 public:
 	typedef Queue<Frame> QueueType;
-	M2DecoderUnit(FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, int codec_mode, bool dpb_emptify)
-		: m2dec_(codec_mode, dstnum, reread_file, this),
-		  inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)),
+	M2DecoderUnit(M2Decoder::type_t codec, FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, bool dpb_emptify)
+		: m2dec_(codec, dstnum, reread_file, this), dstnum_(dstnum), inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)),
+		  src_next_(0),
 		  dpb_emptify_(dpb_emptify) {}
+	~M2DecoderUnit() {}
 	FileReaderUnit::QueueType& inqueue() {
 		return inqueue_;
 	}
@@ -189,8 +243,10 @@ public:
 	}
 private:
 	M2Decoder m2dec_;
+	int dstnum_;
 	FileReaderUnit::QueueType& inqueue_;
 	M2DecoderUnit::QueueType outqueue_;
+	Buffer *src_next_;
 	bool dpb_emptify_;
 	static void post_dst(void *obj, Frame& frm) {
 		M2DecoderUnit *ths = (M2DecoderUnit *)obj;
@@ -200,23 +256,37 @@ private:
 		return ((M2DecoderUnit *)arg)->reread_file_impl();
 	}
 	int reread_file_impl() {
-		if (!inqueue().pop_back()) {
-			return -1;
+		Buffer *src;
+		if (!src_next_) {
+			if (!inqueue().pop_back()) {
+				return -1;
+			}
+			src = &inqueue().back();
+			M2Decoder::type_t codec = static_cast<M2Decoder::type_t>(src->type);
+			if (codec != m2dec_.codec_mode()) {
+				m2dec_.change_codec(codec);
+				src_next_ = src;
+				return -1;
+			}
+		} else {
+			src = src_next_;
+			src_next_ = 0;
 		}
-		Buffer& src = inqueue().back();
-		if (src.len <= 0) {
+		if (src->len <= 0) {
 			return -1;
 		} else {
 			dec_bits *stream = dec().demuxer()->stream;
 			stream = stream ? stream : dec().stream();
-			dec_bits_set_data(stream, src.data, src.len);
+			dec_bits_set_data(stream, src->data, src->len);
 			return 0;
 		}
 	}
 	int run_impl() {
 		RecordTime(1);
-		while (0 <= dec().decode(this, post_dst, dpb_emptify_)) {}
-		dec().decode_residual(this, post_dst);
+		do {
+			while (0 <= dec().decode(this, post_dst, dpb_emptify_)) {}
+			dec().decode_residual(this, post_dst);
+		} while (src_next_);
 		static Frame nullframe = {0,};
 		post_dst(this, nullframe);
 		outqueue().terminate();
@@ -257,9 +327,7 @@ const int IBUFNUM = 3;
 
 static void BlameUser() {
 	fprintf(stderr,
-		"Usage: srview [-s] [-r] [-t interval] [-m outfile(MD5)] [-o outfile(Raw)] infile [infile ...]\n"
-		"\t-h : H.264 Elementary Data\n"
-		"\t-s : MPEG-2 Program Stream (PS)\n"
+		"Usage: srview [-r] [-t interval] [-m outfile(MD5)] [-o outfile(Raw)] infile [infile ...]\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
 		"\t-f frame_num(3-256) : specify number of frames before display.\n"
@@ -272,7 +340,6 @@ struct Options {
 	int interval_;
 	std::list<char *> infile_list_;
 	std::list<FileWriter *> fw_;
-	int codec_mode_;
 	int outbuf_;
 	bool repeat_;
 	bool logdump_;
@@ -280,7 +347,7 @@ struct Options {
 
 	Options(int argc, char **argv)
 		: interval_(0),
-		  codec_mode_(M2Decoder::MODE_MPEG2), outbuf_(3), repeat_(false), logdump_(false), dpb_mode_(false) {
+		  outbuf_(3), repeat_(false), logdump_(false), dpb_mode_(false) {
 		int opt;
 		while ((opt = getopt(argc, argv, "ef:hlm:o:rst:")) != -1) {
 			FILE *fo;
@@ -293,9 +360,6 @@ struct Options {
 				if (253U < (unsigned)(outbuf_ - 3)) {
 					BlameUser();
 				}
-				break;
-			case 'h':
-				codec_mode_ = M2Decoder::MODE_H264;
 				break;
 			case 'l':
 				logdump_ = true;
@@ -314,9 +378,6 @@ struct Options {
 				break;
 			case 'r':
 				repeat_ = true;
-				break;
-			case 's':
-				codec_mode_ = M2Decoder::MODE_MPEG2PS;
 				break;
 			case 't':
 				interval_ = strtoul(optarg, 0, 0);
@@ -400,26 +461,26 @@ void run_loop(Options& opt, int outbuf) {
 	LogTags.insert(std::pair<int, const char *> (UniThreadID(), "Main"));
 	RecordTime(1);
 
-	/* Run File Loader */
 	Buffer src[IBUFNUM];
 	for (int i = 0; i < IBUFNUM; ++i) {
 		src[i].data = new unsigned char[FILE_READ_SIZE];
 		src[i].len = FILE_READ_SIZE;
 	}
-	FileReaderUnit fr(src, IBUFNUM,  FILE_READ_SIZE, opt.infile_list_);
+	FileReaderUnit::QueueType fr_queue(src, IBUFNUM);
+	FileReaderUnit fr(FILE_READ_SIZE, opt.infile_list_, fr_queue);
+
+	std::vector<Frame> dst_align(outbuf);
+ 	M2DecoderUnit m2dec(fr.next_codec(), fr.outqueue(), &dst_align[0], outbuf, opt.dpb_mode_);
+
 	UniThread *thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr);
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
-
-	/* Run Video Decoder */
-	std::vector<Frame> dst_align(outbuf);
- 	M2DecoderUnit m2dec(fr.outqueue(), &dst_align[0], outbuf, opt.codec_mode_, opt.dpb_mode_);
 	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec);
-	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
 
 	UniEvent ev;
 	while (UniPollEvent(&ev)) ;
 	int suspended = 0;
+	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
 	while (1) {
 		if (!suspended) {
 			if (!outqueue.pop_back()) {
