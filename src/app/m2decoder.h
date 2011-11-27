@@ -9,64 +9,33 @@
 typedef m2d_frame_t Frame;
 
 class M2Decoder {
-	Frames *frames_;
-	int codec_mode_;
-	int outbuf_;
-	byte_t *context_;
-	const m2d_func_table_t *func_;
-	pes_demuxer_t demux_;
-	int reread_packet_impl() {
-		pes_demuxer_t *dmx = demuxer();
-		const byte_t *packet;
-		int packet_size;
-		packet = mpeg_demux_get_video(dmx, &packet_size);
-		if (packet) {
-			dec_bits_set_data(stream(), packet, (size_t)packet_size);
-			return 0;
-		} else {
-			return -1;
-		}
-	}
-	static int reread_packet(void *arg) {
-		return ((M2Decoder *)arg)->reread_packet_impl();
-	}
-	static int header_callback(void *arg, int id) {
-		((M2Decoder *)arg)->SetFrames(id);
-		return 0;
-	}
 public:
-	enum {
+	typedef enum {
 		MODE_MPEG2,
 		MODE_MPEG2PS,
-		MODE_H264
-	};
-	M2Decoder(int codec_mode, int outbuf, int (*reread_file)(void *arg), void *reread_arg)
-		: frames_(0), codec_mode_(codec_mode), outbuf_(outbuf), context_(0) {
-		switch (codec_mode) {
-		case MODE_MPEG2:
-			/* FALLTHROUGH */
-		case MODE_MPEG2PS:
-			func_ = m2d_func;
-			break;
-		case MODE_H264:
-			func_ = h264d_func;
-			break;
-		}
-		context_ = new byte_t[func_->context_size];
-		func_->init(context_, -1, header_callback, this);
-		memset(&demux_, 0, sizeof(demux_));
-		if (codec_mode == MODE_MPEG2PS) {
-			mpeg_demux_init(&demux_, reread_file, reread_arg);
-			dec_bits_set_callback(func_->stream_pos(context_), reread_packet, this);
-		} else {
-			dec_bits_set_callback(func_->stream_pos(context_), reread_file, reread_arg);
-		}
+		MODE_H264,
+		MODE_NONE
+	} type_t;
+	M2Decoder(type_t codec_mode, int outbuf, int (*reread_file)(void *arg), void *reread_arg)
+		: frames_(0),
+		outbuf_(outbuf), reread_file_(reread_file), reread_arg_(reread_arg),
+		context_(0), func_(0) {
+		set_codec(codec_mode);
 	}
 	~M2Decoder() {
 		if (frames_) {
 			delete frames_;
 		}
-		delete[] context_;
+		if (context_) {
+			delete[] context_;
+		}
+	}
+	void change_codec(type_t codec_mode) {
+		if (context_) {
+			delete[] context_;
+			context_ = 0;
+		}
+		set_codec(codec_mode);
 	}
 	void SetFrames(int id) {
 		m2d_info_t info;
@@ -91,6 +60,9 @@ public:
 		fprintf(stderr, "%d x %d x %d\n", info.src_width, info.src_height, info.frame_num);
 		frames_ = new Frames(width, height, bufnum, info.additional_size);
 		func_->set_frames(context_, bufnum, frames_->aligned(), frames_->second(), info.additional_size);
+	}
+	type_t codec_mode() {
+		return codec_mode_;
 	}
 	void *context() {
 		return context_;
@@ -129,6 +101,58 @@ public:
 			post_dst(obj, frm);
 			func()->get_decoded_frame(context(), &frm, 1);
 		}
+	}
+private:
+	Frames *frames_;
+	type_t codec_mode_;
+	int outbuf_;
+	int (*reread_file_)(void *arg);
+	void *reread_arg_;
+	byte_t *context_;
+	const m2d_func_table_t *func_;
+	pes_demuxer_t demux_;
+	void set_codec(type_t codec_mode) {
+		codec_mode_ = codec_mode;
+		switch (codec_mode) {
+		case MODE_NONE:
+			return;
+		case MODE_MPEG2:
+			/* FALLTHROUGH */
+		case MODE_MPEG2PS:
+			func_ = m2d_func;
+			break;
+		case MODE_H264:
+			func_ = h264d_func;
+			break;
+		}
+		context_ = new byte_t[func_->context_size];
+		func_->init(context_, -1, header_callback, this);
+		memset(&demux_, 0, sizeof(demux_));
+		if (codec_mode == MODE_MPEG2PS) {
+			mpeg_demux_init(&demux_, reread_file_, reread_arg_);
+			dec_bits_set_callback(func_->stream_pos(context_), reread_packet, this);
+		} else {
+			dec_bits_set_callback(func_->stream_pos(context_), reread_file_, reread_arg_);
+		}
+	}
+	int reread_packet_impl() {
+		pes_demuxer_t *dmx = demuxer();
+		const byte_t *packet;
+		int packet_size;
+		packet = mpeg_demux_get_video(dmx, &packet_size);
+		if (packet) {
+			dec_bits_set_data(stream(), packet, (size_t)packet_size);
+			return 0;
+		} else {
+			return -1;
+		}
+	}
+	static int reread_packet(void *arg) {
+		return ((M2Decoder *)arg)->reread_packet_impl();
+	}
+	static int header_callback(void *arg, int id) {
+		((M2Decoder *)arg)->SetFrames(id);
+		return 0;
 	}
 };
 
