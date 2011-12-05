@@ -492,9 +492,9 @@ void h264d_load_bytes_skip03(dec_bits *ths, int read_bytes)
 
 static inline void dpb_init(h264d_dpb_t *dpb, int maxsize);
 
-static int header_dummyfunc(void *arg, int seq_id) {return 0;}
+static int header_dummyfunc(void *arg, void *seq_id) {return 0;}
 
-int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *, int), void *arg)
+int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *, void *), void *arg)
 {
 	if (!h2d) {
 		return -1;
@@ -530,7 +530,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len)
 
 	st = h2d->stream;
 	dec_bits_open(st, h264d_load_bytes_skip03);
-	err = dec_bits_set_data(st, data, len);
+	err = dec_bits_set_data(st, data, len, 0);
 	if (err < 0) {
 		return err;
 	}
@@ -934,7 +934,7 @@ static int h2d_dispatch_one_nal(h264d_context *h2d, int code_type)
 		err = read_seq_parameter_set(h2d->sps_i, st);
 		if (0 <= err) {
 			set_mb_size(&h2d->mb_current, h2d->sps_i[err].pic_width, h2d->sps_i[err].pic_height);
-			h2d->header_callback(h2d->header_callback_arg, err);
+			h2d->header_callback(h2d->header_callback_arg, st->id);
 		}
 		break;
 	case PPS_NAL:
@@ -10507,7 +10507,7 @@ static inline int macroblock_layer_cabac(h264d_mb_current *mb, h264d_slice_heade
 
 static const m2d_func_table_t h264d_func_ = {
 	sizeof(h264d_context),
-	(int (*)(void *, int, int (*)(void *, int), void *))h264d_init,
+	(int (*)(void *, int, int (*)(void *, void *), void *))h264d_init,
 	(dec_bits *(*)(void *))h264d_stream_pos,
 	(int (*)(void *, m2d_info_t *))h264d_get_info,
 	(int (*)(void *, int, m2d_frame_t *, uint8_t *, int))h264d_set_frames,

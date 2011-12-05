@@ -15,7 +15,14 @@ typedef SDL_mutex UniMutex;
 typedef SDL_cond UniCond;
 typedef SDL_Event UniEvent;
 
-#define UniCreateThread(a, b) SDL_CreateThread((a), (b))
+typedef std::map<int, const char *> Logmap;
+static Logmap LogTags;
+
+static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *label) {
+	UniThread *t = SDL_CreateThread(run, arg);
+	LogTags.insert(std::pair<int, const char *> (SDL_GetThreadID(t), label));
+	return t;
+}
 #define UniThreadID SDL_ThreadID
 #define UniGetThreadID(x) SDL_GetThreadID(x)
 #define UniWaitThread(x, y) SDL_WaitThread((x), (y))
@@ -44,9 +51,6 @@ typedef SDL_Event UniEvent;
 
 
 #ifndef __RENESAS_VERSION__
-
-typedef std::map<int, const char *> Logmap;
-static Logmap LogTags;
 
 static UniMutex *LogMutex;
 struct LogRecord {

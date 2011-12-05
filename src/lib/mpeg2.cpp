@@ -221,9 +221,9 @@ static void m2d_frames_set_mb_pos(m2d_mb_current *mb, int mb_x, int mb_y, int wi
 
 void m2d_mb_set_default(m2d_mb_current *mb);
 
-static int header_dummyfunc(void *arg, int seq_id) {return 0;}
+static int header_dummyfunc(void *arg, void *seq_id) {return 0;}
 
-__LIBM2DEC_API int m2d_init(m2d_context *m2d, int dummy, int (*header_callback)(void *arg, int seq_id), void *arg)
+__LIBM2DEC_API int m2d_init(m2d_context *m2d, int dummy, int (*header_callback)(void *arg, void *seq_id), void *arg)
 {
 	memset(m2d, 0, sizeof(*m2d));
 	m2d->seq_header = &m2d->seq_header_i;
@@ -342,7 +342,7 @@ static int m2d_read_seq_header(m2d_context *m2d)
 	header->load_non_intra_quantizer_matrix = bit = get_onebit(stream);
 	m2d_set_qmat(m2d->mb_current, stream, m2d->qmat[1], bit, 1);
 	m2d_mb_set_frame_size(m2d->mb_current, header->horizontal_size_value, header->vertical_size_value);
-	m2d->header_callback(m2d->header_callback_arg, 0);
+	m2d->header_callback(m2d->header_callback_arg, stream->id);
 	return err;
 }
 
@@ -376,7 +376,7 @@ static int m2d_read_sequence_extension(m2d_context *m2d)
 
 	m2d_mb_set_frame_size(m2d->mb_current, header->horizontal_size_value, header->vertical_size_value);
 	m2d_mb_set_mpeg2_mode(m2d->mb_current, 1);
-	m2d->header_callback(m2d->header_callback_arg, 0);
+	m2d->header_callback(m2d->header_callback_arg, stream->id);
 	return err;
 }
 
@@ -1593,7 +1593,7 @@ __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int inda
 	if ((m2d == 0) || (indata == 0) || (indata_bytes == 0)) {
 		return -1;
 	}
-	dec_bits_set_data(m2d->stream, indata, indata_bytes);
+	dec_bits_set_data(m2d->stream, indata, indata_bytes, 0);
 	return 0;
 }
 
@@ -1634,7 +1634,7 @@ __LIBM2DEC_API int m2d_read_header(m2d_context *m2d, const byte_t *data, size_t 
 		return -1;
 	}
 	st = m2d->stream;
-	err = dec_bits_set_data(st, data, len);
+	err = dec_bits_set_data(st, data, len, 0);
 	if (err < 0) {
 		return err;
 	}
@@ -1785,7 +1785,7 @@ int test_parse_coef()
 //		fill(in_data, in_data + 512, 0);
 		fill(in_data.begin(), in_data.end(), 0);
 		txt2bin(vld.input, &in_data[0]);
-		dec_bits_set_data(&stream, &in_data[0], 512);
+		dec_bits_set_data(&stream, &in_data[0], 512, 0);
 		fill(coef, coef + 64, 0);
 		int ret = m2d_parse_coef[1][0](&mb, &stream, 1);
 //		ASSERT_EQUALS(vld.length, dec_bits_sum(&stream));
@@ -1801,7 +1801,7 @@ int test_parse_coef()
 
 const m2d_func_table_t m2d_func_ = {
 	sizeof(m2d_context),
-	(int (*)(void *, int, int (*)(void *, int), void *))m2d_init,
+	(int (*)(void *, int, int (*)(void *, void *), void *))m2d_init,
 	(dec_bits *(*)(void *))m2d_stream_pos,
 	(int (*)(void *, m2d_info_t *))m2d_get_info,
 	(int (*)(void *, int, m2d_frame_t *, uint8_t *, int))m2d_set_frames,

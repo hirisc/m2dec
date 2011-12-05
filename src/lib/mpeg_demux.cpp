@@ -125,7 +125,7 @@ int mpeg_demux_init(pes_demuxer_t *dmx, int (*callback_func)(void *), void *arg)
 	return 0;
 }
 
-const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p)
+const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p, void **id)
 {
 	dec_bits *stream;
 	int err;
@@ -145,6 +145,7 @@ const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p)
 		skip_bytes(stream, min);
 		*packet_size_p = min;
 		dmx->shortage -= rest;
+		*id = stream->id;
 		return current;
 	} else {
 		err = 0;
@@ -156,7 +157,9 @@ const byte_t *mpeg_demux_get_video(pes_demuxer_t *dmx, int *packet_size_p)
 			err = process_system_packet(dmx);
 		} while (err <= 0);
 		*packet_size_p = dmx->packet_len;
+		*id = stream->id;
 		return dmx->packet_head;
 	}
 }
+
 
