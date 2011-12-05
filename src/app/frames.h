@@ -17,6 +17,11 @@ class Frames {
 			frm.chroma = new uint8_t[(luma_len >> 1) + 15];
 		}
 	};
+	struct SetId : std::binary_function<m2d_frame_t, void *, void> {
+		void operator()(m2d_frame_t& frm, void *id) const {
+			frm.id = id;
+		}
+	};
 	struct Delete {
 		void operator()(m2d_frame_t& frm) const {
 			delete[] frm.luma;
@@ -27,13 +32,13 @@ class Frames {
 		return (uint8_t *)(((uintptr_t)src + 15) & ~15);
 	}
 	void align_frame() {
-		for (int i = 0; i < frame_.size(); ++i) {
+		for (size_t i = 0; i < frame_.size(); ++i) {
 			aligned_[i].luma = align16(frame_[i].luma);
 			aligned_[i].chroma = align16(frame_[i].chroma);
 		}
 	}
 public:
-	Frames(int width, int height, int num_mem, int second_len)
+	Frames(int width, int height, int num_mem, int second_len, void *id)
 		: luma_len_(((width + 15) & ~15) * ((height + 15) & ~15)),
 		frame_(num_mem),
 		aligned_(num_mem),
@@ -43,6 +48,7 @@ public:
 		}
 		std::for_each(frame_.begin(), frame_.end(), std::bind2nd(Create(), luma_len_));
 		align_frame();
+		set_id(id);
 	}
 	~Frames() {
 		if (frame_.empty()) {
@@ -57,10 +63,13 @@ public:
 	uint8_t *second() {
 		return &second_[0];
 	}
-	bool sufficient(size_t bufnum, int luma_len, size_t additional_size) {
+	bool sufficient(size_t bufnum, size_t luma_len, size_t additional_size) {
 		return (bufnum <= frame_.size())
 			&& (luma_len <= luma_len_)
 			&& (additional_size <= second_.size());
+	}
+	void set_id(void *id) {
+		std::for_each(aligned_.begin(), aligned_.end(), std::bind2nd(SetId(), id));
 	}
 };
 

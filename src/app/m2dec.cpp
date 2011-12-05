@@ -88,8 +88,8 @@ static int test_dec_bits()
 
 	dec_bits_set_callback(&stream0, error_report, &jb0);
 	dec_bits_set_callback(&stream1, error_report, &jb1);
-	dec_bits_set_data(&stream0, (byte_t *)&buf[0], BUF_SIZE);
-	dec_bits_set_data(&stream1, (byte_t *)&buf[0], BUF_SIZE);
+	dec_bits_set_data(&stream0, (byte_t *)&buf[0], BUF_SIZE, 0);
+	dec_bits_set_data(&stream1, (byte_t *)&buf[0], BUF_SIZE, 0);
 	int bit = 0;
 	if ((setjmp(jb0) == 0) && (setjmp(jb1) == 0)) {
 		for (int i = 0; i < BUF_SIZE / 2; ++i) {
@@ -196,7 +196,7 @@ static int test_intra_dc()
 		int len = (txt2bin(in->input, &in_data[0]) + 7) >> 3;
 		for (size_t dc_scale = 0; dc_scale <= 3; ++dc_scale) {
 			for (size_t dc = 0; dc < 255; ++dc) {
-				dec_bits_set_data(&stream, &in_data[0], len);
+				dec_bits_set_data(&stream, &in_data[0], len, 0);
 				mb.intra_dc_scale = (int8_t)dc_scale;
 				mb.intra_dc_max = (int16_t)((1 << (8 + 3 - dc_scale)) - 1);
 				fill(mb.dc_pred, mb.dc_pred + 3, (int16_t)dc);
@@ -271,9 +271,10 @@ static int reread_packet(void *arg)
 	pes_demuxer_t *dmx = &re->dmx;
 	const byte_t *packet;
 	int packet_size;
-	packet = mpeg_demux_get_video(dmx, &packet_size);
+	void *id;
+	packet = mpeg_demux_get_video(dmx, &packet_size, &id);
 	if (packet) {
-		dec_bits_set_data(re->m2d->stream, packet, (size_t)packet_size);
+		dec_bits_set_data(re->m2d->stream, packet, (size_t)packet_size, id);
 		return 0;
 	} else {
 		return -1;
@@ -290,7 +291,7 @@ static int reread_file(void *arg)
 	if (opt->next_buffer(&indata, &size) < 0) {
 		return -1;
 	} else {
-		dec_bits_set_data(stream, indata, size);
+		dec_bits_set_data(stream, indata, size, 0);
 		return 0;
 	}
 }
@@ -325,7 +326,7 @@ int main(int argc, char **argv)
 		return -1;
 	}
 	auto_ptr<m2d_context> m2d(new m2d_context);
-	Frames frms(WIDTH, HEIGHT, FRAME_NUM, 0);
+	Frames frms(WIDTH, HEIGHT, FRAME_NUM, 0, 0);
 	int err = 0;
 	err |= m2d_init(m2d.get(), 0, 0, 0);
 	err |= m2d_set_frames(m2d.get(), FRAME_NUM, frms.aligned());

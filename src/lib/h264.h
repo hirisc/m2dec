@@ -400,7 +400,7 @@ typedef struct {
 	int id;
 	h264d_slice_header *slice_header;
 	dec_bits *stream;
-	int (*header_callback)(void *arg, int seq_id);
+	int (*header_callback)(void *arg, void *seq_id);
 	void *header_callback_arg;
 	dec_bits stream_i;
 	h264d_slice_header slice_header_i;
@@ -409,7 +409,7 @@ typedef struct {
 	h264d_sps sps_i[32];
 } h264d_context;
 
-int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *arg, int seq_id), void *arg);
+int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *arg, void *seq_id), void *arg);
 int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, m2d_info_t *info);
 int h264d_set_frames(h264d_context *h2d, int num_frame, m2d_frame_t *frame, uint8_t *second_frame, int second_frame_size);

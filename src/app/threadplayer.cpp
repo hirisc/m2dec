@@ -106,31 +106,34 @@ struct Buffer {
 	uint8_t *data;
 	int len;
 	int type;
+	void *id;
 };
 
 class FileReader {
-	std::list<char *> infiles_;
+	std::list<const char *> infiles_;
 	M2Decoder::type_t codec_;
+	const char *filename_;
 	FILE *fd_;
 	int insize_;
 	int file_open() {
 		while (!infiles_.empty()) {
-			const char *filename = infiles_.front();
-			codec_ = detect_file(filename);
-			fd_ = fopen(filename, "rb");
+			filename_ = infiles_.front();
+			codec_ = detect_file(filename_);
+			fd_ = fopen(filename_, "rb");
 			infiles_.pop_front();
 			if (fd_) {
 				return 0;
 			} else {
-				fprintf(stderr, "Error on %s.\n", filename);
+				fprintf(stderr, "Error on %s.\n", filename_);
 			}
 		}
 		fd_ = 0;
+		codec_ = M2Decoder::MODE_NONE;
 		return -1;
 	}
 public:
-	FileReader(std::list<char *> &infiles, int insize)
-		: infiles_(infiles), codec_(M2Decoder::MODE_NONE), fd_(0), insize_(insize) {
+	FileReader(std::list<const char *> &infiles, int insize)
+		: infiles_(infiles), codec_(M2Decoder::MODE_NONE), filename_(0), fd_(0), insize_(insize) {
 		file_open();
 	}
 	~FileReader() {
@@ -151,6 +154,7 @@ public:
 			}
 			dst.len = read_size = fread(dst.data, 1, insize_, fd_);
 		}
+		dst.id = (void *)filename_;
 		dst.type = (int)codec_;
 		return read_size;
 	}
@@ -196,8 +200,18 @@ public:
 class FileReaderUnit {
 public:
 	typedef Queue<Buffer> QueueType;
-	FileReaderUnit(int insize, std::list<char *> &infiles, FileReaderUnit::QueueType& outqueue)
-		: fr_(infiles, insize), outqueue_(outqueue) {}
+	FileReaderUnit(int insize, int inbufnum, std::list<const char *> &infiles)
+		: fr_(infiles, insize), dst_(inbufnum), outqueue_(&dst_[0], inbufnum) {
+		for (int i = 0; i < inbufnum; ++i) {
+			dst_[i].data = new unsigned char[insize];
+			dst_[i].len = insize;
+		}
+	}
+	~FileReaderUnit() {
+		for (size_t i = 0; i < dst_.size(); ++i) {
+			delete[] dst_[i].data;
+		}
+	}
 	FileReaderUnit::QueueType& outqueue() {
 		return outqueue_;
 	}
@@ -209,7 +223,8 @@ public:
 	}
 private:
 	FileReader fr_;
-	QueueType& outqueue_;
+	std::vector<Buffer> dst_;
+	QueueType outqueue_;
 	int run_impl() {
 		int err;
 		RecordTime(1);
@@ -231,10 +246,11 @@ private:
 class M2DecoderUnit {
 public:
 	typedef Queue<Frame> QueueType;
-	M2DecoderUnit(M2Decoder::type_t codec, FileReaderUnit::QueueType& inqueue, Frame *dst, int dstnum, bool dpb_emptify)
-		: m2dec_(codec, dstnum, reread_file, this), dstnum_(dstnum), inqueue_(inqueue), outqueue_(QueueType(dst, dstnum)),
-		  src_next_(0),
-		  dpb_emptify_(dpb_emptify) {}
+	M2DecoderUnit(M2Decoder::type_t codec, FileReaderUnit::QueueType& inqueue, int dstnum, bool dpb_emptify)
+		: m2dec_(codec, dstnum, reread_file, this),
+		  dst_align_(dstnum),
+		  inqueue_(inqueue), outqueue_(QueueType(&dst_align_[0], dstnum)),
+		  src_next_(0), dpb_emptify_(dpb_emptify) {}
 	~M2DecoderUnit() {}
 	FileReaderUnit::QueueType& inqueue() {
 		return inqueue_;
@@ -250,7 +266,7 @@ public:
 	}
 private:
 	M2Decoder m2dec_;
-	int dstnum_;
+	std::vector<Frame> dst_align_;
 	FileReaderUnit::QueueType& inqueue_;
 	M2DecoderUnit::QueueType outqueue_;
 	Buffer *src_next_;
@@ -284,7 +300,7 @@ private:
 		} else {
 			dec_bits *stream = dec().demuxer()->stream;
 			stream = stream ? stream : dec().stream();
-			dec_bits_set_data(stream, src->data, src->len);
+			dec_bits_set_data(stream, src->data, src->len, src->id);
 			return 0;
 		}
 	}
@@ -343,21 +359,79 @@ static void BlameUser() {
 	exit(-1);
 }
 
+struct DeleteFw {
+	void operator()(FileWriter *fw) const {
+		delete fw;
+	}
+};
+
+struct WriteFrame : std::binary_function<FileWriter *, const Frame *, void> {
+	void operator()(FileWriter *fw, const Frame *out) const {
+		fw->writeframe(out);
+	}
+};
+
+class FileWriterUnit {
+	typedef std::list<FileWriter *> outfiles_t;
+	outfiles_t fw_;
+	std::list<const char *> infiles_;
+	void *id_;
+	void change() {
+		if (infiles_.empty()) {
+			fw_.clear();
+		} else {
+			for (outfiles_t::iterator p = fw_.begin(); p != fw_.end(); ++p) {
+				(*p)->set_file(infiles_.front(), true);
+			}
+			infiles_.pop_front();
+		}
+	}
+public:
+	FileWriterUnit() : id_(0) {}
+	~FileWriterUnit() {
+		for_each(fw_.begin(), fw_.end(), DeleteFw());
+	}
+	void set_mode(FileWriter::write_type t) {
+		FileWriter *fw;
+		switch (t) {
+		case FileWriter::WRITE_RAW:
+			fw = new FileWriterRaw();
+			break;
+		case FileWriter::WRITE_MD5:
+			fw = new FileWriterMd5();
+			break;
+		}
+		fw_.push_back(fw);
+	}
+	void set_filelist(const std::list<const char *>& infiles) {
+		infiles_ = infiles;
+	}
+	bool empty() const {
+		return fw_.empty();
+	}
+	void write(const Frame& out) {
+		if (out.id != id_) {
+			id_ = out.id;
+			change();
+		}
+		for_each(fw_.begin(), fw_.end(), std::bind2nd(WriteFrame(), &out));
+	}
+};
+
 struct Options {
 	int interval_;
-	std::list<char *> infile_list_;
-	std::list<FileWriter *> fw_;
+	std::list<const char *> infile_list_;
+	FileWriterUnit fw_;
 	int outbuf_;
 	bool repeat_;
 	bool logdump_;
 	bool dpb_mode_;
-
+	~Options() {}
 	Options(int argc, char **argv)
 		: interval_(0),
 		  outbuf_(3), repeat_(false), logdump_(false), dpb_mode_(false) {
 		int opt;
-		while ((opt = getopt(argc, argv, "ef:hlm:o:rst:")) != -1) {
-			FILE *fo;
+		while ((opt = getopt(argc, argv, "ef:hlmorst:")) != -1) {
 			switch (opt) {
 			case 'e':
 				dpb_mode_ = true;
@@ -372,16 +446,10 @@ struct Options {
 				logdump_ = true;
 				break;
 			case 'm':
-				fo = fopen(optarg, "wb");
-				if (fo) {
-					fw_.push_back(new FileWriterMd5(fo));
-				}
+				fw_.set_mode(FileWriter::WRITE_MD5);
 				break;
 			case 'o':
-				fo = fopen(optarg, "wb");
-				if (fo) {
-					fw_.push_back(new FileWriterRaw(fo));
-				}
+				fw_.set_mode(FileWriter::WRITE_RAW);
 				break;
 			case 'r':
 				repeat_ = true;
@@ -404,136 +472,132 @@ struct Options {
 		do {
 			infile_list_.push_back(argv[optind]);
 		} while (++optind < argc);
-	}
-};
-
-static void waitevents_with_timer(SDL_Overlay *yuv, SDL_Rect *rect, int &suspended)
-{
-	UniEvent ev;
-	UniWaitEvent(&ev);
-	do {
-		switch (ev.type) {
-		case SDL_USEREVENT:
-			SDL_DisplayYUVOverlay(yuv, rect);
-			break;
-		case SDL_MOUSEBUTTONDOWN:
-			suspended ^= 1;
-			break;
-		case SDL_QUIT:
-			exit(0);
-			/* NOTREACHED */
-			break;
-		}
-	} while (SDL_PollEvent(&ev));
-}
-
-static void waitevents(SDL_Overlay *yuv, SDL_Rect *rect,  int &suspended)
-{
-	UniEvent ev;
-	SDL_DisplayYUVOverlay(yuv, rect);
-	while (SDL_PollEvent(&ev)) {
-		switch (ev.type) {
-		case SDL_MOUSEBUTTONDOWN:
-			suspended ^= 1;
-			break;
-		case SDL_QUIT:
-			exit(0);
-			/* NOTREACHED */
-			break;
+		if (!fw_.empty() && !infile_list_.empty()) {
+			fw_.set_filelist(infile_list_);
 		}
 	}
-}
-
-struct WriteFrame : std::binary_function<FileWriter *, Frame *, void> {
-	void operator()(FileWriter *fw, const Frame *out) const {
-		fw->writeframe(out);
-	}
 };
 
-struct DeleteFw {
-	void operator()(FileWriter *fw) const {
-		delete fw;
-	}
-};
-
-void run_loop(Options& opt, int outbuf) {
-	int width = 0;
-	int height = 0;
+struct UniSurface {
 	SDL_Surface *surface;
-	SDL_Overlay *yuv = 0;
-	SDL_Rect rect = {
-		0, 0, width, height
+	SDL_Overlay *yuv;
+	SDL_Rect rect;
+	int suspended_;
+	void *id_;
+	UniSurface() : yuv(0), suspended_(0), id_(0) {
+		UniEvent ev;
+		while (UniPollEvent(&ev)) ;
+		memset(&rect, 0, sizeof(rect));
 	};
+	~UniSurface() {
+		if (yuv) {
+			SDL_FreeYUVOverlay(yuv);
+		}
+	}
+	int suspended() const {
+		return suspended_;
+	}
+	void display(const Frame& out) {
+		if (out.id != id_) {
+			id_ = out.id;
+			change(out);
+		}
+		SDL_LockYUVOverlay(yuv);
+		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
+		SDL_UnlockYUVOverlay(yuv);
+	}
+	void waitevents(int interval) {
+		if (interval) {
+			waitevents_with_timer();
+		} else {
+			waitevents_without_timer();
+		}
+	}
+private:
+	void waitevents_with_timer() {
+		UniEvent ev;
+		UniWaitEvent(&ev);
+		do {
+			switch (ev.type) {
+			case SDL_USEREVENT:
+				SDL_DisplayYUVOverlay(yuv, &rect);
+				break;
+			case SDL_MOUSEBUTTONDOWN:
+				suspended_ ^= 1;
+				break;
+			case SDL_QUIT:
+				exit(0);
+				/* NOTREACHED */
+				break;
+			}
+		} while (SDL_PollEvent(&ev));
+	}
+	void waitevents_without_timer() {
+		UniEvent ev;
+		SDL_DisplayYUVOverlay(yuv, &rect);
+		while (SDL_PollEvent(&ev)) {
+			switch (ev.type) {
+			case SDL_MOUSEBUTTONDOWN:
+				suspended_ ^= 1;
+				break;
+			case SDL_QUIT:
+				exit(0);
+				/* NOTREACHED */
+				break;
+			}
+		}
+	}
+	void change(const Frame& out) {
+		int width = rect.w;
+		int height = rect.h;
+		if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
+			width = out.width - out.crop[1];
+			height = out.height - out.crop[3];
+			rect.w = width;
+			rect.h = height;
+			surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);
+			if (yuv) {
+				SDL_FreeYUVOverlay(yuv);
+			}
+			yuv = SDL_CreateYUVOverlay(width, height, SDL_IYUV_OVERLAY, surface);
+		}
+	}
+};
 
+int run_loop(Options& opt, int outbuf) {
 	LogTags.insert(std::pair<int, const char *> (UniThreadID(), "Main"));
 	RecordTime(1);
 
-	Buffer src[IBUFNUM];
-	for (int i = 0; i < IBUFNUM; ++i) {
-		src[i].data = new unsigned char[FILE_READ_SIZE];
-		src[i].len = FILE_READ_SIZE;
+	FileReaderUnit fr(FILE_READ_SIZE, IBUFNUM, opt.infile_list_);
+	if (fr.next_codec() == M2Decoder::MODE_NONE) {
+		return -1;
 	}
-	FileReaderUnit::QueueType fr_queue(src, IBUFNUM);
-	FileReaderUnit fr(FILE_READ_SIZE, opt.infile_list_, fr_queue);
+ 	M2DecoderUnit m2dec(fr.next_codec(), fr.outqueue(), outbuf, opt.dpb_mode_);
 
-	std::vector<Frame> dst_align(outbuf);
- 	M2DecoderUnit m2dec(fr.next_codec(), fr.outqueue(), &dst_align[0], outbuf, opt.dpb_mode_);
+	UniThread *thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr, "FileLoader");
+	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec, "Decoder");
 
-	UniThread *thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr);
-	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_file), "FileLoader"));
-	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec);
-	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(thr_m2d), "Decoder"));
-
-	UniEvent ev;
-	while (UniPollEvent(&ev)) ;
-	int suspended = 0;
-	M2DecoderUnit::QueueType &outqueue = m2dec.outqueue();
+	UniSurface surface;
 	while (1) {
-		if (!suspended) {
-			if (!outqueue.pop_back()) {
-				goto endloop;
+		if (!surface.suspended()) {
+			if (!m2dec.outqueue().pop_back()) {
+				break;
 			}
-			Frame& out = outqueue.back();
+			const Frame& out = m2dec.outqueue().back();
 			if (out.luma == 0) {
-				goto endloop;
+				break;
 			}
-			if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
-				width = out.width - out.crop[1];
-				height = out.height - out.crop[3];
-				rect.w = width;
-				rect.h = height;
-				surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);
-				if (yuv) {
-					SDL_FreeYUVOverlay(yuv);
-				}
-				yuv = SDL_CreateYUVOverlay(width, height, SDL_IYUV_OVERLAY, surface);
-			}
-			SDL_LockYUVOverlay(yuv);
-			display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
-			SDL_UnlockYUVOverlay(yuv);
-			for_each(opt.fw_.begin(), opt.fw_.end(), std::bind2nd(WriteFrame(), &out));
+			surface.display(out);
+			opt.fw_.write(out);
 		} else {
 			UniDelay(100);
 		}
-		if (opt.interval_) {
-			waitevents_with_timer(yuv, &rect, suspended);
-		} else {
-			waitevents(yuv, &rect, suspended);
-		}
+		surface.waitevents(opt.interval_);
 	}
-endloop:
 	int status;
-
 	UniWaitThread(thr_m2d, &status);
 	RecordTime(0);
-	for_each(opt.fw_.begin(), opt.fw_.end(), DeleteFw());
-	if (yuv) {
-		SDL_FreeYUVOverlay(yuv);
-		yuv = 0;
-	}
-	for (int i = 0; i < IBUFNUM; ++i) {
-		delete[] src[i].data;
-	}
+	return 0;
 }
 
 Uint32 DispTimer(Uint32 interval, void *param)
@@ -585,7 +649,9 @@ int main(int argc, char **argv)
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
 	do {
-		run_loop(opt, opt.outbuf_);
+		if (run_loop(opt, opt.outbuf_) < 0) {
+			break;
+		}
 	} while (opt.repeat_);
 
 	if (opt.interval_) {

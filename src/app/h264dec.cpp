@@ -46,22 +46,25 @@ class option_t {
 	}
 	FileWriter *file_writer_create(char *name, int mode) {
 		char outfile[256];
-		FILE *fo;
 		if (outfilename(name, outfile, sizeof(outfile))) {
-			fo = fopen(outfile, "wb");
-			if (fo) {
-				if (mode == FileWriter::WRITE_MD5) {
-					return new FileWriterMd5(fo);
-				} else {
-					return new FileWriterRaw(fo);
-				}
+			FileWriter *fw;
+			if (mode == FileWriter::WRITE_MD5) {
+				fw = new FileWriterMd5();
+			} else {
+				fw = new FileWriterRaw();
+			}
+			if (fw->set_file(outfile, false)) {
+				return fw;
+			} else {
+				delete fw;
+				return 0;
 			}
 		}
 		return 0;
 	}
 	int reread_file_impl() {
 		if (pos_ < input_len_) {
-			dec_bits_set_data(dec()->stream(), input_data_ + pos_, input_len_);
+			dec_bits_set_data(dec()->stream(), input_data_ + pos_, input_len_, 0);
 			pos_ += input_len_;
 			return 0;
 		} else {

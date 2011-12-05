@@ -35,6 +35,7 @@ extern "C" {
 typedef struct {
 	uint8_t *luma;
 	uint8_t *chroma;
+	void *id;
 	int32_t cnt;
 	int16_t width, height;
 	int16_t crop[4];
@@ -55,7 +56,7 @@ typedef struct {
 
 typedef struct {
 	size_t context_size;
-	int (*init)(void *, int, int (*)(void *, int), void *);
+	int (*init)(void *, int, int (*)(void *, void *), void *);
 	dec_bits *(*stream_pos)(void *);
 	int (*get_info)(void *, m2d_info_t *);
 	int (*set_frames)(void *, int, m2d_frame_t *, uint8_t *, int);

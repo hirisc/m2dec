@@ -221,11 +221,11 @@ void skip_bytes(dec_bits *ths, int bytes)
 		current = dec_bits_current(ths);
 		rest = (int)(tail - current);
 		if (bytes <= rest) {
-			dec_bits_set_data(ths, current + bytes, (size_t)(rest - bytes));
+			dec_bits_set_data(ths, current + bytes, (size_t)(rest - bytes), ths->id);
 			break;
 		}
 		bytes -= rest;
-		dec_bits_set_data(ths, current + rest, (size_t)bytes);
+		dec_bits_set_data(ths, current + rest, (size_t)bytes, ths->id);
 		show_bits(ths, 8);
 	}
 }
@@ -244,7 +244,7 @@ const byte_t *dec_bits_tail(dec_bits *ths)
 
 /**Specify input bitstream.
  */
-int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len)
+int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len, void *id)
 {
 	if ((buf == 0) || ((int)buf_len < 0)) {
 		return -1;
@@ -254,6 +254,7 @@ int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len)
 	ths->buf_ = buf;
 	ths->buf_tail_ = buf + buf_len;
 	ths->buf_head_ = buf;
+	ths->id = id;
 	return 0;
 }
 

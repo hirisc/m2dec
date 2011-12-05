@@ -28,17 +28,36 @@ protected:
 		}
 	}
 public:
-	enum {
+	typedef enum {
 		WRITE_NONE,
 		WRITE_MD5,
 		WRITE_RAW
-	};
-	FileWriter(FILE *fo) : fo_(fo) {}
+	} write_type;
+	FileWriter() : fo_(0) {}
 	~FileWriter() {
 		if (fo_) {
 			fclose(fo_);
 		}
 	}
+	bool set_file(const char *basename, bool modify) {
+		if (fo_) {
+			fclose(fo_);
+			fo_ = 0;
+		}
+		if (modify) {
+			char dstfile[256];
+			const char *ext = strrchr(basename, '.');
+			if (!ext++) {
+				return false;
+			}
+			strcpy(std::copy(basename, ext, dstfile), get_extension());
+			fo_ = fopen(dstfile, "wb");
+		} else {
+			fo_ = fopen(basename, "wb");
+		}
+		return fo_ != 0;
+	}
+	virtual const char *get_extension() = 0;
 	virtual size_t writeframe(const m2d_frame_t *frame) = 0;
 };
 
@@ -49,7 +68,11 @@ class FileWriterRaw : public FileWriter {
 		}
 	};
 public:
-	FileWriterRaw(FILE *fo) : FileWriter(fo) {}
+	FileWriterRaw() {}
+	const char *get_extension() {
+		static const char ext[] = "yuv";
+		return ext;
+	};
 	size_t writeframe(const m2d_frame_t *frame) {
 		if (!fo_) {
 			return 0;
@@ -77,7 +100,11 @@ protected:
 		txt[33] = 0x0a;
 	}
 public:
-	FileWriterMd5(FILE *fo) : FileWriter(fo) {}
+	FileWriterMd5() {}
+	const char *get_extension() {
+		static const char ext[] = "md5";
+		return ext;
+	};
 	size_t writeframe(const m2d_frame_t *frame) {
 		if (!fo_) {
 			return 0;

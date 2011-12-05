@@ -37,7 +37,7 @@ public:
 		}
 		set_codec(codec_mode);
 	}
-	void SetFrames(int id) {
+	void SetFrames(void *id) {
 		m2d_info_t info;
 		func_->get_info(context_, &info);
 		int width = (info.src_width + 15) & ~15;
@@ -53,12 +53,13 @@ public:
 		}
 		if (frames_) {
 			if (frames_->sufficient(bufnum, luma_len, info.additional_size)) {
+				frames_->set_id(id);
 				return;
 			}
 			delete frames_;
 		}
 		fprintf(stderr, "%d x %d x %d\n", info.src_width, info.src_height, info.frame_num);
-		frames_ = new Frames(width, height, bufnum, info.additional_size);
+		frames_ = new Frames(width, height, bufnum, info.additional_size, id);
 		func_->set_frames(context_, bufnum, frames_->aligned(), frames_->second(), info.additional_size);
 	}
 	type_t codec_mode() {
@@ -139,9 +140,10 @@ private:
 		pes_demuxer_t *dmx = demuxer();
 		const byte_t *packet;
 		int packet_size;
-		packet = mpeg_demux_get_video(dmx, &packet_size);
+		void *id;
+		packet = mpeg_demux_get_video(dmx, &packet_size, &id);
 		if (packet) {
-			dec_bits_set_data(stream(), packet, (size_t)packet_size);
+			dec_bits_set_data(stream(), packet, (size_t)packet_size, id);
 			return 0;
 		} else {
 			return -1;
@@ -150,7 +152,7 @@ private:
 	static int reread_packet(void *arg) {
 		return ((M2Decoder *)arg)->reread_packet_impl();
 	}
-	static int header_callback(void *arg, int id) {
+	static int header_callback(void *arg, void *id) {
 		((M2Decoder *)arg)->SetFrames(id);
 		return 0;
 	}
