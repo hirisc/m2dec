@@ -414,6 +414,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len);
 int h264d_get_info(h264d_context *h2d, m2d_info_t *info);
 int h264d_set_frames(h264d_context *h2d, int num_frame, m2d_frame_t *frame, uint8_t *second_frame, int second_frame_size);
 int h264d_decode_picture(h264d_context *h2d);
+int h264d_peek_decoded_frame(h264d_context *h2d, m2d_frame_t *frame, int bypass_dpb);
 int h264d_get_decoded_frame(h264d_context *h2d, m2d_frame_t *frame, int bypass_dpb);
 void h264d_load_bytes_skip03(dec_bits *ths, intptr_t read_bytes);
 
