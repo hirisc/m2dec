@@ -78,9 +78,8 @@ void dec_bits_dump(dec_bits *ths);
 void dec_bits_cachefill(dec_bits *ths);
 static inline cache_t get_onebit_inline(dec_bits *ths)
 {
-	int cache_len = ths->cache_len_;
 	cache_t cache;
-	if (cache_len <= 0) {
+	if (ths->cache_len_ <= 0) {
 		dec_bits_cachefill(ths);
 	}
 	cache = ths->cache_;
