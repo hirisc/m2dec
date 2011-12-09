@@ -217,6 +217,7 @@ __LIBM2DEC_API int m2d_get_info(m2d_context *m2d, m2d_info_t *info);
 __LIBM2DEC_API int m2d_set_frames(m2d_context *m2d, int num_mem, m2d_frame_t *mem);
 __LIBM2DEC_API int m2d_set_data(m2d_context *m2d, const byte_t *indata, int indata_bytes);
 __LIBM2DEC_API int m2d_decode_data(m2d_context *m2d);
+__LIBM2DEC_API int m2d_peek_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end);
 __LIBM2DEC_API int m2d_get_decoded_frame(m2d_context *m2d, m2d_frame_t *frame, int is_end);
 __LIBM2DEC_API int m2d_skip_frames(m2d_context *m2d, int frame_num);
 
