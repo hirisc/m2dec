@@ -1437,7 +1437,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	set_qp(&h2d->mb_current, pps->pic_init_qp + hdr->qp_delta);
 	if ((hdr->slice_type == SP_SLICE)
 	    || (hdr->slice_type == SI_SLICE)) {
-		if ((hdr->slice_type == SP_SLICE)) {
+		if (hdr->slice_type == SP_SLICE) {
 			hdr->sp_for_switch_flag = get_onebit(st);
 		}
 		hdr->qs_delta = se_golomb(st);
