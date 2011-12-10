@@ -101,7 +101,7 @@ static int test_dec_bits()
 			cache_t b = get_bits(&stream1, bit);
 			skip_bits(&stream0, bit);
 			if (a != b) {
-				printf("%d: %08x != %08x\n", bit, a, b);
+				printf("%d: %08lx != %08lx\n", bit, a, b);
 				break;
 			}
 			assert(a == b);
@@ -367,8 +367,8 @@ int main(int argc, char **argv)
 		m2d_get_decoded_frame(m2d.get(), &frm, 0);
 		printf(
 			"width, height: %dx%d\n"
-			"sizeof m2d: %d\n"
-			"sizeof m2d_mb_current: %d\n",
+			"sizeof m2d: %lu\n"
+			"sizeof m2d_mb_current: %lu\n",
 			frm.width, frm.height,
 			sizeof(m2d_context),
 			sizeof(m2d_mb_current));
