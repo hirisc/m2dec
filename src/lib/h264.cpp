@@ -3658,17 +3658,30 @@ static inline void filter_chroma_vert_horiz(const uint8_t *src, uint8_t *dst, in
 	c3 = fracx * fracy;
 	c1 = fracx * (8 - fracy);
 	c2 = (8 - fracx) * fracy;
-
+	width >>= 1;
 	do {
+		uint32_t t0, t2;
 		const uint8_t *src0, *src1;
 		uint8_t *d = dst;
 		int x = width;
 		src0 = src;
 		src += src_stride;
 		src1 = src;
+		t0 = *src0++;
+		t2 = *src1++;
+		t0 = (t0 << 16) | *src0++;
+		t2 = (t2 << 16) | *src1++;
 		do {
-			int t = src0[2] * c1 + src1[2] * c3 + 32;
-			*d++ = (t + *src0++ * c0 + *src1++ * c2) >> 6;
+			uint32_t t1 = *src0++;
+			uint32_t t3 = *src1++;
+			t1 = (t1 << 16) | *src0++;
+			t3 = (t3 << 16) | *src1++;
+			t0 = (t0 * c0 + t2 * c2 + t1 * c1 + t3 * c3 + 0x00200020) >> 6;
+			d[0] = t0 >> 16;
+			d[1] = t0;
+			t0 = t1;
+			t2 = t3;
+			d += 2;
 		} while (--x);
 		dst += stride;
 	} while (--height);
@@ -4237,13 +4250,13 @@ static inline void inter_pred_luma_filter_add(const uint8_t *src, uint8_t *dst, 
 {
 	stride -= width;
 	src_stride -= width;
-	width >>= 1;
+	width = (unsigned)width >> 2;
 	do {
 		int x = width;
 		do {
-			dst[0] = (dst[0] + *src++ + 1) >> 1;
-			dst[1] = (dst[1] + *src++ + 1) >> 1;
-			dst += 2;
+			*(uint32_t *)dst = AVERAGE2(*(uint32_t *)dst, read4_unalign((const uint32_t *)src));
+			src += 4;
+			dst += 4;
 		} while (--x);
 		src += src_stride;
 		dst += stride;
