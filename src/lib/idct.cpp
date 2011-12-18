@@ -29,6 +29,7 @@
  */
 
 #include "m2types.h"
+#include "m2d_macro.h"
 #include "idct.h"
 
 #define W1 2841 /* 2048*sqrt(2)*cos(1*pi/16) */

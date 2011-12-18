@@ -37,6 +37,7 @@ void exit(int);
 #include <functional>
 #include <algorithm>
 #include "bitio.h"
+#include "m2d_macro.h"
 #include "h264.h"
 #include "h264vld.h"
 
@@ -45,6 +46,11 @@ void exit(int);
 static inline int ABS(int a) {
 	return (0 <= a) ? a : -a;
 }
+
+/** dual 6-tap filter [1, -5, 20, 20, -5, 1] / 32.
+ * 0x00008000 are guard-bit to block borrow.
+ */
+#define FILTER6TAP_DUAL(a, b, c, d, e, f, rnd) (((((c) + (d)) * 4) - (b) - (e)) * 5 + (a) + (f) + ((RND) | 0x00008000))
 
 #define READ_UE_RANGE(dst, st, max) {uint32_t t = ue_golomb(st); (dst) = t; if ((max) < t) return -1;}
 #define READ_SE_RANGE(dst, st, min, max) {int32_t t = se_golomb(st); (dst) = t; if (t < (min) || (max) < t) return -1;}
@@ -3955,13 +3961,14 @@ static void inter_pred_chroma_bidir(const mb_pred_t *pred, int mvx, int mvy, int
 	add_bidir((const uint8_t *)tmp, pred->dst_chroma, width, height, src_stride);
 }
 
-static inline void inter_pred_luma_filter02_core(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
+template <typename DSTTYPE, typename F>
+static inline void inter_pred_luma_filter02_core_base(const uint8_t *src, DSTTYPE *dst, int width, int height, int src_stride, int stride, F Store)
 {
 	width >>= 1;
 	do {
 		int c0, c1, c2, c3, c4;
 		const uint8_t *s = src;
-		uint8_t *d = dst;
+		DSTTYPE *d = dst;
 		int x = width;
 
 		c0 = *s++;
@@ -3972,11 +3979,11 @@ static inline void inter_pred_luma_filter02_core(const uint8_t *src, uint8_t *ds
 		do {
 			int t, c5, c6;
 			c5 = *s++;
-			t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 16) >> 5;
-			d[0] = CLIP255C(t);
+			t = ((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5;
+			Store(t, d);
 			c6 = *s++;
-			t = (((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6 + 16) >> 5;
-			d[1] = CLIP255C(t);
+			t = ((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6;
+			Store(t, d + 1);
 			c0 = c2;
 			c1 = c3;
 			c2 = c4;
@@ -3989,130 +3996,97 @@ static inline void inter_pred_luma_filter02_core(const uint8_t *src, uint8_t *ds
 	} while (--height);
 }
 
+struct clip_store8 {
+	void operator()(int t, uint8_t *dst) const {
+		dst[0] = CLIP255C((t + 16) >> 5);
+	}
+};
+
+static inline void inter_pred_luma_filter02_core(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
+{
+	inter_pred_luma_filter02_core_base(src, dst, width, height, src_stride, stride, clip_store8());
+}
+
+template <int RND, typename DSTTYPE, typename F>
+static inline void inter_pred_luma_filter20_core_base(const uint8_t *src, DSTTYPE *dst, int width, int height, int src_stride, int stride, F Store)
+{
+	width >>= 1;
+	height >>= 1;
+	do {
+		uint32_t c0, c1, c2, c3, c4;
+		const uint8_t *s = src;
+		DSTTYPE *d = dst;
+		int y = height;
+
+		c0 = (s[0] << 16) | s[1];
+		s += src_stride;
+		c1 = (s[0] << 16) | s[1];
+		s += src_stride;
+		c2 = (s[0] << 16) | s[1];
+		s += src_stride;
+		c3 = (s[0] << 16) | s[1];
+		s += src_stride;
+		c4 = (s[0] << 16) | s[1];
+		s += src_stride;
+		do {
+			uint32_t t, c5, c6;
+			c5 = (s[0] << 16) | s[1];
+			t = FILTER6TAP_DUAL(c0, c1, c2, c3, c4, c5, RND);
+			s += src_stride;
+			Store(t, d);
+			c6 = (s[0] << 16) | s[1];
+			d += stride;
+			t = FILTER6TAP_DUAL(c1, c2, c3, c4, c5, c6, RND);
+			s += src_stride;
+			Store(t, d);
+			c0 = c2;
+			c1 = c3;
+			c2 = c4;
+			c3 = c5;
+			c4 = c6;
+			d += stride;
+		} while (--y);
+		src += 2;
+		dst += 2;
+	} while (--width);
+}
+
+struct clip_store8dual {
+	void operator()(uint32_t t, uint8_t *dst) const {
+		dst[0] = CLIP255H(t >> 21);
+		dst[1] = CLIP255H(t >> 5);
+	}
+};
+
 static inline void inter_pred_luma_filter20_core(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
-	height >>= 1;
-	do {
-		int c0, c1, c2, c3, c4;
-		const uint8_t *s = src++;
-		uint8_t *d = dst++;
-		int y = height;
+	inter_pred_luma_filter20_core_base<0x00100010>(src, dst, width, height, src_stride, stride, clip_store8dual());
 
-		c0 = *s;
-		s += src_stride;
-		c1 = *s;
-		s += src_stride;
-		c2 = *s;
-		s += src_stride;
-		c3 = *s;
-		s += src_stride;
-		c4 = *s;
-		s += src_stride;
-		do {
-			int t, c5, c6;
-			c5 = *s;
-			t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 16) >> 5;
-			s += src_stride;
-			d[0] = CLIP255C(t);
-			c6 = *s;
-			d += stride;
-			t = (((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6 + 16) >> 5;
-			s += src_stride;
-			d[0] = CLIP255C(t);
-			c0 = c2;
-			c1 = c3;
-			c2 = c4;
-			c3 = c5;
-			c4 = c6;
-			d += stride;
-		} while (--y);
-	} while (--width);
+
+
 }
 
-static inline void filter_1_3_v_post(const uint8_t *src0, const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
+static inline void filter_1_3_v_post(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
-	height >>= 1;
-	do {
-		int c0, c1, c2, c3, c4;
-		const uint8_t *s;
-		const uint8_t *s0;
-		uint8_t *d;
-		int y = height;
-
-		s = src++;
-		s0 = src0++;
-		d = dst++;
-		c0 = *s;
-		s += src_stride;
-		c1 = *s;
-		s += src_stride;
-		c2 = *s;
-		s += src_stride;
-		c3 = *s;
-		s += src_stride;
-		c4 = *s;
-		s += src_stride;
-		do {
-			int t, c5, c6;
-			c5 = *s;
-			t = (((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5 + 16) >> 5;
-			*d = (CLIP255I(t) + *s0 + 1) >> 1;
-			s += src_stride;
-			s0 += stride;
-			d += stride;
-			c6 = *s;
-			t = (((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6 + 16) >> 5;
-			*d = (CLIP255I(t) + *s0 + 1) >> 1;
-			s += src_stride;
-			s0 += stride;
-			d += stride;
-			c0 = c2;
-			c1 = c3;
-			c2 = c4;
-			c3 = c5;
-			c4 = c6;
-		} while (--y);
-	} while (--width);
+	uint32_t buf[16 * 22 / sizeof(uint32_t)];
+	inter_pred_luma_filter20_core(src, (uint8_t *)buf, width, height, src_stride, width);
+	add_bidir((uint8_t *)buf, dst, width, height, stride);
 }
+
+struct store32 {
+	void operator()(int t, int *dst) const {
+		dst[0] = t;
+	}
+};
 
 template <typename F>
 static inline void inter_pred_luma_filter22_horiz(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride, F Pred)
 {
 	int buf[16 * 21];
-	const uint8_t *ss = src;
+	inter_pred_luma_filter02_core_base(src, buf, width, height + 5, src_stride, width, store32());
+
 	int *dd = buf;
-	int y = height + 5;
-
-	width >>= 1;
-	do {
-		int c0, c1, c2, c3, c4;
-		const uint8_t *s = ss;
-		int x = width;
-
-		c0 = *s++;
-		c1 = *s++;
-		c2 = *s++;
-		c3 = *s++;
-		c4 = *s++;
-		do {
-			int c5, c6;
-			c5 = *s++;
-			dd[0] = ((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5;
-			c6 = *s++;
-			dd[1] = ((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6;
-			c0 = c2;
-			c1 = c3;
-			c2 = c4;
-			c3 = c5;
-			c4 = c6;
-			dd += 2;
-		} while (--x);
-		ss += src_stride;
-	} while (--y);
-
-	width = width * 2;
-	dd = buf;
-	y = width;
+	int y = width;
 	height >>= 1;
 	do {
 		int c0, c1, c2, c3, c4;
@@ -4149,52 +4123,27 @@ static inline void inter_pred_luma_filter22_horiz(const uint8_t *src, uint8_t *d
 	} while (--y);
 }
 
+static inline int sign_extend15bit(uint32_t t) {
+	return ((t & 0x40004000) * 2) | (t & ~0x8000);
+}
+
+struct store32dual {
+	void operator()(uint32_t t, int *dst) const {
+		t = sign_extend15bit(t);
+		dst[0] = (int16_t)(t >> 16);
+		dst[1] = (int16_t)t;
+	}
+};
+
 template <typename F>
 static inline void inter_pred_luma_filter22_vert(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride, F Pred)
 {
-	int buf[21 * 16];
-	const uint8_t *ss = src;
+	int buf[22 * 16];
+
+	inter_pred_luma_filter20_core_base<0>(src, buf, width + 6, height, src_stride, width + 6, store32dual());
+
 	int *dd = buf;
-	int i = width + 5;
-
-	height >>= 1;
-	do {
-		int c0, c1, c2, c3, c4;
-		const uint8_t *s = ss++;
-		int *d = dd++;
-		int y = height;
-
-		c0 = *s;
-		s += src_stride;
-		c1 = *s;
-		s += src_stride;
-		c2 = *s;
-		s += src_stride;
-		c3 = *s;
-		s += src_stride;
-		c4 = *s;
-		s += src_stride;
-		do {
-			int c5, c6;
-			c5 = *s;
-			s += src_stride;
-			*d = ((c2 + c3) * 4 - c1 - c4) * 5 + c0 + c5;
-			d += width + 5;
-			c6 = *s;
-			*d = ((c3 + c4) * 4 - c2 - c5) * 5 + c1 + c6;
-			s += src_stride;
-			c0 = c2;
-			c1 = c3;
-			c2 = c4;
-			c3 = c5;
-			c4 = c6;
-			d += width + 5;
-		} while (--y);
-	} while (--i);
-
-	height = height * 2;
-	dd = buf;
-	i = height;
+	int i = height;
 	width >>= 1;
 	do {
 		int c0, c1, c2, c3, c4;
@@ -4220,6 +4169,7 @@ static inline void inter_pred_luma_filter22_vert(const uint8_t *src, uint8_t *ds
 			dest += 2;
 		} while (--x);
 		dst += stride;
+		dd++;
 	} while (--i);
 }
 
@@ -4299,7 +4249,7 @@ static void inter_pred_luma_filter10(const uint8_t *src, uint8_t *dst, int width
 static void inter_pred_luma_filter11(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
 	inter_pred_luma_filter02_core(src + src_stride * 2, dst, width, height, src_stride, stride);
-	filter_1_3_v_post(dst, src + 2, dst, width, height, src_stride, stride);
+	filter_1_3_v_post(src + 2, dst, width, height, src_stride, stride);
 }
 
 static void inter_pred_luma_filter12(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
@@ -4310,7 +4260,7 @@ static void inter_pred_luma_filter12(const uint8_t *src, uint8_t *dst, int width
 static void inter_pred_luma_filter13(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
 	inter_pred_luma_filter02_core(src + src_stride * 2, dst, width, height, src_stride, stride);
-	filter_1_3_v_post(dst, src + 3, dst, width, height, src_stride, stride);
+	filter_1_3_v_post(src + 3, dst, width, height, src_stride, stride);
 }
 
 static void inter_pred_luma_filter20(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
@@ -4342,7 +4292,7 @@ static void inter_pred_luma_filter30(const uint8_t *src, uint8_t *dst, int width
 static void inter_pred_luma_filter31(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
 	inter_pred_luma_filter02_core(src + src_stride * 3, dst, width, height, src_stride, stride);
-	filter_1_3_v_post(dst, src + 2, dst, width, height, src_stride, stride);
+	filter_1_3_v_post(src + 2, dst, width, height, src_stride, stride);
 }
 
 static void inter_pred_luma_filter32(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
@@ -4353,7 +4303,7 @@ static void inter_pred_luma_filter32(const uint8_t *src, uint8_t *dst, int width
 static void inter_pred_luma_filter33(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
 	inter_pred_luma_filter02_core(src + src_stride * 3, dst, width, height, src_stride, stride);
-	filter_1_3_v_post(dst, src + 3, dst, width, height, src_stride, stride);
+	filter_1_3_v_post(src + 3, dst, width, height, src_stride, stride);
 }
 
 static void (* const inter_pred_luma_filter[4][4])(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int dst_stride) = {
