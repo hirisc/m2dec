@@ -22,7 +22,7 @@
  *  DEALINGS IN THE SOFTWARE.
  */
 
-#include "bitio.h"
+#include "m2d_macro.h"
 #include "motioncomp.h"
 
 #define HALFPEL(x, y) ((((y) & 1) * 2) | ((x) & 1))

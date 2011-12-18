@@ -243,7 +243,7 @@
 [LANGUAGE]
 "Japanese" 
 [CONFIG_INFO_VD1]
-0 
+1 
 [CONFIG_INFO_VD2]
 0 
 [CONFIG_INFO_VD3]
@@ -278,6 +278,10 @@
 [WINDOW_POSITION_STATE_DATA_VD3]
 [WINDOW_POSITION_STATE_DATA_VD4]
 [WINDOW_Z_ORDER]
+"C:\cygwin\home\minegisi\programs\m2dec\src\lib\h264.cpp" 
+"C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\sbrk.c" 
+"C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\sbrk.h" 
+"C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\resetprg.c" 
 [TARGET_NAME]
 "SH4AL-DSP Cycle Base Simulator(Little endian)" "" 0 
 [STATUSBAR_STATEINFO_VD1]
