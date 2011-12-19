@@ -4061,9 +4061,6 @@ struct clip_store8dual {
 static inline void inter_pred_luma_filter20_core(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
 	inter_pred_luma_filter20_core_base<0x00100010>(src, dst, width, height, src_stride, stride, clip_store8dual());
-
-
-
 }
 
 static inline void filter_1_3_v_post(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
