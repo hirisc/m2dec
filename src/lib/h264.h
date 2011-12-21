@@ -314,7 +314,7 @@ typedef struct {
 } prev_mb_t;
 
 typedef struct {
-	int8_t idc, qpy, qpc, slicehdr;
+	int8_t idc, qpy, qpc[2], slicehdr;
 	int8_t str4_vert, str4_horiz;
 	uint32_t str_vert, str_horiz;
 } deblock_info_t;
@@ -345,7 +345,7 @@ typedef struct {
 typedef struct mb_current {
 	int8_t is_constrained_intra;
 	int8_t type;
-	int8_t qp, qp_chroma;
+	int8_t qp, qp_chroma[2];
 	int8_t lefttop_ref[2];
 	int8_t prev_qp_delta;
 	int8_t chroma_pred_mode;
@@ -374,9 +374,9 @@ typedef struct mb_current {
 	h264d_cabac_t *cabac;
 	h264d_pps *pps;
 	int8_t *num_ref_idx_lx_active_minus1[2];
-	int16_t *qmatc_p;
+	int16_t *qmatc_p[2];
 	int16_t qmaty[16];
-	int16_t qmatc[16];
+	int16_t qmatc[2][16];
 	int offset4x4[16]; /* offset of each 4x4 block in a macroblock. */
 	h264d_bdirect_t bdirect_i;
 	h264d_frame_info_t frame_i;

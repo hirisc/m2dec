@@ -441,6 +441,8 @@ static int get_sei_message_size(dec_bits *stream)
 	return d + c;
 }
 
+static int more_rbsp_data(dec_bits *st);
+
 static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 {
 	uint8_t pps_id;
@@ -464,10 +466,16 @@ static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 	READ_SE_RANGE(tmp, stream, -26, 25);
 	pps->pic_init_qs = tmp + 26;
 	READ_SE_RANGE(pps->chroma_qp_index[0], stream, -12, 12);
+	pps->chroma_qp_index[1] = pps->chroma_qp_index[0];
 	pps->deblocking_filter_control_present_flag = get_onebit(stream);
 	pps->constrained_intra_pred_flag = get_onebit(stream);
 	pps->redundant_pic_cnt_present_flag = get_onebit(stream);
-
+	if (more_rbsp_data(stream)) {
+		pps->transform_8x8_mode_flag = get_onebit(stream);
+		if ((pps->pic_scaling_list_present_flag = get_onebit(stream)) != 0) {
+		}
+		READ_SE_RANGE(pps->chroma_qp_index[1], stream, -12, 12);
+	}
 	return 0;
 }
 
@@ -1052,16 +1060,47 @@ static void qp_matrix(int16_t *matrix, int scale, int shift)
 	*--matrix = v0;
 }
 
-static void set_qp(h264d_mb_current *mb, int qpy)
+static int qpc_adjust(int qpy, int qpc_diff)
 {
-	static const int8_t qpc_adjust[22] = {
+	static const int8_t adjust_lut[22] = {
 		29, 30, 31, 32, 32, 33, 34, 34,
 		35, 35, 36, 36, 37, 37, 37, 38,
 		38, 38, 39, 39, 39, 39
 	};
+	int qpc = qpy + qpc_diff;
+	if (0 < qpc) {
+		if (30 <= qpc) {
+			if (51 < qpc) {
+				qpc = 51;
+			}
+			qpc = adjust_lut[qpc - 30];
+		}
+	} else {
+		qpc = 0;
+	}
+	return qpc;
+}
+
+static void set_qpc(h264d_mb_current *mb, int qpy, int idx, int qpc_dif)
+{
+	int div, mod;
+	int qpc;
+	mb->qp_chroma[idx] = qpc = qpc_adjust(qpy, qpc_dif);
+	if (qpc != qpy) {
+		div = (unsigned)qpc / 6;
+		mod = qpc - div * 6;
+		mb->qmatc_p[idx] = mb->qmatc[idx];
+		qp_matrix(mb->qmatc[idx], mod, div);
+	} else {
+		mb->qmatc_p[idx] = mb->qmaty;
+	}
+}
+
+static void set_qp(h264d_mb_current *mb, int qpy)
+{
 	int div;
 	int mod;
-	int qpc;
+	int qpc_dif0, qpc_dif1;
 
 	if (qpy < 0) {
 		qpy += 52;
@@ -1072,25 +1111,14 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 	div = (unsigned)qpy / 6;
 	mod = qpy - div * 6;
 	qp_matrix(mb->qmaty, mod, div);
-	qpc = qpy + mb->pps->chroma_qp_index[0];
-	if (0 < qpc) {
-		if (30 <= qpc) {
-			if (51 < qpc) {
-				qpc = 51;
-			}
-			qpc = qpc_adjust[qpc - 30];
-		}
+	qpc_dif0 = mb->pps->chroma_qp_index[0];
+	set_qpc(mb, qpy, 0, qpc_dif0);
+	qpc_dif1 = mb->pps->chroma_qp_index[1];
+	if (qpc_dif0 == qpc_dif1) {
+		mb->qp_chroma[1] = mb->qp_chroma[0];
+		mb->qmatc_p[1] = mb->qmatc_p[0];
 	} else {
-		qpc = 0;
-	}
-	mb->qp_chroma = qpc;
-	if (qpy == qpc) {
-		mb->qmatc_p = mb->qmaty;
-	} else {
-		div = (unsigned)qpc / 6;
-		mod = qpc - div * 6;
-		mb->qmatc_p = mb->qmatc;
-		qp_matrix(mb->qmatc, mod, div);
+		set_qpc(mb, qpy, 1, qpc_dif1);
 	}
 }
 
@@ -1883,7 +1911,6 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 {
 	int coeff[16];
 	int dc[2][4];
-	const int16_t *qmat;
 	uint8_t *chroma;
 	int stride;
 	int *dcp;
@@ -1894,9 +1921,8 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 		*mb->top4x4coef &= 0x0000ffff;
 		return 0;
 	}
-	qmat = mb->qmatc_p;
 	for (int i = 0; i < 2; ++i) {
-		if (ResidualBlock(mb, 0, 0, st, coeff, 4, qmat, avail, 16 + i, 3, 0)) {
+		if (ResidualBlock(mb, 0, 0, st, coeff, 4, mb->qmatc_p[i], avail, 16 + i, 3, 0)) {
 			intra_chroma_dc_transform(coeff, dc[i]);
 		} else {
 			memset(dc[i], 0, sizeof(dc[0][0]) * 4);
@@ -1924,25 +1950,25 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 			} else {
 				c0top = c1top = -1;
 			}
-			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, 15, qmat, avail, 18 + i * 4, 4, 0x1f)) != 0) {
+			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, 15, mb->qmatc_p[i], avail, 18 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma, *dcp++, stride);
 			}
-			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, 15, qmat, avail, 19 + i * 4, 4, 0x1f)) != 0) {
+			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, 15, mb->qmatc_p[i], avail, 19 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + 8, *dcp++, stride);
 			}
-			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, 15, qmat, avail, 20 + i * 4, 4, 0x1f)) != 0) {
+			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, 15, mb->qmatc_p[i], avail, 20 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + stride * 4, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4, *dcp++, stride);
 			}
-			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, qmat, avail, 21 + i * 4, 4, 0x1f)) != 0) {
+			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, mb->qmatc_p[i], avail, 21 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + stride * 4 + 8, coeff, stride);
 			} else {
@@ -2604,7 +2630,8 @@ static void mb_intra_save_info(h264d_mb_current *mb)
 static inline void store_strength_intra(h264d_mb_current *mb) {
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 	deb->str4_horiz = 1;
 	deb->str4_vert = 1;
 	deb->str_horiz = 0xffffffff;
@@ -3527,7 +3554,8 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
 	mb->deblock_curr->qpy = 0;
-	mb->deblock_curr->qpc = 0;
+	mb->deblock_curr->qpc[0] = 0;
+	mb->deblock_curr->qpc[1] = 0;
 	mb->prev_qp_delta = 0;
 	mb->cbp = 0x3f;
 	mb->cbf = 0x7ffffff;
@@ -5289,7 +5317,8 @@ static void store_info_inter16x16(h264d_mb_current *mb, const h264d_vector_set_t
 {
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 	if (mb->y != 0) {
 		str_vert = store_str_inter16xedge(mb, mb->top4x4inter, deb->str4_vert, mv, ref_idx, str_vert, top4x4);
 	}
@@ -5572,7 +5601,8 @@ static void store_info_inter16x8(h264d_mb_current *mb, const h264d_vector_set_t 
 {
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 	if (mb->y != 0) {
 		str_vert = store_str_inter16xedge(mb, mb->top4x4inter, deb->str4_vert, mv, ref_idx, str_vert, top4x4);
 	}
@@ -5799,7 +5829,8 @@ static void store_info_inter8x16(h264d_mb_current *mb, const h264d_vector_set_t 
 {
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 	if (mb->y != 0) {
 		str_vert = store_str_inter8xedge<0, 1, 1>(mb, mb->top4x4inter, deb->str4_vert, mv, ref_idx, str_vert, top4x4);
 	}
@@ -7141,7 +7172,8 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	}
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 
 	if (mb->y != 0) {
 		if (mb->top4x4inter->type <= MB_IPCM) {
@@ -7341,7 +7373,8 @@ static void store_info_inter8x8(h264d_mb_current *mb, const h264d_vector_set_t m
 {
 	deblock_info_t *deb = mb->deblock_curr;
 	deb->qpy = mb->qp;
-	deb->qpc = mb->qp_chroma;
+	deb->qpc[0] = mb->qp_chroma[0];
+	deb->qpc[1] = mb->qp_chroma[1];
 	if (mb->y != 0) {
 		str_vert = store_str_inter8xedge<0, 1, 8 / N>(mb, mb->top4x4inter, deb->str4_vert, mv, ref_idx, str_vert, top4x4);
 	}
@@ -8421,7 +8454,7 @@ struct Strength1_3v {
 	}
 };
 
-template <typename T, int LEN>
+template <typename T, int LEN, int GAP>
 static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int stride, T strength)
 {
 	uint8_t *dst = luma - stride * 3;
@@ -8443,12 +8476,12 @@ static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int 
 				}
 			}
 		}
-		dst += 1;
+		dst += GAP;
 	}
 }
 
 static inline void deblock_luma_vert_str4(int a, int b2, uint8_t *luma, int stride) {
-	deblock_luma_vert<Strength4v<1>, 16>(a, b2, luma, 0, stride, Strength4v<1>());
+	deblock_luma_vert<Strength4v<1>, 16, 1>(a, b2, luma, 0, stride, Strength4v<1>());
 }
 
 static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *luma, int str, int stride)
@@ -8456,7 +8489,7 @@ static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, ui
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_vert<Strength1_3v<1>, 4>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3v<1>());
+			deblock_luma_vert<Strength1_3v<1>, 4, 1>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3v<1>());
 		}
 		luma += 4;
 		str = (unsigned)str >> 2;
@@ -8464,7 +8497,7 @@ static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, ui
 }
 
 static inline void deblock_chroma_vert_str4(int a, int b2, uint8_t *chroma, int stride) {
-	deblock_luma_vert<Strength4v<2>, 16>(a, b2, chroma, 0, stride, Strength4v<2>());
+	deblock_luma_vert<Strength4v<2>, 8, 2>(a, b2, chroma, 0, stride, Strength4v<2>());
 }
 
 static inline void deblock_chroma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *chroma, int str, int stride)
@@ -8472,7 +8505,7 @@ static inline void deblock_chroma_vert_str1_3(int a, int b2, const int8_t *tc0, 
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_vert<Strength1_3v<2>, 4>(a, b2, chroma, tc0[strength_1 - 1], stride, Strength1_3v<2>());
+			deblock_luma_vert<Strength1_3v<2>, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride, Strength1_3v<2>());
 		}
 		chroma += 4;
 		str >>= 2;
@@ -8520,16 +8553,16 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						}
 					}
 				}
-				qp = (curr->qpc + (curr - 1)->qpc + 1) >> 1;
-				AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
-				if (a) {
-					if (curr->str4_horiz) {
-						deblock_chroma_horiz_str4(a, b2, chroma, stride);
-						deblock_chroma_horiz_str4(a, b2, chroma + 1, stride);
-					} else {
-						if (str & 255) {
-							deblock_chroma_horiz_str1_3(a, b2, tc0, chroma, str, stride);
-							deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 1, str, stride);
+				for (int c = 0; c < 2; ++c) {
+					qp = (curr->qpc[c] + (curr - 1)->qpc[c] + 1) >> 1;
+					AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+					if (a) {
+						if (curr->str4_horiz) {
+							deblock_chroma_horiz_str4(a, b2, chroma + c, stride);
+						} else {
+							if (str & 255) {
+								deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + c, str, stride);
+							}
 						}
 					}
 				}
@@ -8550,14 +8583,15 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						deblock_luma_horiz_str1_3(a, b2, tc0, luma + 12, str_tmp, stride);
 					}
 				}
-				if (curr->qpy != curr->qpc) {
-					AlphaBetaTc0(a, b2, &tc0, curr->qpc, alpha_offset, beta_offset);
-				}
-				if (a) {
-					str >>= 16;
-					if (str & 0xff) {
-						deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8, str, stride);
-						deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8 + 1, str, stride);
+				str >>= 16;
+				for (int c = 0; c < 2; ++c) {
+					if (curr->qpy != curr->qpc[c]) {
+						AlphaBetaTc0(a, b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+					}
+					if (a) {
+						if (str & 0xff) {
+							deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8 + c, str, stride);
+						}
 					}
 				}
 			}
@@ -8575,14 +8609,16 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						}
 					}
 				}
-				qp = (curr->qpc + (curr - max_x)->qpc + 1) >> 1;
-				AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
-				if (a) {
-					if (curr->str4_vert) {
-						deblock_chroma_vert_str4(a, b2, chroma, stride);
-					} else {
-						if (str & 255) {
-							deblock_chroma_vert_str1_3(a, b2, tc0, chroma, str, stride);
+				for (int c = 0; c < 2; ++c) {
+					qp = (curr->qpc[c] + (curr - max_x)->qpc[c] + 1) >> 1;
+					AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+					if (a) {
+						if (curr->str4_vert) {
+							deblock_chroma_vert_str4(a, b2, chroma + c, stride);
+						} else {
+							if (str & 255) {
+								deblock_chroma_vert_str1_3(a, b2, tc0, chroma + c, str, stride);
+							}
 						}
 					}
 				}
@@ -8603,13 +8639,15 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 12, str_tmp, stride);
 					}
 				}
-				if (curr->qpy != curr->qpc) {
-					AlphaBetaTc0(a, b2, &tc0, curr->qpc, alpha_offset, beta_offset);
-				}
-				if (a) {
-					str >>= 16;
-					if (str & 255) {
-						deblock_chroma_vert_str1_3(a, b2, tc0, chroma + stride * 4, str, stride);
+				str >>= 16;
+				for (int c = 0; c < 2; ++c) {
+					if (curr->qpy != curr->qpc[c]) {
+						AlphaBetaTc0(a, b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+					}
+					if (a) {
+						if (str & 255) {
+							deblock_chroma_vert_str1_3(a, b2, tc0, chroma + stride * 4 + c, str, stride);
+						}
 					}
 				}
 			}
