@@ -1034,30 +1034,86 @@ static void qp_matrix(int16_t *matrix, int scale, int shift)
 		{16, 25, 20},
 		{18, 29, 23}
 	};
-	/* before zigzag-scan, order of normAdjust v shall be:
-	   0, 2, 2, 0, 1, 0, 2, 2, 2, 2, 1, 0, 1, 2, 2, 1
-	 */
 	int v0 = normAdjust[scale][0] << shift;
 	int v1 = normAdjust[scale][1] << shift;
 	int v2 = normAdjust[scale][2] << shift;
-	/* write backword for SuperH. */
-	matrix += 15;
-	*matrix = v1;
-	*--matrix = v2;
-	*--matrix = v2;
-	*--matrix = v1;
-	*--matrix = v0;
-	*--matrix = v1;
-	*--matrix = v2;
-	*--matrix = v2;
-	*--matrix = v2;
-	*--matrix = v2;
-	*--matrix = v0;
-	*--matrix = v1;
-	*--matrix = v0;
-	*--matrix = v2;
-	*--matrix = v2;
-	*--matrix = v0;
+	/* after inverse-zig-zag scan, normAdjust shall be:
+	   0, 2, 0, 2,
+	   2, 1, 2, 1,
+	   0, 2, 0, 2,
+	   2, 1, 2, 1
+	 */
+	matrix += 16; /* write backward for SuperH. */
+	int i = 2;
+	do {
+		*--matrix = v1;
+		*--matrix = v2;
+		*--matrix = v1;
+		*--matrix = v2;
+		*--matrix = v2;
+		*--matrix = v0;
+		*--matrix = v2;
+		*--matrix = v0;
+	} while (--i);
+}
+
+static void qp_matrix8x8(int16_t *matrix, int scale, int shift)
+{
+	static const int8_t normAdjust[6][6] = {
+		{20, 18, 32, 19, 25, 24},
+		{22, 19, 35, 21, 28, 26},
+		{26, 23, 42, 24, 33, 31},
+		{28, 25, 45, 26, 35, 33},
+		{32, 28, 51, 30, 40, 38},
+		{36, 32, 58, 34, 46, 43},
+	};
+	const int8_t *adj = normAdjust[scale];
+	int v0, v1, v2, v3, v4, v5;
+	v0 = *adj++;
+	v1 = *adj++;
+	v2 = *adj++;
+	v3 = *adj++;
+	v4 = *adj++;
+	v5 = *adj;
+	if (shift) {
+		if (0 < shift) {
+			v0 <<= shift;
+			v1 <<= shift;
+			v2 <<= shift;
+			v3 <<= shift;
+			v4 <<= shift;
+			v5 <<= shift;
+		} else {
+			shift = -shift;
+			v0 >>= shift;
+			v1 >>= shift;
+			v2 >>= shift;
+			v3 >>= shift;
+			v4 >>= shift;
+			v5 >>= shift;
+		}
+	}
+	/* after inverse-zigzag-scan, order of normAdjust v shall be:
+	   0, 3, 4, 3, 0, 3, 4, 3,
+	   3, 1, 5, 1, 3, 1, 5, 1,
+	   4, 5, 2, 5, 4, 5, 2, 5,
+	   3, 1, 5, 1, 3, 1, 5, 1,
+	   0, 3, 4, 3, 0, 3, 4, 3,
+	   3, 1, 5, 1, 3, 1, 5, 1,
+	   4, 5, 2, 5, 4, 5, 2, 5,
+	   3, 1, 5, 1, 3, 1, 5, 1,
+	 */
+	matrix += 64; /* write backward for SuperH architecture. */
+	int j;
+#define QMAT8x8LINE(mt, x0, x1, x2) j = 2; do { *--mt = x0; *--mt = x1; *--mt = x0; *--mt = x2; } while (--j)
+	QMAT8x8LINE(matrix, v1, v5, v3); /* [63]..[48] */
+	QMAT8x8LINE(matrix, v5, v2, v4);
+	QMAT8x8LINE(matrix, v1, v5, v3); /* [47]..[32] */
+	QMAT8x8LINE(matrix, v3, v4, v0);
+	QMAT8x8LINE(matrix, v1, v5, v3); /* [31]..[16] */
+	QMAT8x8LINE(matrix, v5, v2, v4);
+	QMAT8x8LINE(matrix, v1, v5, v3); /* [15]..[0] */
+	QMAT8x8LINE(matrix, v3, v4, v0);
 }
 
 static int qpc_adjust(int qpy, int qpc_diff)
@@ -1111,6 +1167,9 @@ static void set_qp(h264d_mb_current *mb, int qpy)
 	div = (unsigned)qpy / 6;
 	mod = qpy - div * 6;
 	qp_matrix(mb->qmaty, mod, div);
+	if (mb->pps->transform_8x8_mode_flag) {
+		qp_matrix8x8(mb->qmaty8x8, mod, div - 2);
+	}
 	qpc_dif0 = mb->pps->chroma_qp_index[0];
 	set_qpc(mb, qpy, 0, qpc_dif0);
 	qpc_dif1 = mb->pps->chroma_qp_index[1];
@@ -1335,6 +1394,8 @@ const h264d_bdirect_functions_t bdirect_functions[2][2] = {
 	},
 };
 
+static void set_mb_decode(h264d_mb_current *mb, const h264d_pps *pps);
+
 static int slice_header(h264d_context *h2d, dec_bits *st)
 {
 	h264d_slice_header *hdr = h2d->slice_header;
@@ -1362,6 +1423,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	sps = &h2d->sps_i[pps->seq_parameter_set_id];
 	mb->pps = pps;
 	mb->is_constrained_intra = pps->constrained_intra_pred_flag;
+	set_mb_decode(mb, pps);
 
 	if (hdr->first_mb_in_slice <= prev_first_mb) {
 		m2d_frame_t *frm = &mb->frame->frames[mb->frame->index];
@@ -1810,17 +1872,91 @@ static int8_t run_before(dec_bits *st, int zeros_left)
 	return r;
 }
 
-static inline void coeff_writeback(int *coeff, int total_coeff, const int8_t *run, const int *level, const int16_t *qmat, uint32_t dc_mask)
+static const int8_t inverse_zigzag4x4[2][16] = {
+	{
+		0, 1, 4, 8,
+		5, 2, 3, 6,
+		9, 12, 13, 10,
+		7, 11, 14, 15,
+	},
+	{
+		0, 4, 1, 8,
+		12, 5, 9, 13,
+		2, 6, 10, 14,
+		3, 7, 11, 15
+	}
+};
+
+static const int8_t inverse_zigzag2x2[2][4] = {
+	{0, 1, 2, 3},
+	{0, 1, 2, 3}
+};
+
+static const int8_t inverse_zigzag8x8[2][64] = {
+	{
+		0, 1, 8, 16, 9, 2, 3, 10,
+		17, 24, 32, 25, 18, 11, 4, 5,
+		12, 19, 26, 33, 40, 48, 41, 34,
+		27, 20, 13, 6, 7, 14, 21, 28,
+		35, 42, 49, 56, 57, 50, 43, 36,
+		29, 22, 15, 23, 30, 37, 44, 51,
+		58, 59, 52, 45, 38, 31, 39, 46,
+		53, 60, 61, 54, 47, 55, 62, 63,
+	},
+	{
+		0, 8, 16, 1, 9, 24, 32, 17,
+		2, 25, 40, 48, 56, 33, 10, 3,
+		18, 41, 49, 57, 26, 11, 4, 19,
+		34, 42, 50, 58, 27, 12, 5, 20,
+		35, 43, 51, 59, 28, 13, 6, 21,
+		36, 44, 52, 60, 29, 14, 22, 37,
+		45, 53, 61, 30, 7, 15, 38, 46,
+		54, 62, 23, 31, 39, 47, 55, 63,
+	}
+};
+
+static const int8_t * const inverse_zigzag[6] = {
+	inverse_zigzag4x4[0],
+	inverse_zigzag4x4[0],
+	inverse_zigzag4x4[0],
+	inverse_zigzag2x2[0],
+	inverse_zigzag4x4[0],
+	inverse_zigzag8x8[0]
+};
+
+static const struct {
+	uint8_t cabac_coeff_abs_level_offset;
+	int8_t coeff_offset;
+	int8_t num_coeff;
+	int8_t coeff_dc_mask;
+} coeff_ofs[6] = {
+	{0, 0, 16, 0}, {10, 1, 15, 15}, {20, 0, 16, 15}, {30, 0, 4, 0}, {39, 1, 15, 15}, {426 - 227, 0, 64, 63}
+};
+
+static inline void coeff_writeback(int *coeff, int total_coeff, const int8_t *run, const int *level, const int16_t *qmat, int cat)
 {
-	int idx;
-	idx = (dc_mask >> 4) - 1;
+	static const int8_t error_idx_mask[6] = {
+		15, 15, 15, 3, 15, 63
+	};
+	const int8_t *zigzag = inverse_zigzag[cat];
+	int idx = coeff_ofs[cat].coeff_offset;
+	memset(coeff + idx, 0, sizeof(*coeff) * coeff_ofs[cat].num_coeff);
+	uint32_t dc_mask = coeff_ofs[cat].coeff_dc_mask;
+	uint32_t err_mask = error_idx_mask[cat];
+	idx--;
 	for (int i = total_coeff - 1; 0 <= i; --i) {
-		idx = idx + 1 + run[i];
-		idx &= 15; /* for bit error */
-		coeff[idx] = level[i] * qmat[idx & dc_mask];
+		idx = (idx + 1 + run[i]) & err_mask;
+		int zig_idx = zigzag[idx];
+		coeff[zig_idx] = level[i] * qmat[zig_idx & dc_mask];
 	}
 	
 }
+
+struct transform_size_8x8_flag_cavlc {
+	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) {
+		return get_onebit_inline(st);
+	}
+};
 
 struct residual_block_cavlc {
 	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
@@ -1850,7 +1986,6 @@ struct residual_block_cavlc {
 		if (total_coeff == 0) {
 			return 0;
 		}
-		memset(coeff + (dc_mask >> 4), 0, sizeof(*coeff) * num_coeff);
 		int suffix_len = ((10 < total_coeff) && (trailing_ones < 3));
 		for (int i = 0; i < total_coeff; ++i) {
 			if (i < trailing_ones) {
@@ -1897,14 +2032,90 @@ struct residual_block_cavlc {
 			zeros_left -= r;
 		}
 		run[total_coeff - 1] = zeros_left;
-		coeff_writeback(coeff, total_coeff, run, level, qmat, dc_mask);
+		coeff_writeback(coeff, total_coeff, run, level, qmat, cat);
 		return total_coeff <= 15 ? total_coeff : 15;
 	}
 };
 
 static void intra_chroma_dc_transform(const int *src, int *dst);
-static void ac4x4transform_dconly_chroma(uint8_t *dst, int dc, int stride);
-static void ac4x4transform_acdc_chroma(uint8_t *dst, const int *coeff, int stride);
+static void ac4x4transform_dconly_chroma(uint8_t *dst, int dc, int stride)
+{
+	int y;
+	dc = (dc + 32) >> 6;
+	y = 4;
+	do {
+		int t;
+		t = dst[0] + dc;
+		dst[0] = CLIP255C(t);
+		t = dst[2] + dc;
+		dst[2] = CLIP255C(t);
+		t = dst[4] + dc;
+		dst[4] = CLIP255C(t);
+		t = dst[6] + dc;
+		dst[6] = CLIP255C(t);
+		dst += stride;
+	} while (--y);
+}
+
+static inline void transform4x4_vert_loop(int *dst, const int *src)
+{
+	int i = 4;
+	int d0 = *src++ + 32;
+	do {
+		int d1 = *src++;
+		int d2 = *src++;
+		int d3 = *src++;
+		int t0 = d0 + d2;
+		int t1 = d0 - d2;
+		int t2 = (d1 >> 1) - d3;
+		int t3 = d1 + (d3 >> 1);
+		dst[0] = t0 + t3;
+		dst[4] = t1 + t2;
+		dst[8] = t1 - t2;
+		dst[12] = t0 - t3;
+		d0 = *src++;
+		dst += 1;
+	} while (--i);
+}
+
+template <int N>
+static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int stride)
+{
+	int x = 4;
+	do {
+		int e0 = *src++;
+		int e1 = *src++;
+		int e2 = *src++;
+		int e3 = *src++;
+		uint8_t *d = dst;
+		int f0 = e0 + e2;
+		int f1 = e0 - e2;
+		int f2 = (e1 >> 1) - e3;
+		int f3 = e1 + (e3 >> 1);
+		int t0 = *d + ((f0 + f3) >> 6);
+		*d = CLIP255C(t0);
+		d += stride;
+		t0 = *d + ((f1 + f2) >> 6);
+		*d = CLIP255C(t0);
+		d += stride;
+		t0 = *d + ((f1 - f2) >> 6);
+		*d = CLIP255C(t0);
+		d += stride;
+		t0 = *d + ((f0 - f3) >> 6);
+		*d = CLIP255C(t0);
+		dst += N;
+	} while (--x);
+}
+
+/** Reconstruct 4x4 coefficients.
+ */
+template <int N>
+static inline void ac4x4transform_acdc(uint8_t *dst, const int *coeff, int stride)
+{
+	int tmp[16];
+	transform4x4_vert_loop(tmp, coeff);
+	transform4x4_horiz_loop<N>(dst, tmp, stride);
+}
 
 template <typename F0>
 static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail, F0 ResidualBlock)
@@ -1952,25 +2163,25 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 			}
 			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, 15, mb->qmatc_p[i], avail, 18 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc_chroma(chroma, coeff, stride);
+				ac4x4transform_acdc<2>(chroma, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma, *dcp++, stride);
 			}
 			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, 15, mb->qmatc_p[i], avail, 19 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc_chroma(chroma + 8, coeff, stride);
+				ac4x4transform_acdc<2>(chroma + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + 8, *dcp++, stride);
 			}
 			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, 15, mb->qmatc_p[i], avail, 20 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc_chroma(chroma + stride * 4, coeff, stride);
+				ac4x4transform_acdc<2>(chroma + stride * 4, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4, *dcp++, stride);
 			}
 			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, mb->qmatc_p[i], avail, 21 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc_chroma(chroma + stride * 4 + 8, coeff, stride);
+				ac4x4transform_acdc<2>(chroma + stride * 4 + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4 + 8, *dcp++, stride);
 			}
@@ -2042,44 +2253,47 @@ struct intra4x4pred_mode_cavlc {
 	}
 };
 
-static int intra4x4pred_dc(uint8_t *dst, int stride, int avail)
+template <int N>
+static int intraNxNpred_dc(uint8_t *dst, int stride, int avail)
 {
 	uint32_t dc;
-	
+
 	if (avail & 1) {
 		if (avail & 2) {
-			dc = (sum_left<4>(dst, stride) + sum_top<4>(dst, stride) + 4) >> 3;
+			dc = (sum_left<N>(dst, stride) + sum_top<N>(dst, stride) + N) >> ((N / 8) + 3);
 		} else {
-			dc = (sum_left<4>(dst, stride) + 2) >> 2;
+			dc = (sum_left<N>(dst, stride) + (N / 2)) >> ((N / 8) + 2);
 		}
 	} else if (avail & 2) {
-		dc = (sum_top<4>(dst, stride) + 2) >> 2;
+		dc = (sum_top<N>(dst, stride) + (N / 2)) >> ((N / 8) + 2);
 	} else {
 		dc = 0x80;
 	}
 	dc = dc * 0x01010101U;
-	*(uint32_t *)dst = dc;
-	dst += stride;
-	*(uint32_t *)dst = dc;
-	dst += stride;
-	*(uint32_t *)dst = dc;
-	dst += stride;
-	*(uint32_t *)dst = dc;
+	int i = N;
+	do {
+		for (int j = 0; j < N / 4; ++j) {
+			((uint32_t *)dst)[j] = dc;
+		}
+		dst += stride;
+	} while (--i);
 	return 0;
 }
 
-static int intra4x4pred_horiz(uint8_t *dst, int stride, int avail)
+template <int N>
+static int intraNxNpred_horiz(uint8_t *dst, int stride, int avail)
 {
 	if (!(avail & 1)) {
 		return -1;
 	}
-	*(uint32_t *)dst = dst[-1] * 0x01010101U;
-	dst = dst + stride;
-	*(uint32_t *)dst = dst[-1] * 0x01010101U;
-	dst = dst + stride;
-	*(uint32_t *)dst = dst[-1] * 0x01010101U;
-	dst = dst + stride;
-	*(uint32_t *)dst = dst[-1] * 0x01010101U;
+	int i = N;
+	do {
+		uint32_t t0 = dst[-1] * 0x01010101U;
+		for (int j = 0; j < N / 4; ++j) {
+			((uint32_t *)dst)[j] = t0;
+		}
+		dst = dst + stride;
+	} while (--i);
 	return 0;
 }
 
@@ -2520,8 +2734,8 @@ static int intra4x4pred_hu(uint8_t *dst, int stride, int avail)
 
 static int (* const intra4x4pred_func[9])(uint8_t *dst, int stride, int avail) = {
 	intra4x4pred_vert,
-	intra4x4pred_horiz,
-	intra4x4pred_dc,
+	intraNxNpred_horiz<4>,
+	intraNxNpred_dc<4>,
 	intra4x4pred_ddl,
 	intra4x4pred_ddr,
 	intra4x4pred_vr,
@@ -2607,12 +2821,14 @@ static int (* const intra_chroma_pred[4])(uint8_t *dst, int stride, int avail) =
 };
 
 static inline void ac4x4transform_maybe(uint8_t *dst, const int *coeff, int stride, int num_coeff);
-static void mb_intra_save_info(h264d_mb_current *mb)
+static void mb_intra_save_info(h264d_mb_current *mb, int8_t transform8x8)
 {
 	mb->lefttop_ref[0] = mb->top4x4inter->ref[1][0];
 	mb->lefttop_ref[1] = mb->top4x4inter->ref[1][1];
 	mb->lefttop_mv[0].vector = mb->top4x4inter->mov[3].mv[0].vector;
 	mb->lefttop_mv[1].vector = mb->top4x4inter->mov[3].mv[1].vector;
+	mb->left4x4inter->transform8x8 = transform8x8;
+	mb->top4x4inter->transform8x8 = transform8x8;
 	mb->left4x4inter->direct8x8 = 0;
 	mb->top4x4inter->direct8x8 = 0;
 	memset(mb->left4x4inter->mov, 0, sizeof(mb->left4x4inter->mov));
@@ -2813,10 +3029,566 @@ static inline int mb_intra4x4(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 		luma_intra4x4_pred(mb, avail, pred4x4, stride);
 	}
 	store_strength_intra(mb);
-	mb_intra_save_info(mb);
+	mb_intra_save_info(mb, 0);
 	mb->cbp = cbp;
 	VC_CHECK;
 	return residual_chroma(mb, cbp, st, avail, ResidualBlock);
+}
+
+template <typename F>
+static int mb_pred_intra8x8(h264d_mb_current *mb, dec_bits *st, int avail, int8_t *pred8x8, F I8x8PredMode) {
+	uint32_t left = mb->left4x4pred;
+	uint32_t top = *mb->top4x4pred;
+	h264d_cabac_t *cb = mb->cabac;
+	pred8x8[0] = I8x8PredMode(avail & 2 ? UNPACK(left, 0) : 2, avail & 1 ? UNPACK(top, 0) : 2, st, cb);
+	pred8x8[1] = I8x8PredMode(avail & 2 ? pred8x8[0] : 2, UNPACK(top, 2), st, cb);
+	pred8x8[2] = I8x8PredMode(UNPACK(left, 2), avail & 1 ? pred8x8[0] : 2, st, cb);
+	pred8x8[3] = I8x8PredMode(pred8x8[2], pred8x8[1], st, cb);
+	mb->left4x4pred = pred8x8[1] * 0x11 + pred8x8[3] * 0x1100;
+	*mb->top4x4pred = pred8x8[2] * 0x11 + pred8x8[3] * 0x1100;
+	return 0;
+}
+
+static int intra8x8pred_vert(uint8_t *dst, int stride, int avail)
+{
+	uint32_t *src;
+	uint32_t t0, t1;
+
+	if (!(avail & 2)) {
+		return -1;
+	}
+	src = (uint32_t *)(dst - stride);
+
+	t0 = src[0];
+	t1 = src[1];
+	((uint32_t *)dst)[0] = t0;
+	((uint32_t *)dst)[1] = t1;
+	dst += stride;
+	((uint32_t *)dst)[0] = t0;
+	((uint32_t *)dst)[1] = t1;
+	dst += stride;
+	((uint32_t *)dst)[0] = t0;
+	((uint32_t *)dst)[1] = t1;
+	dst += stride;
+	((uint32_t *)dst)[0] = t0;
+	((uint32_t *)dst)[1] = t1;
+	return 0;
+}
+
+/**Intra 8x8 prediction Diagonal Down Left.
+ */
+static int intra8x8pred_ddl(uint8_t *dst, int stride, int avail)
+{
+	uint8_t *src;
+	uint32_t t0, t1, t2;
+	uint64_t d0;
+	src = dst - stride;
+	t0 = *src++;
+	t1 = *src++;
+	t2 = *src++;
+	dst[0] = FIR3(t0, t1, t2);
+	t0 = *src++;
+	dst[1] = FIR3(t1, t2, t0);
+	t1 = *src++;
+	dst[2] = FIR3(t2, t0, t1);
+	t2 = *src++;
+	dst[3] = FIR3(t0, t1, t2);
+	t0 = *src++;
+	dst[4] = FIR3(t1, t2, t0);
+	t1 = *src++;
+	dst[5] = FIR3(t2, t0, t1);
+	if (avail & 4) {
+		t2 = *src++;
+		dst[6] = FIR3(t0, t1, t2);
+		t0 = *src++;
+		dst[7] = FIR3(t1, t2, t0);
+		d0 = *(uint64_t *)dst;
+		dst += stride;
+		t1 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t2, t0, t1);
+#else
+		d0 = ((uint64_t)FIR3(t2, t0, t1) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t2 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t0, t1, t2);
+#else
+		d0 = ((uint64_t)FIR3(t0, t1, t2) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t0 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t1, t2, t0);
+#else
+		d0 = ((uint64_t)FIR3(t1, t2, t0) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t1 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t2, t0, t1);
+#else
+		d0 = ((uint64_t)FIR3(t2, t0, t1) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t2 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t0, t1, t2);
+#else
+		d0 = ((uint64_t)FIR3(t0, t1, t2) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t0 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t1, t2, t0);
+#else
+		d0 = ((uint64_t)FIR3(t1, t2, t0) << 56) | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+		t1 = *src++;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | FIR3(t2, t0, t1);
+#else
+		d0 = ((uint64_t)FIR3(t2, t0, t1) << 56) | (d0 >> 8);
+#endif
+	} else {
+		dst[6] = FIR3(t0, t1, t1);
+		dst[7] = t1;
+		d0 = *(uint64_t *)dst;
+
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		uint64_t t = (uint64_t)t1 << 56;
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+		*(uint64_t *)dst = d0;
+		dst += stride;
+#ifdef WORDS_BIGENDIAN
+		d0 = (d0 << 8) | t1;
+#else
+		d0 = t | (d0 >> 8);
+#endif
+	}
+	*(uint64_t *)dst = d0;
+	return 0;
+}
+
+/** Intra 8x8 prediction Horizontal Down.
+ */
+static int intra8x8pred_hd(uint8_t *dst, int stride, int avail)
+{
+/*
+  zHD:
+  0, -1, -2, -3, -4, -5, -6, -7
+  2,  1,  0, -1, -2, -3, -4, -5
+  4,  3,  2,  1,  0, -1, -2, -3
+  6,  5,  4,  3,  2,  1,  0, -1
+  8,  7,  6,  5,  4,  3,  2,  1
+  10, 9,  8,  7,  6,  5,  4,  3
+  12, 11, 10, 9,  8,  7,  6,  5,
+  14, 13, 12, 11, 10, 9,  8,  7
+ */
+	uint8_t *src;
+	uint32_t t0, t1, t2, d0, d1;
+	if ((avail & 3) != 3) {
+		return -1;
+	}
+	src = dst - stride - 1;
+	t0 = *src++; // (-1, -1)
+	t1 = *src++; // (0, -1)
+	t2 = *src++; // (1, -1)
+	d0 = (FIR3(t0, t1, t2) << 16) | (FIR3(dst[-1], t0, t1) << 8) | FIR2(t0, t1);
+	t0 = *src++;
+	d0 = (FIR3(t1, t2, t0) << 24) | d0;
+	t1 = *src++;
+	d1 = FIR3(t2, t0, t1);
+	t2 = *src++;
+	d1 = (FIR3(t0, t1, t2) << 8) | d1;
+	t0 = *src++;
+	d1 = (FIR3(t1, t2, t0) << 16) | d1;
+	t1 = *src;
+	d1 = (FIR3(t2, t0, t1) << 24) | d1;
+#ifdef WORDS_BIGENDIAN
+	d0 = bswap32(d0);
+	d1 = bswap32(d1);
+#endif
+	((uint32_t *)dst)[0] = d0;
+	((uint32_t *)dst)[1] = d1; // line 0
+	t0 = dst[-stride - 1];
+	t1 = dst[-1];
+	dst += stride;
+	t2 = dst[-1];
+	d1 = (d1 << 16) | (d0 >> 16);
+	d0 = (d0 << 16) | (FIR3(t0, t1, t2) << 8) | FIR2(t1, t2);
+#ifdef WORDS_BIGENDIAN
+	d0 = bswap32(d0);
+	d1 = bswap32(d1);
+#endif
+	((uint32_t *)dst)[0] = d0;
+	((uint32_t *)dst)[1] = d1; // line 1
+	int y = 8 - 2;
+	do {
+		dst += stride;
+		t0 = dst[-1];
+		d1 = (d1 << 16) | (d0 >> 16);
+		d0 = (d0 << 16) | (FIR2(t2, t0) << 8) | FIR3(t1, t2, t0);
+#ifdef WORDS_BIGENDIAN
+		d0 = bswap32(d0);
+		d1 = bswap32(d1);
+#endif
+		((uint32_t *)dst)[0] = d0;
+		((uint32_t *)dst)[1] = d1;
+		dst += stride;
+		t1 = dst[-1];
+		d1 = (d1 << 16) | (d0 >> 16);
+		d0 = (d0 << 16) | (FIR3(t2, t0, t1) << 8) | FIR2(t0, t1);
+#ifdef WORDS_BIGENDIAN
+		d0 = bswap32(d0);
+		d1 = bswap32(d1);
+#endif
+		((uint32_t *)dst)[0] = d0;
+		((uint32_t *)dst)[1] = d1;
+		t2 = t1;
+		t1 = t0;
+	} while (--y);
+	return 0;
+}
+
+static int (* const intra8x8pred_func[9])(uint8_t *dst, int stride, int avail) = {
+	intra8x8pred_vert,
+	intraNxNpred_horiz<8>,
+	intraNxNpred_dc<8>,
+	intra8x8pred_ddl,
+	intra4x4pred_ddr,
+	intra4x4pred_vr,
+	intra8x8pred_hd,
+//	intra8x8pred_vl,
+//	intra8x8pred_hu
+};
+
+struct AddSaturate {
+	uint32_t operator()(uint32_t x, uint32_t y) const {
+		uint32_t msk;
+		msk = ((x & y) + (((x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
+		msk = (msk << 1) - (msk >> 7);
+		return ((x + y) - msk) | msk;
+	}
+};
+
+struct SubSaturate {
+	uint32_t operator()(uint32_t x, uint32_t y) const {
+		uint32_t msk;
+		msk = ((~x & y) + (((~x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
+		msk = (msk << 1) - (msk >> 7);
+		return (x | msk) - (y | msk);
+	}
+};
+
+template<int N, typename T>
+static inline void acNxNtransform_dconly_base(uint8_t *dst, uint32_t dc, int stride, T saturate)
+{
+	int y = N;
+	dc = dc * 0x01010101;
+	do {
+		for (int x = 0; x < N / 4; ++x) {
+			((uint32_t *)dst)[x] = saturate(((uint32_t *)dst)[x], dc);
+		}
+		dst += stride;
+	} while (--y);
+}
+
+template<int N>
+static void acNxNtransform_dconly(uint8_t *dst, int dc, int stride)
+{
+	dc = (dc + 32) >> 6;
+	if (dc < 0) {
+		acNxNtransform_dconly_base<N>(dst, (uint32_t)(-dc), stride, SubSaturate());
+	} else {
+		acNxNtransform_dconly_base<N>(dst, (uint32_t)dc, stride, AddSaturate());
+	}
+}
+
+/** Assumes that parameter t2 has initial value src[0] already. Other t0, t1, t3,... don't have initial value.
+ */
+static inline void ac8x8transform_interim(const int *src, int& t0, int& t1, int& t2, int& t3, int& t4, int& t5, int& t6, int& t7)
+{
+//		t0 = src[0] + src[4];
+//		t1 = src[5] - src[3] - src[7] - (src[7] >> 1);
+//		t2 = src[0] - src[4];
+//		t3 = src[1] + src[7] - src[3] - (src[3] >> 1);
+//		t4 = (src[2] >> 1) - src[6];
+//		t5 = src[5] + (src[5] >> 1) + src[7] - src[1];
+//		t6 = src[2] + (src[6] >> 1);
+//		t7 = src[3] + src[5] + src[1] + (src[1] >> 1);
+	{
+		int s = src[4];
+		t0 = t2 + s;
+		t2 = t2 - s;
+	}
+	{
+		int s = src[6];
+		t6 = src[2];
+		t4 = (t6 >> 1) - s;
+		t6 = t6 + (s >> 1);
+	}
+	{
+		int s1 = src[1];
+		int s7 = src[7];
+		t3 = src[3];
+		t5 = src[5];
+		t1 = t5 - t3 - s7 - (s7 >> 1);
+		t7 = t3 + t5 + s1 + (s1 >> 1);
+		t3 = s1 + s7 - t3 - (t3 >> 1);
+		t5 = t5 + (t5 >> 1) + s7 - s1;
+	}
+	{
+		int s = t0;
+		t0 = t0 + t6;
+		t6 = s - t6;
+	}
+	{
+		int s = t2;
+		t2 = t2 + t4;
+		t4 = s - t4;
+	}
+	{
+		int s = t1;
+		t1 = t1 + (t7 >> 2);
+		t7 = t7 - (s >> 2);
+	}
+	{
+		int s = t3;
+		t3 = t3 + (t5 >> 2);
+		t5 = (s >> 2) - t5;
+	}
+}
+
+static inline void ac8x8transform_horiz(int *dst, const int *src)
+{
+	int i = 8;
+	int t2 = src[0] + 32;
+	do {
+		int t0, t1, t3, t4, t5, t6, t7;
+		ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7);
+		dst[0] = t0 + t7;
+		dst[8] = t2 + t5;
+		dst[16] = t4 + t3;
+		dst[24] = t6 + t1;
+		dst[32] = t6 - t1;
+		dst[40] = t4 - t3;
+		dst[48] = t2 - t5;
+		dst[56] = t0 - t7;
+		src += 8;
+		dst += 1;
+		t2 = src[0];
+	} while (--i);
+}
+
+static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
+{
+	int i = 8;
+	int t2 = src[0];
+	do {
+		int t0, t1, t3, t4, t5, t6, t7;
+		ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7);
+		uint8_t *d = dst;
+		int t;
+		t = d[0] + ((t0 + t7) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t2 + t5) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t4 + t3) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t6 + t1) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t6 - t1) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t4 - t3) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t2 - t5) >> 6);
+		d[0] = CLIP255C(t);
+		d += stride;
+		t = d[0] + ((t0 - t7) >> 6);
+		d[0] = CLIP255C(t);
+		src += 8;
+		dst += 1;
+		t2 = src[0];
+	} while (--i);
+}
+
+/** Reconstruct 8x8 coefficients.
+ */
+static inline void ac8x8transform_acdc(uint8_t *dst, const int *coeff, int stride)
+{
+	int tmp[8 * 8];
+	ac8x8transform_horiz(tmp, coeff);
+	ac8x8transform_vert(dst, tmp, stride);
+}
+
+/** Reconstruct 8x8 coefficients.
+ */
+static inline void ac8x8transform(uint8_t *dst, const int *coeff, int stride, int coeff_num)
+{
+	int c0;
+	if ((coeff_num == 1) && ((c0 = coeff[0]) != 0)) {
+		acNxNtransform_dconly<8>(dst, c0, stride);
+	} else {
+		ac8x8transform_acdc(dst, coeff, stride);
+	}
+}
+
+template <typename F>
+static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *st, uint32_t cbp, int avail, int avail_intra, const int8_t *pr, int stride,
+						    F ResidualBlock)
+{
+	int coeff[64];
+	uint32_t top, left;
+	int c0, c1, c2, c3;
+	uint8_t *luma = mb->luma;
+	const int *offset = mb->offset4x4;
+	const int16_t *qmat = mb->qmaty8x8;
+
+	intra8x8pred_func[*pr++](luma, stride, avail_intra | (avail_intra & 2 ? 4 : 0));
+	if (cbp & 1) {
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 64, qmat, avail_intra, 0, 5, 0x3f);
+		ac8x8transform(luma, coeff, stride, c0);
+	} else {
+		c0 = 0;
+	}
+	intra8x8pred_func[*pr++](luma + 8, stride, avail_intra | (avail_intra & 2 ? 5 : 1));
+	if (cbp & 2) {
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail_intra, 4, 5, 0x3f);
+		ac8x8transform(luma + offset[4], coeff, stride, c0);
+		left = c1 * 0x11;
+	} else {
+		c1 = 0;
+		left = 0;
+	}
+	intra8x8pred_func[*pr++](luma + offset[8], stride, avail_intra | 6);
+	if (cbp & 4) {
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail_intra, 8, 5, 0x3f);
+		ac8x8transform(luma + offset[8], coeff, stride, c0);
+		top = c2 * 0x11;
+	} else {
+		c2 = 0;
+		top = 0;
+	}
+	intra8x8pred_func[*pr++](luma + offset[12], stride, 7);
+	if (cbp & 8) {
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, 64, qmat, avail_intra, 12, 5, 0x3f);
+		ac8x8transform(luma + offset[12], coeff, stride, c0);
+		left |= c3 * 0x1100;
+		top |= c3 * 0x1100;
+	}
+	mb->left4x4coef = (mb->left4x4coef & 0xffff0000) | left;
+	*mb->top4x4coef = (*mb->top4x4coef & 0xffff0000) | top;
+}
+
+template <typename F0, typename F1, typename F2, typename F3, typename F4>
+static inline int mb_intra8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
+				F0 Intra8x8PredMode,
+				F1 IntraChromaPredMode,
+				F2 CodedBlockPattern,
+				F3 QpDelta,
+				F4 ResidualBlock)
+{
+	int8_t pred8x8[4];
+	uint32_t intra_chroma_pred_mode;
+	int stride;
+	uint32_t cbp;
+	int avail_intra;
+
+	avail_intra = avail;
+	if (mb->is_constrained_intra) {
+		avail_intra &= ~((MB_IPCM < mb->top4x4inter[1].type) * 4 | ((MB_IPCM < mb->top4x4inter->type) * 2) | (MB_IPCM < mb->left4x4inter->type));
+	}
+	fill_dc_if_unavailable(mb, avail_intra);
+	mb_pred_intra8x8(mb, st, avail_intra, pred8x8, Intra8x8PredMode);
+	VC_CHECK;
+	intra_chroma_pred_mode = IntraChromaPredMode(mb, st, avail_intra);
+	stride = mb->max_x * 16;
+	intra_chroma_pred[intra_chroma_pred_mode](mb->chroma, stride, avail_intra);
+	cbp = CodedBlockPattern(mb, st, avail);
+	if (cbp) {
+		int32_t qp_delta = QpDelta(mb, st, avail);
+		if (qp_delta) {
+			set_qp(mb, mb->qp + qp_delta);
+		}
+	} else {
+		mb->prev_qp_delta = 0;
+	}
+	luma_intra8x8_with_residual(mb, st, cbp, avail, avail_intra, pred8x8, stride, ResidualBlock);
+	store_strength_intra(mb);
+	mb_intra_save_info(mb, 1);
+	mb->cbp = cbp;
+	VC_CHECK;
+	return residual_chroma(mb, cbp, st, avail, ResidualBlock);
+}
+
+template <typename F0, typename F1, typename F2, typename F3, typename F4, typename F5, typename F6>
+static inline int mb_intraNxN(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
+				F0 Transform8x8Flag,
+				F1 Intra4x4PredMode,
+				F2 Intra8x8PredMode,
+				F3 IntraChromaPredMode,
+				F4 CodedBlockPattern,
+				F5 QpDelta,
+				F6 ResidualBlock)
+{
+	if (Transform8x8Flag(mb, st, avail)) {
+		return mb_intra8x8(mb, mbc, st, avail, Intra8x8PredMode, IntraChromaPredMode, CodedBlockPattern, QpDelta, ResidualBlock);
+	} else {
+		return mb_intra4x4(mb, mbc, st, avail, Intra4x4PredMode, IntraChromaPredMode, CodedBlockPattern, QpDelta, ResidualBlock);
+	}
 }
 
 struct intra_chroma_pred_mode_cavlc {
@@ -2852,52 +3624,10 @@ static int mb_intra4x4_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits 
 	return mb_intra4x4(mb, mbc, st, avail, intra4x4pred_mode_cavlc(), intra_chroma_pred_mode_cavlc(), cbp_intra_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 } 
 
-static int mb_intra16x16pred_dc(uint8_t *dst, int stride, int avail)
+static int mb_intraNxN_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	uint32_t dc;
-	int i;
-	
-	if (avail & 1) {
-		if (avail & 2) {
-			dc = (sum_left<16>(dst, stride) + sum_top<16>(dst, stride) + 16) >> 5;
-		} else {
-			dc = (sum_left<16>(dst, stride) + 8) >> 4;
-		}
-	} else if (avail & 2) {
-		dc = (sum_top<16>(dst, stride) + 8) >> 4;
-	} else {
-		dc = 0x80;
-	}
-	dc = dc * 0x01010101U;
-	i = 16;
-	do {
-		*(uint32_t *)dst = dc;
-		*((uint32_t *)dst + 1) = dc;
-		*((uint32_t *)dst + 2) = dc;
-		*((uint32_t *)dst + 3) = dc;
-		dst += stride;
-	} while (--i);
-	return 0;
-}
-
-static int mb_intra16x16pred_horiz(uint8_t *dst, int stride, int avail)
-{
-	int i;
-
-	if (!(avail & 1)) {
-		return -1;
-	}
-	i = 16;
-	do {
-		uint32_t t0 = dst[-1] * 0x01010101U;
-		*(uint32_t *)dst = t0;
-		*((uint32_t *)dst + 1) = t0;
-		*((uint32_t *)dst + 2) = t0;
-		*((uint32_t *)dst + 3) = t0;
-		dst = dst + stride;
-	} while (--i);
-	return 0;
-}
+	return mb_intraNxN(mb, mbc, st, avail, transform_size_8x8_flag_cavlc(), intra4x4pred_mode_cavlc(), intra4x4pred_mode_cavlc(), intra_chroma_pred_mode_cavlc(), cbp_intra_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
+} 
 
 static int mb_intra16x16pred_planer(uint8_t *dst, int stride, int avail)
 {
@@ -2982,7 +3712,7 @@ static int mb_intra16x16pred_planer(uint8_t *dst, int stride, int avail)
 	return 0;
 }
 
-/** Inverse 16x16 luma DC transformation with inverse zigzag scan.
+/** Inverse 16x16 luma DC transformation.
  * Output is 4x4 block scan order.
  */
 static void intra16x16_dc_transform(const int *src, int *dst)
@@ -2990,10 +3720,10 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 	int c0, c1, c2, c3;
 	int t0, t1;
 
-	c0 = src[0] + src[1] + src[5] + src[6];
-	c1 = src[2] + src[4] + src[7] + src[12];
-	c2 = src[3] + src[8] + src[11] + src[13];
-	c3 = src[9] + src[10] + src[14] + src[15];
+	c0 = src[0] + src[1] + src[2] + src[3];
+	c1 = src[4] + src[5] + src[6] + src[7];
+	c2 = src[8] + src[9] + src[10] + src[11];
+	c3 = src[12] + src[13] + src[14] + src[15];
 	t0 = c0 + c1;
 	t1 = c2 + c3;
 	dst[0] = (t0 + t1 + 2) >> 2;
@@ -3003,10 +3733,10 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 	dst[8] = (t0 - t1 + 2) >> 2;
 	dst[10] = (t0 + t1 + 2) >> 2;
 
-	c0 = src[0] + src[1] - src[5] - src[6];
-	c1 = src[2] + src[4] - src[7] - src[12];
-	c2 = src[3] + src[8] - src[11] - src[13];
-	c3 = src[9] + src[10] - src[14] - src[15];
+	c0 = src[0] + src[1] - src[2] - src[3];
+	c1 = src[4] + src[5] - src[6] - src[7];
+	c2 = src[8] + src[9] - src[10] - src[11];
+	c3 = src[12] + src[13] - src[14] - src[15];
 	t0 = c0 + c1;
 	t1 = c2 + c3;
 	dst[1] = (t0 + t1 + 2) >> 2;
@@ -3016,10 +3746,10 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 	dst[9] = (t0 - t1 + 2) >> 2;
 	dst[11] = (t0 + t1 + 2) >> 2;
 
-	c0 = src[0] - src[1] - src[5] + src[6];
-	c1 = src[2] - src[4] - src[7] + src[12];
-	c2 = src[3] - src[8] - src[11] + src[13];
-	c3 = src[9] - src[10] - src[14] + src[15];
+	c0 = src[0] - src[1] - src[2] + src[3];
+	c1 = src[4] - src[5] - src[6] + src[7];
+	c2 = src[8] - src[9] - src[10] + src[11];
+	c3 = src[12] - src[13] - src[14] + src[15];
 	t0 = c0 + c1;
 	t1 = c2 + c3;
 	dst[4] = (t0 + t1 + 2) >> 2;
@@ -3029,10 +3759,10 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 	dst[12] = (t0 - t1 + 2) >> 2;
 	dst[14] = (t0 + t1 + 2) >> 2;
 
-	c0 = src[0] - src[1] + src[5] - src[6];
-	c1 = src[2] - src[4] + src[7] - src[12];
-	c2 = src[3] - src[8] + src[11] - src[13];
-	c3 = src[9] - src[10] + src[14] - src[15];
+	c0 = src[0] - src[1] + src[2] - src[3];
+	c1 = src[4] - src[5] + src[6] - src[7];
+	c2 = src[8] - src[9] + src[10] - src[11];
+	c3 = src[12] - src[13] + src[14] - src[15];
 	t0 = c0 + c1;
 	t1 = c2 + c3;
 	dst[5] = (t0 + t1 + 2) >> 2;
@@ -3043,126 +3773,10 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 	dst[15] = (t0 + t1 + 2) >> 2;
 }
 
-struct AddSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) const {
-		uint32_t msk;
-		msk = ((x & y) + (((x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
-		msk = (msk << 1) - (msk >> 7);
-		return ((x + y) - msk) | msk;
-	}
-};
-
-struct SubSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) const {
-		uint32_t msk;
-		msk = ((~x & y) + (((~x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
-		msk = (msk << 1) - (msk >> 7);
-		return (x | msk) - (y | msk);
-	}
-};
-
-template<typename T>
-static inline void ac4x4transform_dconly_part(uint8_t *dst, uint32_t dc, int stride, T saturate)
-{
-	int y = 4;
-	dc = dc * 0x01010101;
-	do {
-		*(uint32_t *)dst = saturate(*(uint32_t *)dst, dc);
-		dst += stride;
-	} while (--y);
-}
-
-static void ac4x4transform_dconly(uint8_t *dst, int dc, int stride)
-{
-	dc = (dc + 32) >> 6;
-	if (dc < 0) {
-		ac4x4transform_dconly_part(dst, (uint32_t)(-dc), stride, SubSaturate());
-	} else {
-		ac4x4transform_dconly_part(dst, (uint32_t)dc, stride, AddSaturate());
-	}
-}
-
-static void ac4x4transform_dconly_chroma(uint8_t *dst, int dc, int stride)
-{
-	int y;
-	dc = (dc + 32) >> 6;
-	y = 4;
-	do {
-		int t;
-		t = dst[0] + dc;
-		dst[0] = CLIP255C(t);
-		t = dst[2] + dc;
-		dst[2] = CLIP255C(t);
-		t = dst[4] + dc;
-		dst[4] = CLIP255C(t);
-		t = dst[6] + dc;
-		dst[6] = CLIP255C(t);
-		dst += stride;
-	} while (--y);
-}
-
-static inline void transform4x4_vert(int *dst, int d0, int d1, int d2, int d3)
-{
-	int t0 = d0 + d2;
-	int t1 = d0 - d2;
-	int t2 = (d1 >> 1) - d3;
-	int t3 = d1 + (d3 >> 1);
-	dst[0] = t0 + t3;
-	dst[4] = t1 + t2;
-	dst[8] = t1 - t2;
-	dst[12] = t0 - t3;
-}
-
-template <int N>
-static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int stride)
-{
-	int x = 4;
-	do {
-		int e0, e1, e2, e3;
-		int f0, f1, f2, f3;
-		uint8_t *d;
-
-		int t0;
-		e0 = *src++;
-		e1 = *src++;
-		e2 = *src++;
-		e3 = *src++;
-		d = dst;
-		f0 = e0 + e2;
-		f1 = e0 - e2;
-		f2 = (e1 >> 1) - e3;
-		f3 = e1 + (e3 >> 1);
-		t0 = *d + ((f0 + f3) >> 6);
-		*d = CLIP255C(t0);
-		d += stride;
-		t0 = *d + ((f1 + f2) >> 6);
-		*d = CLIP255C(t0);
-		d += stride;
-		t0 = *d + ((f1 - f2) >> 6);
-		*d = CLIP255C(t0);
-		d += stride;
-		t0 = *d + ((f0 - f3) >> 6);
-		*d = CLIP255C(t0);
-		dst += N;
-	} while (--x);
-}
-
-/** Read coefficients in inverse zigzag order and then reconstruct.
- */
-static void ac4x4transform_acdc(uint8_t *dst, const int *coeff, int stride)
-{
-	int tmp[16];
-	transform4x4_vert(tmp, coeff[0] + 32, coeff[1], coeff[5], coeff[6]);
-	transform4x4_vert(tmp + 1, coeff[2], coeff[4], coeff[7], coeff[12]);
-	transform4x4_vert(tmp + 2, coeff[3], coeff[8], coeff[11], coeff[13]);
-	transform4x4_vert(tmp + 3, coeff[9], coeff[10], coeff[14], coeff[15]);
-	transform4x4_horiz_loop<1>(dst, tmp, stride);
-}
-
 static inline void ac4x4transform_maybe(uint8_t *dst, const int *coeff, int stride, int num_coeff)
 {
 	if (num_coeff) {
-		ac4x4transform_acdc(dst, coeff, stride);
+		ac4x4transform_acdc<1>(dst, coeff, stride);
 	}
 }
 
@@ -3170,25 +3784,13 @@ static inline void ac4x4transform(uint8_t *dst, int *coeff, int stride, int num_
 {
 	if (num_coeff) {
 		coeff[0] = dc;
-		ac4x4transform_acdc(dst, coeff, stride);
+		ac4x4transform_acdc<1>(dst, coeff, stride);
 	} else {
-		ac4x4transform_dconly(dst, dc, stride);
+		acNxNtransform_dconly<4>(dst, dc, stride);
 	}
 }
 
-/** Read coefficients in inverse zigzag order and then reconstruct, chroma part.
- */
-static void ac4x4transform_acdc_chroma(uint8_t *dst, const int *coeff, int stride)
-{
-	int tmp[16];
-	transform4x4_vert(tmp, coeff[0] + 32, coeff[1], coeff[5], coeff[6]);
-	transform4x4_vert(tmp + 1, coeff[2], coeff[4], coeff[7], coeff[12]);
-	transform4x4_vert(tmp + 2, coeff[3], coeff[8], coeff[11], coeff[13]);
-	transform4x4_vert(tmp + 3, coeff[9], coeff[10], coeff[14], coeff[15]);
-	transform4x4_horiz_loop<2>(dst, tmp, stride);
-}
-
-/** Inverse 8x8 chroma DC transformation with inverse zigzag scan.
+/** Inverse 8x8 chroma DC transformation.
  * Output is 4x4 block scan order.
  */
 static void intra_chroma_dc_transform(const int *src, int *dst)
@@ -3242,7 +3844,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 		intra16x16_dc_transform(coeff, dc);
 		offset = mb->offset4x4;
 		for (int i = 0; i < 16; ++i) {
-			ac4x4transform_dconly(luma + *offset++, dc[i], stride);
+			acNxNtransform_dconly<4>(luma + *offset++, dc[i], stride);
 		}
 	}
 	mb->left4x4coef &= 0xffff0000;
@@ -3250,7 +3852,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
 	store_strength_intra(mb);
-	mb_intra_save_info(mb);
+	mb_intra_save_info(mb, 0);
 	mb->cbp = mbc->cbp;
 	return residual_chroma(mb, mbc->cbp, st, avail, ResidualBlock);
 }
@@ -3353,7 +3955,7 @@ static int mb_intra16x16_acdc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
 	store_strength_intra(mb);
-	mb_intra_save_info(mb);
+	mb_intra_save_info(mb, 0);
 	mb->cbp = mbc->cbp;
 	return residual_chroma(mb, mbc->cbp, st, avail, ResidualBlock);
 }
@@ -3559,7 +4161,7 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	mb->prev_qp_delta = 0;
 	mb->cbp = 0x3f;
 	mb->cbf = 0x7ffffff;
-	mb_intra_save_info(mb);
+	mb_intra_save_info(mb, 0);
 	return 0;
 }
 
@@ -4900,19 +5502,19 @@ static uint32_t residual_luma_inter(h264d_mb_current *mb, uint32_t cbp, dec_bits
 	str_map = 0;
 	if (cbp & 1) {
 		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, qmat, avail, 0, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[0], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[0], coeff, stride);
 			str_map = 0x2;
 		}
 		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, 16, qmat, avail, 1, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[1], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[1], coeff, stride);
 			str_map |= 0x8;
 		}
 		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, 16, qmat, avail, 2, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[2], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[2], coeff, stride);
 			str_map |= 0x200;
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 3, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[3], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[3], coeff, stride);
 			str_map |= 0x800;
 		}
 	} else {
@@ -4923,24 +5525,24 @@ static uint32_t residual_luma_inter(h264d_mb_current *mb, uint32_t cbp, dec_bits
 	}
 	if (cbp & 2) {
 		if ((c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 16, qmat, avail, 4, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[4], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[4], coeff, stride);
 			str_map |= 0x20;
 		}
 		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, 16, qmat, avail, 5, 2, 0xf)) != 0) {
 			left = PACK(0, c1, 0);
 			str_map |= 0x80;
-			ac4x4transform_acdc(luma + offset[5], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[5], coeff, stride);
 		} else {
 			left = 0;
 		}
 		if ((c4 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 6, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[6], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[6], coeff, stride);
 			str_map |= 0x2000;
 		}
 		if ((c5 = ResidualBlock(mb, c4, c1, st, coeff, 16, qmat, avail, 7, 2, 0xf)) != 0) {
 			left = PACK(left, c5, 1);
 			str_map |= 0x8000;
-			ac4x4transform_acdc(luma + offset[7], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[7], coeff, stride);
 		}
 	} else {
 		c0 = 0;
@@ -4951,24 +5553,24 @@ static uint32_t residual_luma_inter(h264d_mb_current *mb, uint32_t cbp, dec_bits
 	}
 	if (cbp & 4) {
 		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, 16, qmat, avail, 8, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[8], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[8], coeff, stride);
 			str_map |= 0x20000;
 		}
 		if ((c1 = ResidualBlock(mb, c0, c3, st, coeff, 16, qmat, avail, 9, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[9], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[9], coeff, stride);
 			str_map |= 0x80000;
 		}
 		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, 16, qmat, avail, 10, 2, 0xf)) != 0) {
 			top = PACK(0, c2, 0);
 			str_map |= 0x2000000;
-			ac4x4transform_acdc(luma + offset[10], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[10], coeff, stride);
 		} else {
 			top = 0;
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 11, 2, 0xf)) != 0) {
 			top = PACK(top, c3, 1);
 			str_map |= 0x8000000;
-			ac4x4transform_acdc(luma + offset[11], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[11], coeff, stride);
 		}
 	} else {
 		c0 = 0;
@@ -4979,22 +5581,22 @@ static uint32_t residual_luma_inter(h264d_mb_current *mb, uint32_t cbp, dec_bits
 	}
 	if (cbp & 8) {
 		if ((c0 = ResidualBlock(mb, c1, c4, st, coeff, 16, qmat, avail, 12, 2, 0xf)) != 0) {
-			ac4x4transform_acdc(luma + offset[12], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[12], coeff, stride);
 			str_map |= 0x200000;
 		}
 		if ((c1 = ResidualBlock(mb, c0, c5, st, coeff, 16, qmat, avail, 13, 2, 0xf)) != 0) {
 			left = PACK(left, c1, 2);
 			str_map |= 0x800000;
-			ac4x4transform_acdc(luma + offset[13], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[13], coeff, stride);
 		}
 		if ((c2 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 14, 2, 0xf)) != 0) {
 			top = PACK(top, c2, 2);
 			str_map |= 0x20000000;
-			ac4x4transform_acdc(luma + offset[14], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[14], coeff, stride);
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 15, 2, 0xf)) != 0) {
 			str_map |= 0x80000000;
-			ac4x4transform_acdc(luma + offset[15], coeff, stride);
+			ac4x4transform_acdc<1>(luma + offset[15], coeff, stride);
 		}
 	} else {
 		c3 = 0; 
@@ -7611,50 +8213,97 @@ static int mb_bdirect16x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_b
 	return mb_bdirect16x16(mb, mbc, st, avail, cbp_inter_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
-static const mb_code mb_decode[] = {
-	{mb_intra4x4_cavlc, 0, 0},
-	{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_horiz, 0},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_dc, 0},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0},
-	{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x10},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_horiz, 0x10},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_dc, 0x10},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x10},
-	{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x20},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_horiz, 0x20},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_dc, 0x20},
-	{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x20},
-	{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x0f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_horiz, 0x0f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_dc, 0x0f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x0f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x1f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_horiz, 0x1f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_dc, 0x1f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x1f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x2f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_horiz, 0x2f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_dc, 0x2f},
-	{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x2f},
-	{mb_intrapcm, 0, 0},
-	{mb_inter16x16_cavlc, 0, 1},
-	{mb_inter16x8_cavlc, 0, 3},
-	{mb_inter8x16_cavlc, 0, 3},
-	{mb_inter8x8p_cavlc, 0, 0xf},
-	{mb_inter8x8p_cavlc, 0, 0xf},
-	{mb_bdirect16x16_cavlc, 0, 0},
-	{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
-	{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
-	{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
-	{mb_inter16x8_cavlc, 0, 0x9}, {mb_inter8x16_cavlc, 0, 0x9},
-	{mb_inter16x8_cavlc, 0, 0x6}, {mb_inter8x16_cavlc, 0, 0x6},
-	{mb_inter16x8_cavlc, 0, 0xb}, {mb_inter8x16_cavlc, 0, 0xb},
-	{mb_inter16x8_cavlc, 0, 0xe}, {mb_inter8x16_cavlc, 0, 0xe},
-	{mb_inter16x8_cavlc, 0, 0x7}, {mb_inter8x16_cavlc, 0, 0x7},
-	{mb_inter16x8_cavlc, 0, 0xd}, {mb_inter8x16_cavlc, 0, 0xd},
-	{mb_inter16x8_cavlc, 0, 0xf}, {mb_inter8x16_cavlc, 0, 0xf},
-	{mb_inter8x8b_cavlc, 0, 0}
+static const mb_code mb_decode[2][54] = {
+	{
+		{mb_intra4x4_cavlc, 0, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x10},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x20},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x0f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x1f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x2f},
+		{mb_intrapcm, 0, 0},
+		{mb_inter16x16_cavlc, 0, 1},
+		{mb_inter16x8_cavlc, 0, 3},
+		{mb_inter8x16_cavlc, 0, 3},
+		{mb_inter8x8p_cavlc, 0, 0xf},
+		{mb_inter8x8p_cavlc, 0, 0xf},
+		{mb_bdirect16x16_cavlc, 0, 0},
+		{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
+		{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
+		{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
+		{mb_inter16x8_cavlc, 0, 0x9}, {mb_inter8x16_cavlc, 0, 0x9},
+		{mb_inter16x8_cavlc, 0, 0x6}, {mb_inter8x16_cavlc, 0, 0x6},
+		{mb_inter16x8_cavlc, 0, 0xb}, {mb_inter8x16_cavlc, 0, 0xb},
+		{mb_inter16x8_cavlc, 0, 0xe}, {mb_inter8x16_cavlc, 0, 0xe},
+		{mb_inter16x8_cavlc, 0, 0x7}, {mb_inter8x16_cavlc, 0, 0x7},
+		{mb_inter16x8_cavlc, 0, 0xd}, {mb_inter8x16_cavlc, 0, 0xd},
+		{mb_inter16x8_cavlc, 0, 0xf}, {mb_inter8x16_cavlc, 0, 0xf},
+		{mb_inter8x8b_cavlc, 0, 0}
+	},
+	{
+		{mb_intraNxN_cavlc, 0, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0x10},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x10},
+		{mb_intra16x16_dconly_cavlc, mb_intra16xpred_vert<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_horiz<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, intraNxNpred_dc<16>, 0x20},
+		{mb_intra16x16_dconly_cavlc, mb_intra16x16pred_planer, 0x20},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x0f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x0f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x1f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x1f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16xpred_vert<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_horiz<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x2f},
+		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x2f},
+		{mb_intrapcm, 0, 0},
+		{mb_inter16x16_cavlc, 0, 1},
+		{mb_inter16x8_cavlc, 0, 3},
+		{mb_inter8x16_cavlc, 0, 3},
+		{mb_inter8x8p_cavlc, 0, 0xf},
+		{mb_inter8x8p_cavlc, 0, 0xf},
+		{mb_bdirect16x16_cavlc, 0, 0},
+		{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
+		{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
+		{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
+		{mb_inter16x8_cavlc, 0, 0x9}, {mb_inter8x16_cavlc, 0, 0x9},
+		{mb_inter16x8_cavlc, 0, 0x6}, {mb_inter8x16_cavlc, 0, 0x6},
+		{mb_inter16x8_cavlc, 0, 0xb}, {mb_inter8x16_cavlc, 0, 0xb},
+		{mb_inter16x8_cavlc, 0, 0xe}, {mb_inter8x16_cavlc, 0, 0xe},
+		{mb_inter16x8_cavlc, 0, 0x7}, {mb_inter8x16_cavlc, 0, 0x7},
+		{mb_inter16x8_cavlc, 0, 0xd}, {mb_inter8x16_cavlc, 0, 0xd},
+		{mb_inter16x8_cavlc, 0, 0xf}, {mb_inter8x16_cavlc, 0, 0xf},
+		{mb_inter8x8b_cavlc, 0, 0}
+	}
 };
 
 /** Convert MB type number into unified order:
@@ -7704,7 +8353,7 @@ static inline int macroblock_layer(h264d_mb_current *mb, h264d_slice_header *hdr
 	if ((mb->type = mbtype = adjust_mb_type(mbtype, hdr->slice_type)) < 0) {
 		return -1;
 	}
-	mbc = &mb_decode[mbtype];
+	mbc = &mb->mb_decode[mbtype];
 	avail = get_availability(mb);
 	mbc->mb_dec(mb, mbc, st, avail);
 	VC_CHECK;
@@ -9740,6 +10389,13 @@ static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type)
 	return cabac_decode_decision(mb->cabac, st, offset);
 }
 
+struct transform_size_8x8_flag_cabac {
+	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) {
+		int offset = 399 + ((avail & 2) && mb->top4x4inter->transform8x8) + ((avail & 1) && mb->left4x4inter->transform8x8);
+		return cabac_decode_decision(mb->cabac, st, offset);
+	}
+};
+
 struct intra4x4pred_mode_cabac {
 	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb) const {
 		int pred = MIN(a, b);
@@ -10039,19 +10695,44 @@ static int (* const ctxidxinc_cbf[16 + 2 + 8 + 1])(h264d_mb_current *mb, uint32_
 
 static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int num_coeff, int *coeff_map)
 {
+	static const int8_t significant_coeff_flag_offset16[16][3] = {
+		{0, 0, 0}, {1, 1, 1}, {2, 2, 2}, {3, 3, 3},
+		{4, 4, 4}, {5, 5, 5}, {6, 6, 6}, {7, 7, 7},
+		{8, 8, 8}, {9, 9, 9}, {10, 10, 10}, {11, 11, 11},
+		{12, 12, 12}, {13, 13, 13}, {14, 14, 14}, {15, 15, 15},
+	};
+	static const int8_t significant_coeff_flag_offset64[63][3] = {
+		{0, 0, 0}, {1, 1, 1}, {1, 2, 1}, {1, 3, 2},
+		{1, 4, 2}, {1, 5, 3}, {1, 5, 3}, {1, 4, 4},
+		{1, 4, 5}, {1, 3, 6}, {1, 3, 7}, {1, 4, 7},
+		{1, 4, 7}, {1, 4, 8}, {1, 5, 4}, {1, 5, 5},
+		{2, 4, 6}, {2, 4, 9}, {2, 4, 10}, {2, 4, 10},
+		{2, 3, 8}, {2, 3, 11}, {2, 6, 12}, {2, 7, 11},
+		{2, 7, 9}, {2, 7, 9}, {2, 8, 10}, {2, 9, 10},
+		{2, 10, 8}, {2, 9, 11}, {2, 8, 12}, {2, 7, 11},
+		{3, 7, 9}, {3, 6, 9}, {3, 11, 10}, {3, 12, 10},
+		{3, 13, 8}, {3, 11, 11}, {3, 6, 12}, {3, 7, 11},
+		{4, 8, 9}, {4, 9, 9}, {4, 14, 10}, {4, 10, 10},
+		{4, 9, 8}, {4, 8, 13}, {4, 6, 13}, {4, 11, 9},
+		{5, 12, 9}, {5, 13, 10}, {5, 11, 10}, {5, 6, 8},
+		{6, 9, 13}, {6, 14, 13}, {6, 10, 9}, {6, 9, 9},
+		{7, 11, 10}, {7, 12, 10}, {7, 13, 14}, {7, 11, 14},
+		{8, 14, 14}, {8, 10, 14}, {8, 12, 14},
+	};
 	static const int16_t significant_coeff_flag_offset[6][2] = {
 		{105, 166}, {105 + 15, 166 + 15}, {105 + 29, 166 + 29},
 		{105 + 44, 166 + 44}, {105 + 47, 166 + 47}, {402, 417}
 	};
 	int sigc_offset = significant_coeff_flag_offset[cat][0];
 	int last_offset = significant_coeff_flag_offset[cat][1];
+	const int8_t (*latter)[3] = (cat == 5) ? significant_coeff_flag_offset64 : significant_coeff_flag_offset16;
 	int map_cnt = 0;
 	int i;
 
 	for (i = 0; i < num_coeff - 1; ++i) {
-		if (cabac_decode_decision(cb, st, sigc_offset + i)) {
+		if (cabac_decode_decision(cb, st, sigc_offset + latter[i][1])) {
 			coeff_map[map_cnt++] = i;
-			if (cabac_decode_decision(cb, st, last_offset + i)) {
+			if (cabac_decode_decision(cb, st, last_offset + latter[i][0])) {
 				i = 0;
 				break;
 			}
@@ -10063,11 +10744,8 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 	return map_cnt;
 }
 
-static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat, uint32_t dc_mask)
+static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat)
 {
-	static const int16_t coeff_abs_level_offset[6] = {
-		227, 227 + 10, 227 + 20, 227 + 30, 227 + 39, 426
-	};
 	static const int8_t coeff_abs_level_ctx[2][8] = {
 		{1, 2, 3, 4, 0, 0, 0, 0},
 		{5, 5, 5, 5, 6, 7, 8, 9}
@@ -10076,9 +10754,13 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 		{1, 2, 3, 3, 4, 5, 6, 7},
 		{4, 4, 4, 4, 5, 6, 7, 7}
 	};
-	int abs_offset = coeff_abs_level_offset[cat];
+	int coeff_offset = coeff_ofs[cat].coeff_offset;
+	memset(coeff + coeff_offset, 0, sizeof(*coeff) * coeff_ofs[cat].num_coeff);
+	int abs_offset = coeff_ofs[cat].cabac_coeff_abs_level_offset + 227;
+	uint32_t dc_mask = coeff_ofs[cat].coeff_dc_mask;
 	int node_ctx = 0;
 	int mp = map_cnt;
+	const int8_t *zigzag = inverse_zigzag[cat];
 	do {
 		int ctx = abs_offset + coeff_abs_level_ctx[0][node_ctx];
 		int abs_level;
@@ -10105,7 +10787,7 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 				abs_level += 14;
 			}
 		}
-		idx = coeff_map[--mp];
+		idx = zigzag[coeff_map[--mp] + coeff_offset];
 		coeff[idx] = (cabac_decode_bypass(cb, st) ? -abs_level : abs_level) * qmat[idx & dc_mask];
 	} while (mp);
 }
@@ -10113,21 +10795,21 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 struct residual_block_cabac {
 	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int coeff_map[8 * 8];
+		int coded_block_flag;
 		h264d_cabac_t *cb = mb->cabac;
 		if (cat != 5) {
-			int coded_block_flag;
 			int coded_flag_inc;
 			coded_flag_inc = ctxidxinc_cbf[pos4x4](mb, mb->cbf, avail);
 			coded_block_flag = cabac_decode_decision(cb, st, 85 + coded_flag_inc + cat * 4);
 			if (!coded_block_flag) {
 				return 0;
 			}
-			mb->cbf |= coded_block_flag << pos4x4;
+		} else {
+			coded_block_flag = 0xf;
 		}
-		int coeff_offset = (dc_mask >> 4);
-		memset(coeff + coeff_offset, 0, sizeof(*coeff) * num_coeff);
+		mb->cbf |= coded_block_flag << pos4x4;
 		int map_cnt = get_coeff_map_cabac(cb, st, cat, num_coeff, coeff_map);
-		get_coeff_from_map_cabac(cb, st, cat, coeff_map, map_cnt, coeff + coeff_offset, qmat + coeff_offset, dc_mask);
+		get_coeff_from_map_cabac(cb, st, cat, coeff_map, map_cnt, coeff, qmat);
 		return map_cnt <= 15 ? map_cnt : 15;
 	}
 };
@@ -10135,6 +10817,11 @@ struct residual_block_cabac {
 static int mb_intra4x4_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
 	return mb_intra4x4(mb, mbc, st, avail, intra4x4pred_mode_cabac(), intra_chroma_pred_mode_cabac(), cbp_cabac(), qp_delta_cabac(), residual_block_cabac());
+} 
+
+static int mb_intraNxN_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_intraNxN(mb, mbc, st, avail, transform_size_8x8_flag_cabac(), intra4x4pred_mode_cabac(), intra4x4pred_mode_cabac(), intra_chroma_pred_mode_cabac(), cbp_cabac(), qp_delta_cabac(), residual_block_cabac());
 } 
 
 static int mb_intra16x16_dconly_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
@@ -10435,52 +11122,103 @@ static int mb_bdirect16x16_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_b
 	return mb_bdirect16x16(mb, mbc, st, avail, cbp_cabac(), qp_delta_cabac(), residual_block_cabac());
 }
 
-
-static const mb_code mb_decode_cabac[] = {
-	{mb_intra4x4_cabac, 0, 0},
-	{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_horiz, 0},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_dc, 0},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0},
-	{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x10},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_horiz, 0x10},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_dc, 0x10},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x10},
-	{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x20},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_horiz, 0x20},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_dc, 0x20},
-	{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x20},
-	{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x0f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_horiz, 0x0f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_dc, 0x0f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x0f},
-	{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x1f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_horiz, 0x1f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_dc, 0x1f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x1f},
-	{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x2f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_horiz, 0x2f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_dc, 0x2f},
-	{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x2f},
-	{mb_intrapcm, 0, 0},
-	{mb_inter16x16_cabac, 0, 1},
-	{mb_inter16x8_cabac, 0, 3},
-	{mb_inter8x16_cabac, 0, 3},
-	{mb_inter8x8p_cabac, 0, 0xf},
-	{mb_inter8x8p_cabac, 0, 0xf},
-	{mb_bdirect16x16_cabac, 0, 0},
-	{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
-	{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
-	{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
-	{mb_inter16x8_cabac, 0, 0x9}, {mb_inter8x16_cabac, 0, 0x9},
-	{mb_inter16x8_cabac, 0, 0x6}, {mb_inter8x16_cabac, 0, 0x6},
-	{mb_inter16x8_cabac, 0, 0xb}, {mb_inter8x16_cabac, 0, 0xb},
-	{mb_inter16x8_cabac, 0, 0xe}, {mb_inter8x16_cabac, 0, 0xe},
-	{mb_inter16x8_cabac, 0, 0x7}, {mb_inter8x16_cabac, 0, 0x7},
-	{mb_inter16x8_cabac, 0, 0xd}, {mb_inter8x16_cabac, 0, 0xd},
-	{mb_inter16x8_cabac, 0, 0xf}, {mb_inter8x16_cabac, 0, 0xf},
-	{mb_inter8x8b_cabac, 0, 0}
+static const mb_code mb_decode_cabac[2][54] = {
+	{
+		{mb_intra4x4_cabac, 0, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x10},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x20},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x0f},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x1f},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x2f},
+		{mb_intrapcm, 0, 0},
+		{mb_inter16x16_cabac, 0, 1},
+		{mb_inter16x8_cabac, 0, 3},
+		{mb_inter8x16_cabac, 0, 3},
+		{mb_inter8x8p_cabac, 0, 0xf},
+		{mb_inter8x8p_cabac, 0, 0xf},
+		{mb_bdirect16x16_cabac, 0, 0},
+		{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
+		{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
+		{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
+		{mb_inter16x8_cabac, 0, 0x9}, {mb_inter8x16_cabac, 0, 0x9},
+		{mb_inter16x8_cabac, 0, 0x6}, {mb_inter8x16_cabac, 0, 0x6},
+		{mb_inter16x8_cabac, 0, 0xb}, {mb_inter8x16_cabac, 0, 0xb},
+		{mb_inter16x8_cabac, 0, 0xe}, {mb_inter8x16_cabac, 0, 0xe},
+		{mb_inter16x8_cabac, 0, 0x7}, {mb_inter8x16_cabac, 0, 0x7},
+		{mb_inter16x8_cabac, 0, 0xd}, {mb_inter8x16_cabac, 0, 0xd},
+		{mb_inter16x8_cabac, 0, 0xf}, {mb_inter8x16_cabac, 0, 0xf},
+		{mb_inter8x8b_cabac, 0, 0}
+	},
+	{
+		{mb_intraNxN_cabac, 0, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0x10},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x10},
+		{mb_intra16x16_dconly_cabac, mb_intra16xpred_vert<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_horiz<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, intraNxNpred_dc<16>, 0x20},
+		{mb_intra16x16_dconly_cabac, mb_intra16x16pred_planer, 0x20},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x0f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x0f},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x1f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x1f},
+		{mb_intra16x16_acdc_cabac, mb_intra16xpred_vert<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_horiz<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x2f},
+		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x2f},
+		{mb_intrapcm, 0, 0},
+		{mb_inter16x16_cabac, 0, 1},
+		{mb_inter16x8_cabac, 0, 3},
+		{mb_inter8x16_cabac, 0, 3},
+		{mb_inter8x8p_cabac, 0, 0xf},
+		{mb_inter8x8p_cabac, 0, 0xf},
+		{mb_bdirect16x16_cabac, 0, 0},
+		{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
+		{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
+		{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
+		{mb_inter16x8_cabac, 0, 0x9}, {mb_inter8x16_cabac, 0, 0x9},
+		{mb_inter16x8_cabac, 0, 0x6}, {mb_inter8x16_cabac, 0, 0x6},
+		{mb_inter16x8_cabac, 0, 0xb}, {mb_inter8x16_cabac, 0, 0xb},
+		{mb_inter16x8_cabac, 0, 0xe}, {mb_inter8x16_cabac, 0, 0xe},
+		{mb_inter16x8_cabac, 0, 0x7}, {mb_inter8x16_cabac, 0, 0x7},
+		{mb_inter16x8_cabac, 0, 0xd}, {mb_inter8x16_cabac, 0, 0xd},
+		{mb_inter16x8_cabac, 0, 0xf}, {mb_inter8x16_cabac, 0, 0xf},
+		{mb_inter8x8b_cabac, 0, 0}
+	}
 };
+
+static void set_mb_decode(h264d_mb_current *mb, const h264d_pps *pps)
+{
+	mb->mb_decode = (pps->entropy_coding_mode_flag ? mb_decode_cabac : mb_decode)[pps->transform_8x8_mode_flag];
+}
 
 static inline int macroblock_layer_cabac(h264d_mb_current *mb, h264d_slice_header *hdr, dec_bits *st)
 {
@@ -10495,7 +11233,7 @@ static inline int macroblock_layer_cabac(h264d_mb_current *mb, h264d_slice_heade
 	avail = get_availability(mb);
 	int slice_type = hdr->slice_type;
 	mb->type = mbtype = adjust_mb_type(mb_type_cabac[slice_type](mb, st, avail, 3, slice_type), slice_type);
-	mbc = &mb_decode_cabac[mbtype];
+	mbc = &mb->mb_decode[mbtype];
 	mbc->mb_dec(mb, mbc, st, avail);
 	if (mbtype == MB_IPCM) {
 		init_cabac_engine(mb->cabac, st);

@@ -303,6 +303,7 @@ typedef struct {
 typedef struct {
 	int8_t type;
 	int8_t direct8x8;
+	int8_t transform8x8;
 	int8_t mb_skip;
 	int8_t chroma_pred_mode;
 	int8_t cbp;
@@ -342,8 +343,11 @@ typedef struct {
 #define ENC_SLICEHDR(hdr, a, b) (hdr = ((((b) + 6) << 4) | ((a) + 6)))
 #define DEC_SLICEHDR(hdr, a, b) (a = ((hdr & 15) - 6) * 2), (b = (((uint8_t)hdr >> 4) - 6) * 2)
 
+struct mb_code;
+
 typedef struct mb_current {
 	int8_t is_constrained_intra;
+	int8_t transform8x8;
 	int8_t type;
 	int8_t qp, qp_chroma[2];
 	int8_t lefttop_ref[2];
@@ -372,12 +376,14 @@ typedef struct mb_current {
 	int32_t *top4x4coef_base;
 	prev_mb_t *mb_base;
 	h264d_cabac_t *cabac;
+	const struct mb_code *mb_decode;
 	h264d_pps *pps;
 	int8_t *num_ref_idx_lx_active_minus1[2];
 	int16_t *qmatc_p[2];
 	int16_t qmaty[16];
 	int16_t qmatc[2][16];
 	int offset4x4[16]; /* offset of each 4x4 block in a macroblock. */
+	int16_t qmaty8x8[64];
 	h264d_bdirect_t bdirect_i;
 	h264d_frame_info_t frame_i;
 	h264d_cabac_t cabac_i;
