@@ -10,13 +10,11 @@
 [PROJECTS]
 "h264dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\h264dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\h264dec\h264dec.hwp" 0 
 "libm2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\libm2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\libm2dec\libm2dec.hwp" 0 
-"m2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\m2dec" "C:\cygwin\home\minegisi\programs\m2dec\Project\HEW\m2dec\m2dec.hwp" 0 
 [INFORMATION]
 "ワークスペース情報がありません" 
 [SCRAP]
 [PROJECT_DEPENDENCY]
 "h264dec" "libm2dec" 
-"m2dec" "libm2dec" 
 [WORKSPACE_PROPERTIES]
 [HELP_FILES]
 "c:\hew3\tools\renesas\sh\9_0_3\hew\stdlib.hlp" "C/C++ Standard Library Help" 0 
