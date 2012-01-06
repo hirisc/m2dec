@@ -3414,12 +3414,12 @@ static inline void ac8x8transform_horiz(int *dst, const int *src)
 		int t0, t1, t3, t4, t5, t6, t7;
 		ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7);
 		dst[0] = t0 + t7;
-		dst[8] = t2 + t5;
+		dst[8] = t2 - t5;
 		dst[16] = t4 + t3;
 		dst[24] = t6 + t1;
 		dst[32] = t6 - t1;
 		dst[40] = t4 - t3;
-		dst[48] = t2 - t5;
+		dst[48] = t2 + t5;
 		dst[56] = t0 - t7;
 		src += 8;
 		dst += 1;
@@ -3439,7 +3439,7 @@ static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
 		t = d[0] + ((t0 + t7) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
-		t = d[0] + ((t2 + t5) >> 6);
+		t = d[0] + ((t2 - t5) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
 		t = d[0] + ((t4 + t3) >> 6);
@@ -3454,7 +3454,7 @@ static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
 		t = d[0] + ((t4 - t3) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
-		t = d[0] + ((t2 - t5) >> 6);
+		t = d[0] + ((t2 + t5) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
 		t = d[0] + ((t0 - t7) >> 6);
