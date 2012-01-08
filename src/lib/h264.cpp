@@ -3302,8 +3302,8 @@ static int (* const intra8x8pred_func[9])(uint8_t *dst, int stride, int avail) =
 	intraNxNpred_horiz<8>,
 	intraNxNpred_dc<8>,
 	intra8x8pred_ddl,
-	intra4x4pred_ddr,
-	intra4x4pred_vr,
+	0,//intra4x4pred_ddr,
+	0,//intra4x4pred_vr,
 	intra8x8pred_hd,
 //	intra8x8pred_vl,
 //	intra8x8pred_hu
@@ -3414,12 +3414,12 @@ static inline void ac8x8transform_horiz(int *dst, const int *src)
 		int t0, t1, t3, t4, t5, t6, t7;
 		ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7);
 		dst[0] = t0 + t7;
-		dst[8] = t2 - t5;
+		dst[8] = t2 + t5;
 		dst[16] = t4 + t3;
 		dst[24] = t6 + t1;
 		dst[32] = t6 - t1;
 		dst[40] = t4 - t3;
-		dst[48] = t2 + t5;
+		dst[48] = t2 - t5;
 		dst[56] = t0 - t7;
 		src += 8;
 		dst += 1;
@@ -3439,7 +3439,7 @@ static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
 		t = d[0] + ((t0 + t7) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
-		t = d[0] + ((t2 - t5) >> 6);
+		t = d[0] + ((t2 + t5) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
 		t = d[0] + ((t4 + t3) >> 6);
@@ -3454,7 +3454,7 @@ static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
 		t = d[0] + ((t4 - t3) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
-		t = d[0] + ((t2 + t5) >> 6);
+		t = d[0] + ((t2 - t5) >> 6);
 		d[0] = CLIP255C(t);
 		d += stride;
 		t = d[0] + ((t0 - t7) >> 6);
@@ -3507,7 +3507,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 	intra8x8pred_func[*pr++](luma + 8, stride, avail_intra | (avail_intra & 2 ? 5 : 1));
 	if (cbp & 2) {
 		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail_intra, 4, 5, 0x3f);
-		ac8x8transform(luma + offset[4], coeff, stride, c0);
+		ac8x8transform(luma + 8, coeff, stride, c0);
 		left = c1 * 0x11;
 	} else {
 		c1 = 0;
