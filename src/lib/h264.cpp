@@ -1363,35 +1363,84 @@ static void (* const pred_direct16x16_col8x8[2][4])(h264d_mb_current *mb, const 
 	}
 };
 
-const h264d_bdirect_functions_t bdirect_functions[2][2] = {
+static bool not_need_transform_size_8x8_in_sub8x8(const int8_t sub_mb_type[]) { // 8x8b
+#define IS8x8(sub) ((unsigned)((sub) - 1) < 3)
+	return IS8x8(sub_mb_type[0]) && IS8x8(sub_mb_type[1]) && IS8x8(sub_mb_type[2]) && IS8x8(sub_mb_type[3]);
+}
+
+static bool need_transform_size_8x8(const int8_t sub_mb_type[]) {
+	return true;
+}
+
+const h264d_bdirect_functions_t bdirect_functions[2][2][2] = {
 	{
 		{
-			pred_direct4x4_temporal,
-			b_skip_mb_temporal<0>,
-			0,
-			store_info_inter<0>
+			{
+				pred_direct4x4_temporal,
+				b_skip_mb_temporal<0>,
+				0,
+				store_info_inter<0>,
+				not_need_transform_size_8x8_in_sub8x8
+			},
+			{
+				pred_direct8x8_spatial<4>,
+				b_skip_mb_spatial,
+				&pred_direct16x16_col8x8[0][0],
+				store_info_inter<0>,
+				not_need_transform_size_8x8_in_sub8x8
+			}
 		},
 		{
-			pred_direct8x8_spatial<4>,
-			b_skip_mb_spatial,
-			&pred_direct16x16_col8x8[0][0],
-			store_info_inter<0>
+			{
+				pred_direct4x4_temporal,
+				b_skip_mb_temporal<0>,
+				0,
+				store_info_inter<0>,
+				not_need_transform_size_8x8_in_sub8x8
+			},
+			{
+				pred_direct8x8_spatial<4>,
+				b_skip_mb_spatial,
+				&pred_direct16x16_col8x8[0][0],
+				store_info_inter<0>,
+				not_need_transform_size_8x8_in_sub8x8
+			}
 		}
 	},
 	{
 		{
-			pred_direct8x8_temporal,
-			b_skip_mb_temporal<1>,
-			0,
-			store_info_inter<1>
+			{
+				pred_direct8x8_temporal,
+				b_skip_mb_temporal<1>,
+				0,
+				store_info_inter<1>,
+				not_need_transform_size_8x8_in_sub8x8
+			},
+			{
+				pred_direct8x8_spatial<8>,
+				b_skip_mb_spatial,
+				pred_direct16x16_col8x8[1],
+				store_info_inter<1>,
+				not_need_transform_size_8x8_in_sub8x8
+			}
 		},
 		{
-			pred_direct8x8_spatial<8>,
-			b_skip_mb_spatial,
-			pred_direct16x16_col8x8[1],
-			store_info_inter<1>
+			{
+				pred_direct8x8_temporal,
+				b_skip_mb_temporal<1>,
+				0,
+				store_info_inter<1>,
+				need_transform_size_8x8
+			},
+			{
+				pred_direct8x8_spatial<8>,
+				b_skip_mb_spatial,
+				pred_direct16x16_col8x8[1],
+				store_info_inter<1>,
+				need_transform_size_8x8
+			}
 		}
-	},
+	}
 };
 
 static void set_mb_decode(h264d_mb_current *mb, const h264d_pps *pps);
@@ -1514,7 +1563,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 				pred_weight_table(&hdr->pred_weight_table[0], st, hdr->num_ref_idx_lx_active_minus1[0]);
 			}
 		}
-		mb->bdirect->func = &bdirect_functions[sps->direct_8x8_inference_flag][hdr->direct_spatial_mv_pred_flag];
+		mb->bdirect->func = &bdirect_functions[sps->direct_8x8_inference_flag][pps->transform_8x8_mode_flag][hdr->direct_spatial_mv_pred_flag];
 	}
 	if (h2d->id & 0x60) {
 		if (dec_ref_pic_marking(h2d->id & 31, &hdr->marking, st) < 0) {
@@ -1952,8 +2001,12 @@ static inline void coeff_writeback(int *coeff, int total_coeff, const int8_t *ru
 	
 }
 
+struct transform_size_8x8_flag_dummy {
+	void operator()() const {}
+};
+
 struct transform_size_8x8_flag_cavlc {
-	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) const {
 		return get_onebit_inline(st);
 	}
 };
@@ -3069,7 +3122,7 @@ static int intra8x8pred_horiz(uint8_t *dst, int stride, int avail)
 		return -1;
 	}
 	s0 = src[0];
-	if (avail & 8) {
+	if (avail & 4) {
 		s2 = src[-stride];
 	} else {
 		s2 = s0;
@@ -3103,26 +3156,27 @@ static int intra8x8pred_vert(uint8_t *dst, int stride, int avail)
 	}
 	src = dst - stride;
 	s0 = *src++;
-	if (avail & 8) {
+	if (avail & 4) {
 		s2 = src[-2];
 	} else {
 		s2 = s0;
 	}
 	s1 = *src++;
-	dst[0] = (s2 + s0 * 2 + s1 + 2) >> 2;
+	dst[0] = FIR3(s2, s0, s1);
 	s2 = *src++;
-	dst[1] = (s0 + s1 * 2 + s2 + 2) >> 2;
+	dst[1] = FIR3(s0, s1, s2);
 	s0 = *src++;
-	dst[2] = (s1 + s2 * 2 + s0 + 2) >> 2;
+	dst[2] = FIR3(s1, s2, s0);
 	s1 = *src++;
-	dst[3] = (s2 + s0 * 2 + s1 + 2) >> 2;
+	dst[3] = FIR3(s2, s0, s1);
 	s2 = *src++;
-	dst[4] = (s0 + s1 * 2 + s2 + 2) >> 2;
+	dst[4] = FIR3(s0, s1, s2);
 	s0 = *src++;
-	dst[5] = (s1 + s2 * 2 + s0 + 2) >> 2;
-	s1 = *src;
-	dst[6] = (s2 + s0 * 2 + s1 + 2) >> 2;
-	dst[7] = (s0 + s1 * 3 + 2) >> 2;
+	dst[5] = FIR3(s1, s2, s0);
+	s1 = *src++;
+	dst[6] = FIR3(s2, s0, s1);
+	s2 = (avail & 8) ? *src : s1;
+	dst[7] = FIR3(s0, s1, s2);
 	uint64_t d0 = ((uint64_t *)dst)[0];
 	dst += stride;
 	((uint64_t *)dst)[0] = d0;
@@ -3146,33 +3200,33 @@ static int sum8x8left(uint8_t *dst, int stride, int avail)
 	const uint8_t *src = dst - 1;
 	int s0, s1, s2;
 	int sum;
-	s0 = src[0];
-	if (avail & 8) {
-		sum = src[-stride];
+	s1 = src[0];
+	if (avail & 4) {
+		s0 = src[-stride];
 	} else {
-		sum = s0;
+		s0 = s1;
 	}
 	src += stride;
-	s1 = src[0];
-	src += stride;
-	sum = (sum + s0 * 2 + s1 + 2) >> 2;
 	s2 = src[0];
 	src += stride;
-	sum = sum + ((s0 + s1 * 2 + s2 + 2) >> 2);
+	sum = FIR3(s0, s1, s2);
 	s0 = src[0];
 	src += stride;
-	sum = sum + ((s1 + s2 * 2 + s0 + 2) >> 2);
+	sum += FIR3(s1, s2, s0);
 	s1 = src[0];
 	src += stride;
-	sum = sum + ((s2 + s0 * 2 + s1 + 2) >> 2);
+	sum += FIR3(s2, s0, s1);
 	s2 = src[0];
 	src += stride;
-	sum = sum + ((s0 + s1 * 2 + s2 + 2) >> 2);
+	sum += FIR3(s0, s1, s2);
 	s0 = src[0];
 	src += stride;
-	sum = sum + ((s1 + s2 * 2 + s0 + 2) >> 2);
+	sum += FIR3(s1, s2, s0);
 	s1 = src[0];
-	return  sum + ((s2 + s0 * 2 + s1 + 2) >> 2) + ((s0 + s1 * 3 + 2) >> 2);
+	src += stride;
+	sum += FIR3(s2, s0, s1);
+	s2 = src[0];
+	return sum + FIR3(s0, s1, s2) + FIR3(s1, s2, s2);
 }
 
 static int sum8x8top(uint8_t *dst, int stride, int avail)
@@ -3180,26 +3234,28 @@ static int sum8x8top(uint8_t *dst, int stride, int avail)
 	const uint8_t *src = dst - stride;
 	int s0, s1, s2;
 	int sum;
-	s0 = *src++;
-	if (avail & 8) {
-		sum = src[-2];
+	s1 = *src++;
+	if (avail & 4) {
+		s0 = src[-2];
 	} else {
-		sum = s0;
+		s0 = s1;
 	}
-	s1 = *src++;
-	sum = (sum + s0 * 2 + s1 + 2) >> 2;
 	s2 = *src++;
-	sum = sum + ((s0 + s1 * 2 + s2 + 2) >> 2);
+	sum = FIR3(s0, s1, s2);
 	s0 = *src++;
-	sum = sum + ((s1 + s2 * 2 + s0 + 2) >> 2);
+	sum += FIR3(s1, s2, s0);
 	s1 = *src++;
-	sum = sum + ((s2 + s0 * 2 + s1 + 2) >> 2);
+	sum += FIR3(s2, s0, s1);
 	s2 = *src++;
-	sum = sum + ((s0 + s1 * 2 + s2 + 2) >> 2);
+	sum += FIR3(s0, s1, s2);
 	s0 = *src++;
-	sum = sum + ((s1 + s2 * 2 + s0 + 2) >> 2);
-	s1 = *src;
-	return sum + ((s2 + s0 * 2 + s1 + 2) >> 2) + ((s0 + s1 * 3 + 2) >> 2);
+	sum += FIR3(s1, s2, s0);
+	s1 = *src++;
+	sum += FIR3(s2, s0, s1);
+	s2 = *src++;
+	sum += FIR3(s0, s1, s2);
+	s0 = (avail & 8) ? *src : s2;
+	return sum + FIR3(s1, s2, s0);
 }
 
 /**Intra 8x8 prediction DC.
@@ -3459,6 +3515,8 @@ static int intra8x8pred_vr(uint8_t *dst, int stride, int avail)
 		((uint32_t *)dst)[1] = d1;
 		((uint32_t *)dst2)[0] = d2;
 		((uint32_t *)dst2)[1] = d3;
+		t1 = t0;
+		t0 = t2;
 	} while (--y);
 	return 0;
 }
@@ -5839,11 +5897,9 @@ static void (* const inter_pred_luma_bidir[4][4])(const mb_pred_t *pred, int wid
 
 template <typename F0>
 static uint32_t residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
-//				    F0 QpDelta,
 				    F0 ResidualBlock)
 {
 	int coeff[16];
-//	int32_t qp_delta;
 	const int16_t *qmat;
 	const int *offset;
 	uint32_t top, left;
@@ -5852,10 +5908,6 @@ static uint32_t residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, dec_b
 	uint8_t *luma;
 	int stride;
 
-//	qp_delta = QpDelta(mb, st, avail);
-//	if (qp_delta) {
-//		set_qp(mb, mb->qp + qp_delta);
-//	}
 	qmat = mb->qmaty;
 	offset = mb->offset4x4;
 	luma = mb->luma;
@@ -5966,13 +6018,13 @@ static uint32_t residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, dec_b
 	*mb->top4x4coef = (*mb->top4x4coef & 0xffff0000) | PACK(top, c3, 3);
 	return str_map;
 }
-#if 1
+
 struct residual_luma_inter {
-	template <typename F0, typename F1>
+	template <typename F0, typename F1, typename F2>
 	uint32_t operator()(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
-				    F0 QpDelta,
-				    F1 ResidualBlock)
-	{
+				    F0 Transform8x8Flag,
+				    F1 QpDelta,
+				    F2 ResidualBlock) const {
 		int32_t qp_delta = QpDelta(mb, st, avail);
 		if (qp_delta) {
 			set_qp(mb, mb->qp + qp_delta);
@@ -5980,36 +6032,81 @@ struct residual_luma_inter {
 		return residual_luma_inter4x4(mb, cbp, st, avail, ResidualBlock);
 	}
 };
-#else
-template <typename F0, typename F1>
-static uint32_t residual_luma_inter(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
-				    F0 QpDelta,
-				    F1 ResidualBlock)
-{
-	int32_t qp_delta = QpDelta(mb, st, avail);
-	if (qp_delta) {
-		set_qp(mb, mb->qp + qp_delta);
-	}
-	return residual_luma_inter4x4(mb, cbp, st, avail, ResidualBlock);
-}
-#endif
 
-template <typename F0, typename F1, typename F2>
-static uint32_t residual_luma_interNxN(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
+template <typename F0>
+static uint32_t residual_luma_inter8x8(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
+				    F0 ResidualBlock)
+{
+	int coeff[64];
+	const int16_t *qmat;
+	const int *offset;
+	uint32_t top, left;
+	int c0, c1, c2, c3;
+	uint32_t str_map;
+	uint8_t *luma;
+	int stride;
+
+	qmat = mb->qmaty8x8;
+	offset = mb->offset4x4;
+	luma = mb->luma;
+	stride = mb->max_x * 16;
+	str_map = 0;
+
+	if (cbp & 1) {
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 64, qmat, avail, 0, 5, 0x3f);
+		ac8x8transform(luma, coeff, stride, c0);
+		str_map = 0xa0a;
+	} else {
+		c0 = 0;
+	}
+	if (cbp & 2) {
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail, 4, 5, 0x3f);
+		ac8x8transform(luma + 8, coeff, stride, c1);
+		str_map |= 0xa0a0;
+		left = c1 * 0x11;
+	} else {
+		c1 = 0;
+		left = 0;
+	}
+	if (cbp & 4) {
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail, 8, 5, 0x3f);
+		ac8x8transform(luma + offset[8], coeff, stride, c2);
+		str_map |= 0xa0a0000;
+		top = c2 * 0x11;
+	} else {
+		c2 = 0;
+		top = 0;
+	}
+	if (cbp & 8) {
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, 64, qmat, avail, 12, 5, 0x3f);
+		ac8x8transform(luma + offset[12], coeff, stride, c3);
+		str_map |= 0xa0a00000;
+		left |= c3 * 0x1100;
+		top |= c3 * 0x1100;
+	}
+	mb->left4x4coef = (mb->left4x4coef & 0xffff0000) | left;
+	*mb->top4x4coef = (*mb->top4x4coef & 0xffff0000) | top;
+	return str_map;
+}
+
+struct residual_luma_interNxN {
+	template <typename F0, typename F1, typename F2>
+	uint32_t operator()(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
 				    F0 Transform8x8Flag,
 				    F1 QpDelta,
-				    F2 ResidualBlock)
-{
-	bool transform8x8mode = (cbp & 15) && Transform8x8Flag(mb, st, avail);
-	int32_t qp_delta = QpDelta(mb, st, avail);
-	if (qp_delta) {
-		set_qp(mb, mb->qp + qp_delta);
+				    F2 ResidualBlock) const {
+		bool transform8x8mode = (0x80 < (cbp & 0x8f)) && Transform8x8Flag(mb, st, avail);
+		int32_t qp_delta = QpDelta(mb, st, avail);
+		if (qp_delta) {
+			set_qp(mb, mb->qp + qp_delta);
+		}
+		if (transform8x8mode) {
+			return residual_luma_inter8x8(mb, cbp, st, avail, ResidualBlock);
+		} else {
+			return residual_luma_inter4x4(mb, cbp, st, avail, ResidualBlock);
+		}
 	}
-	if (transform8x8mode) {
-	} else {
-		return residual_luma_inter4x4(mb, cbp, st, avail, ResidualBlock);
-	}
-}
+};
 
 static inline int MEDIAN(int a, int b, int c)
 {
@@ -6374,14 +6471,15 @@ static void store_info_inter16x16(h264d_mb_current *mb, const h264d_vector_set_t
 	}
 }
 
-template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5>
+template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5, typename F6>
 static int mb_inter16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
 			 F0 RefIdx16x16,
 			 F1 MvdXY,
 			 F2 CodedBlockPattern,
 			 F3 ResidualLumaInter,
-			 F4 QpDelta,
-			 F5 ResidualBlock)
+			 F4 Transform8x8Flag,
+			 F5 QpDelta,
+			 F6 ResidualBlock)
 {
 	const int16_t *mvd_a;
 	const int16_t *mvd_b;
@@ -6411,7 +6509,7 @@ static int mb_inter16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st,
 	uint32_t top4x4 = *mb->top4x4coef;
 	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
-		str_vert = ResidualLumaInter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+		str_vert = ResidualLumaInter(mb, 0x80 | cbp, st, avail, Transform8x8Flag, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
 		str_vert = expand_coef_str(str_vert);
 	} else {
@@ -6655,14 +6753,15 @@ static void store_info_inter16x8(h264d_mb_current *mb, const h264d_vector_set_t 
 	store_col16x8(mb->col_curr, ref_idx, mv);
 }
 
-template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5>
+template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5, typename F6>
 static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
 			 F0 RefIdx16x8,
 			 F1 MvdXY,
 			 F2 CodedBlockPattern,
 			 F3 ResidualLumaInter,
-			 F4 QpDelta,
-			 F5 ResidualBlock)
+			 F4 Transform8x8Flag,
+			 F5 QpDelta,
+			 F6 ResidualBlock)
 {
 	uint32_t left4x4, top4x4;
 	uint32_t refmap;
@@ -6701,7 +6800,7 @@ static int mb_inter16x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 	top4x4 = *mb->top4x4coef;
 	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
-		str_vert = ResidualLumaInter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+		str_vert = ResidualLumaInter(mb, 0x80 | cbp, st, avail, Transform8x8Flag, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
 		str_vert = expand_coef_str(str_vert);
 	} else {
@@ -6882,14 +6981,15 @@ static void store_info_inter8x16(h264d_mb_current *mb, const h264d_vector_set_t 
 	store_col8x16(mb->col_curr, ref_idx, mv);
 }
 
-template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5>
+template <typename F0 ,typename F1, typename F2, typename F3, typename F4, typename F5, typename F6>
 static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
 			 F0 RefIdx8x16,
 			 F1 MvdXY,
 			 F2 CodedBlockPattern,
 			 F3 ResidualLumaInter,
-			 F4 QpDelta,
-			 F5 ResidualBlock)
+			 F4 Transform8x8Flag,
+			 F5 QpDelta,
+			 F6 ResidualBlock)
 {
 	h264d_vector_set_t mv[2][2];
 	const int16_t *mvd_a, *mvd_b;
@@ -6928,7 +7028,7 @@ static int mb_inter8x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, 
 	top4x4 = *mb->top4x4coef;
 	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
-		str_vert = ResidualLumaInter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+		str_vert = ResidualLumaInter(mb, 0x80 | cbp, st, avail, Transform8x8Flag, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
 		str_vert = expand_coef_str(str_vert);
 	} else {
@@ -8134,7 +8234,7 @@ struct store_direct8x8_info_p {
 	}
 };
 
-template <typename F0, typename F1, typename F2, typename F3, typename F4, typename F5, typename F6, typename F7, typename F8>
+template <typename F0, typename F1, typename F2, typename F3, typename F4, typename F5, typename F6, typename F7, typename F8, typename F9, typename F10>
 static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
 		       F0 SubMbTypes,
 		       F1 RefIdx8x8,
@@ -8142,9 +8242,11 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 		       F3 SubMbsDec,
 		       F4 CodedBlockPattern,
 		       F5 ResidualLumaInter,
-		       F6 QpDelta,
-		       F7 StoreDirect8x8Info,
-		       F8 ResidualBlock)
+		       F6 NeedTransform8x8,
+		       F7 Transform8x8Flag,
+		       F8 QpDelta,
+		       F9 StoreDirect8x8Info,
+		       F10 ResidualBlock)
 {
 	prev8x8_t curr_blk[4];
 	int8_t sub_mb_type[4];
@@ -8171,7 +8273,7 @@ static int mb_inter8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	left4x4 = mb->left4x4coef;
 	top4x4 = *mb->top4x4coef;
 	if (cbp) {
-		str_vert = ResidualLumaInter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+		str_vert = ResidualLumaInter(mb, (NeedTransform8x8(mb, sub_mb_type) << 7) | cbp, st, avail, Transform8x8Flag, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
 		str_vert = expand_coef_str(str_vert);
 	} else {
@@ -8466,7 +8568,6 @@ static void store_info_inter8x8(h264d_mb_current *mb, const h264d_vector_set_t m
 	}
 }
 
-//static void (* const store_info_inter[2][4])(h264d_mb_current *mb, const h264d_vector_set_t mv[], const int8_t ref_idx[], uint32_t str_vert, uint32_t str_horiz, uint32_t left4x4, uint32_t top4x4) = {
 template <int DIRECT8x8INFERENCE>
 static void store_info_inter(h264d_mb_current *mb, const h264d_vector_set_t mv[], const int8_t ref_idx[], uint32_t str_vert, uint32_t str_horiz, uint32_t left4x4, uint32_t top4x4, int mb_type)
 {
@@ -8479,12 +8580,13 @@ static void store_info_inter(h264d_mb_current *mb, const h264d_vector_set_t mv[]
 	store_func[mb_type](mb, mv, ref_idx, str_vert, str_horiz, left4x4, top4x4);
 }
 
-template <typename F0, typename F1, typename F2, typename F3>
+template <typename F0, typename F1, typename F2, typename F3, typename F4>
 static int mb_bdirect16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail,
 			   F0 CodedBlockPattern,
 			   F1 ResidualLumaInter,
-			   F2 QpDelta,
-			   F3 ResidualBlock)
+			   F2 Transform8x8Flag,
+			   F3 QpDelta,
+			   F4 ResidualBlock)
 {
 	h264d_vector_set_t mv[16 * 2];
 	int8_t ref_idx[2 * 4];
@@ -8497,7 +8599,7 @@ static int mb_bdirect16x16(h264d_mb_current *mb, const mb_code *mbc, dec_bits *s
 	top4x4 = *mb->top4x4coef;
 	mb->cbp = cbp = CodedBlockPattern(mb, st, avail);
 	if (cbp) {
-		str_vert = ResidualLumaInter(mb, cbp, st, avail, QpDelta, ResidualBlock);
+		str_vert = ResidualLumaInter(mb, cbp, st, avail, Transform8x8Flag, QpDelta, ResidualBlock);
 		str_horiz = expand_coef_str(transposition(str_vert));
 		str_vert = expand_coef_str(str_vert);
 	} else {
@@ -8595,32 +8697,80 @@ struct ref_idx8x8_cavlc {
 
 static int mb_inter16x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), residual_block_cavlc());
+	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static int mb_inter16x8_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), residual_block_cavlc());
+	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static int mb_inter8x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x16(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), residual_block_cavlc());
+	return mb_inter8x16(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), residual_block_cavlc());
 }
+
+struct not_need_transform_size_8x8 {
+	bool operator()(const h264d_mb_current *mb, const int8_t sub_mb_type[]) const {
+		return false;
+	}
+};
+
+struct need_transform_size_8x8p {
+	bool operator()(const h264d_mb_current *mb, const int8_t sub_mb_type[]) const {
+		return (sub_mb_type[0] == 0) && (sub_mb_type[1] == 0) && (sub_mb_type[2] == 0) && (sub_mb_type[3] == 0);
+	}
+};
+
+struct need_transform_size_8x8b {
+	bool operator()(const h264d_mb_current *mb, const int8_t sub_mb_type[]) const {
+		return mb->bdirect->func->need_transform_size_8x8_flag(sub_mb_type);
+	}
+};
 
 static int mb_inter8x8p_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cavlc(), ref_idx8x8_cavlc(), sub_mbs_p_cavlc(), sub_mbs_dec_p(), cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), store_direct8x8_info_p(), residual_block_cavlc());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cavlc(), ref_idx8x8_cavlc(), sub_mbs_p_cavlc(), sub_mbs_dec_p(), cbp_inter_cavlc(), residual_luma_inter(), not_need_transform_size_8x8(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), store_direct8x8_info_p(), residual_block_cavlc());
 }
 
 static int mb_inter8x8b_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_b_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), store_direct8x8_info_b(), residual_block_cavlc());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_b_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), residual_luma_inter(), not_need_transform_size_8x8(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), store_direct8x8_info_b(), residual_block_cavlc());
 }
 
 static int mb_bdirect16x16_cavlc(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_bdirect16x16(mb, mbc, st, avail, cbp_inter_cavlc(), residual_luma_inter(), qp_delta_cavlc(), residual_block_cavlc());
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cavlc(), residual_block_cavlc());
+}
+
+static int mb_inter16x16_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
+}
+
+static int mb_inter16x8_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
+}
+
+static int mb_inter8x16_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x16(mb, mbc, st, avail, ref_idx16x8_cavlc(), mvd_xy_cavlc(), cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
+}
+
+static int mb_inter8x8p_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cavlc(), ref_idx8x8_cavlc(), sub_mbs_p_cavlc(), sub_mbs_dec_p(), cbp_inter_cavlc(), residual_luma_inter(), need_transform_size_8x8p(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), store_direct8x8_info_p(), residual_block_cavlc());
+}
+
+static int mb_inter8x8b_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cavlc(), ref_idx8x8_cavlc(), sub_mbs_b_cavlc(), sub_mbs_dec_b(), cbp_inter_cavlc(), residual_luma_inter(), need_transform_size_8x8b(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), store_direct8x8_info_b(), residual_block_cavlc());
+}
+
+static int mb_bdirect16x16_cavlc8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_inter_cavlc(), residual_luma_inter(), transform_size_8x8_flag_cavlc(), qp_delta_cavlc(), residual_block_cavlc());
 }
 
 static const mb_code mb_decode[2][54] = {
@@ -8696,23 +8846,23 @@ static const mb_code mb_decode[2][54] = {
 		{mb_intra16x16_acdc_cavlc, intraNxNpred_dc<16>, 0x2f},
 		{mb_intra16x16_acdc_cavlc, mb_intra16x16pred_planer, 0x2f},
 		{mb_intrapcm, 0, 0},
-		{mb_inter16x16_cavlc, 0, 1},
-		{mb_inter16x8_cavlc, 0, 3},
-		{mb_inter8x16_cavlc, 0, 3},
-		{mb_inter8x8p_cavlc, 0, 0xf},
-		{mb_inter8x8p_cavlc, 0, 0xf},
-		{mb_bdirect16x16_cavlc, 0, 0},
-		{mb_inter16x16_cavlc, 0, 1}, {mb_inter16x16_cavlc, 0, 2}, {mb_inter16x16_cavlc, 0, 3},
-		{mb_inter16x8_cavlc, 0, 0x3}, {mb_inter8x16_cavlc, 0, 0x3},
-		{mb_inter16x8_cavlc, 0, 0xc}, {mb_inter8x16_cavlc, 0, 0xc},
-		{mb_inter16x8_cavlc, 0, 0x9}, {mb_inter8x16_cavlc, 0, 0x9},
-		{mb_inter16x8_cavlc, 0, 0x6}, {mb_inter8x16_cavlc, 0, 0x6},
-		{mb_inter16x8_cavlc, 0, 0xb}, {mb_inter8x16_cavlc, 0, 0xb},
-		{mb_inter16x8_cavlc, 0, 0xe}, {mb_inter8x16_cavlc, 0, 0xe},
-		{mb_inter16x8_cavlc, 0, 0x7}, {mb_inter8x16_cavlc, 0, 0x7},
-		{mb_inter16x8_cavlc, 0, 0xd}, {mb_inter8x16_cavlc, 0, 0xd},
-		{mb_inter16x8_cavlc, 0, 0xf}, {mb_inter8x16_cavlc, 0, 0xf},
-		{mb_inter8x8b_cavlc, 0, 0}
+		{mb_inter16x16_cavlc8x8, 0, 1},
+		{mb_inter16x8_cavlc8x8, 0, 3},
+		{mb_inter8x16_cavlc8x8, 0, 3},
+		{mb_inter8x8p_cavlc8x8, 0, 0xf},
+		{mb_inter8x8p_cavlc8x8, 0, 0xf},
+		{mb_bdirect16x16_cavlc8x8, 0, 0},
+		{mb_inter16x16_cavlc8x8, 0, 1}, {mb_inter16x16_cavlc8x8, 0, 2}, {mb_inter16x16_cavlc8x8, 0, 3},
+		{mb_inter16x8_cavlc8x8, 0, 0x3}, {mb_inter8x16_cavlc8x8, 0, 0x3},
+		{mb_inter16x8_cavlc8x8, 0, 0xc}, {mb_inter8x16_cavlc8x8, 0, 0xc},
+		{mb_inter16x8_cavlc8x8, 0, 0x9}, {mb_inter8x16_cavlc8x8, 0, 0x9},
+		{mb_inter16x8_cavlc8x8, 0, 0x6}, {mb_inter8x16_cavlc8x8, 0, 0x6},
+		{mb_inter16x8_cavlc8x8, 0, 0xb}, {mb_inter8x16_cavlc8x8, 0, 0xb},
+		{mb_inter16x8_cavlc8x8, 0, 0xe}, {mb_inter8x16_cavlc8x8, 0, 0xe},
+		{mb_inter16x8_cavlc8x8, 0, 0x7}, {mb_inter8x16_cavlc8x8, 0, 0x7},
+		{mb_inter16x8_cavlc8x8, 0, 0xd}, {mb_inter8x16_cavlc8x8, 0, 0xd},
+		{mb_inter16x8_cavlc8x8, 0, 0xf}, {mb_inter8x16_cavlc8x8, 0, 0xf},
+		{mb_inter8x8b_cavlc8x8, 0, 0}
 	}
 };
 
@@ -10800,7 +10950,7 @@ static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type)
 }
 
 struct transform_size_8x8_flag_cabac {
-	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) {
+	int operator()(h264d_mb_current *mb, dec_bits_t *st, int avail) const {
 		int offset = 399 + ((avail & 2) && mb->top4x4inter->transform8x8) + ((avail & 1) && mb->left4x4inter->transform8x8);
 		return cabac_decode_decision(mb->cabac, st, offset);
 	}
@@ -11504,32 +11654,62 @@ struct ref_idx8x8_cabac {
 
 static int mb_inter16x16_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), residual_block_cabac());
+	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), residual_block_cabac());
 }
 
 static int mb_inter16x8_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), residual_block_cabac());
+	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), residual_block_cabac());
 }
 
 static int mb_inter8x16_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x16(mb, mbc, st, avail, ref_idx8x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), residual_block_cabac());
+	return mb_inter8x16(mb, mbc, st, avail, ref_idx8x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), residual_block_cabac());
 }
 
 static int mb_inter8x8p_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cabac(), ref_idx8x8_cabac(), sub_mbs_p_cabac(), sub_mbs_dec_p(), cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), store_direct8x8_info_p(), residual_block_cabac());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cabac(), ref_idx8x8_cabac(), sub_mbs_p_cabac(), sub_mbs_dec_p(), cbp_cabac(), residual_luma_inter(), not_need_transform_size_8x8(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), store_direct8x8_info_p(), residual_block_cabac());
 }
 
 static int mb_inter8x8b_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cabac(), ref_idx8x8_cabac(), sub_mbs_b_cabac(), sub_mbs_dec_b(), cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), store_direct8x8_info_b(), residual_block_cabac());
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cabac(), ref_idx8x8_cabac(), sub_mbs_b_cabac(), sub_mbs_dec_b(), cbp_cabac(), residual_luma_inter(), not_need_transform_size_8x8(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), store_direct8x8_info_b(), residual_block_cabac());
 }
 
 static int mb_bdirect16x16_cabac(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
 {
-	return mb_bdirect16x16(mb, mbc, st, avail, cbp_cabac(), residual_luma_inter(), qp_delta_cabac(), residual_block_cabac());
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_dummy(), qp_delta_cabac(), residual_block_cabac());
+}
+
+static int mb_inter16x16_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter16x16(mb, mbc, st, avail, ref_idx16x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), residual_block_cabac());
+}
+
+static int mb_inter16x8_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter16x8(mb, mbc, st, avail, ref_idx16x8_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), residual_block_cabac());
+}
+
+static int mb_inter8x16_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x16(mb, mbc, st, avail, ref_idx8x16_cabac(), mvd_xy_cabac(), cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), residual_block_cabac());
+}
+
+static int mb_inter8x8p_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_type_p_cabac(), ref_idx8x8_cabac(), sub_mbs_p_cabac(), sub_mbs_dec_p(), cbp_cabac(), residual_luma_inter(), need_transform_size_8x8p(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), store_direct8x8_info_p(), residual_block_cabac());
+}
+
+static int mb_inter8x8b_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_inter8x8(mb, mbc, st, avail, sub_mb_types_b_cabac(), ref_idx8x8_cabac(), sub_mbs_b_cabac(), sub_mbs_dec_b(), cbp_cabac(), residual_luma_inter(), need_transform_size_8x8b(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), store_direct8x8_info_b(), residual_block_cabac());
+}
+
+static int mb_bdirect16x16_cabac8x8(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, int avail)
+{
+	return mb_bdirect16x16(mb, mbc, st, avail, cbp_cabac(), residual_luma_inter(), transform_size_8x8_flag_cabac(), qp_delta_cabac(), residual_block_cabac());
 }
 
 static const mb_code mb_decode_cabac[2][54] = {
@@ -11605,23 +11785,23 @@ static const mb_code mb_decode_cabac[2][54] = {
 		{mb_intra16x16_acdc_cabac, intraNxNpred_dc<16>, 0x2f},
 		{mb_intra16x16_acdc_cabac, mb_intra16x16pred_planer, 0x2f},
 		{mb_intrapcm, 0, 0},
-		{mb_inter16x16_cabac, 0, 1},
-		{mb_inter16x8_cabac, 0, 3},
-		{mb_inter8x16_cabac, 0, 3},
-		{mb_inter8x8p_cabac, 0, 0xf},
-		{mb_inter8x8p_cabac, 0, 0xf},
-		{mb_bdirect16x16_cabac, 0, 0},
-		{mb_inter16x16_cabac, 0, 1}, {mb_inter16x16_cabac, 0, 2}, {mb_inter16x16_cabac, 0, 3},
-		{mb_inter16x8_cabac, 0, 0x3}, {mb_inter8x16_cabac, 0, 0x3},
-		{mb_inter16x8_cabac, 0, 0xc}, {mb_inter8x16_cabac, 0, 0xc},
-		{mb_inter16x8_cabac, 0, 0x9}, {mb_inter8x16_cabac, 0, 0x9},
-		{mb_inter16x8_cabac, 0, 0x6}, {mb_inter8x16_cabac, 0, 0x6},
-		{mb_inter16x8_cabac, 0, 0xb}, {mb_inter8x16_cabac, 0, 0xb},
-		{mb_inter16x8_cabac, 0, 0xe}, {mb_inter8x16_cabac, 0, 0xe},
-		{mb_inter16x8_cabac, 0, 0x7}, {mb_inter8x16_cabac, 0, 0x7},
-		{mb_inter16x8_cabac, 0, 0xd}, {mb_inter8x16_cabac, 0, 0xd},
-		{mb_inter16x8_cabac, 0, 0xf}, {mb_inter8x16_cabac, 0, 0xf},
-		{mb_inter8x8b_cabac, 0, 0}
+		{mb_inter16x16_cabac8x8, 0, 1},
+		{mb_inter16x8_cabac8x8, 0, 3},
+		{mb_inter8x16_cabac8x8, 0, 3},
+		{mb_inter8x8p_cabac8x8, 0, 0xf},
+		{mb_inter8x8p_cabac8x8, 0, 0xf},
+		{mb_bdirect16x16_cabac8x8, 0, 0},
+		{mb_inter16x16_cabac8x8, 0, 1}, {mb_inter16x16_cabac8x8, 0, 2}, {mb_inter16x16_cabac8x8, 0, 3},
+		{mb_inter16x8_cabac8x8, 0, 0x3}, {mb_inter8x16_cabac8x8, 0, 0x3},
+		{mb_inter16x8_cabac8x8, 0, 0xc}, {mb_inter8x16_cabac8x8, 0, 0xc},
+		{mb_inter16x8_cabac8x8, 0, 0x9}, {mb_inter8x16_cabac8x8, 0, 0x9},
+		{mb_inter16x8_cabac8x8, 0, 0x6}, {mb_inter8x16_cabac8x8, 0, 0x6},
+		{mb_inter16x8_cabac8x8, 0, 0xb}, {mb_inter8x16_cabac8x8, 0, 0xb},
+		{mb_inter16x8_cabac8x8, 0, 0xe}, {mb_inter8x16_cabac8x8, 0, 0xe},
+		{mb_inter16x8_cabac8x8, 0, 0x7}, {mb_inter8x16_cabac8x8, 0, 0x7},
+		{mb_inter16x8_cabac8x8, 0, 0xd}, {mb_inter8x16_cabac8x8, 0, 0xd},
+		{mb_inter16x8_cabac8x8, 0, 0xf}, {mb_inter8x16_cabac8x8, 0, 0xf},
+		{mb_inter8x8b_cabac8x8, 0, 0}
 	}
 };
 

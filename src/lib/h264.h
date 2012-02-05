@@ -394,6 +394,7 @@ struct h264d_bdirect_functions_t {
 	void (*direct16x16)(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_set_t *mv);
 	void (* const *direct16x16_col8x8)(h264d_mb_current *mb, const h264d_col_mb_t *col_mb, const int8_t *ref_idx, h264d_vector_t *mv);
 	void (*store_info_inter)(h264d_mb_current *mb, const h264d_vector_set_t mv[], const int8_t ref_idx[], uint32_t str_vert, uint32_t str_horiz, uint32_t left4x4, uint32_t top4x4, int mb_type);
+	bool (*need_transform_size_8x8_flag)(const int8_t sub_mb_type[]);
 };
 
 typedef struct mb_code {
