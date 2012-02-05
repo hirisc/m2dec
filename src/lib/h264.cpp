@@ -3122,7 +3122,7 @@ static int intra8x8pred_horiz(uint8_t *dst, int stride, int avail)
 		return -1;
 	}
 	s0 = src[0];
-	if (avail & 4) {
+	if (avail & 8) {
 		s2 = src[-stride];
 	} else {
 		s2 = s0;
@@ -3156,7 +3156,7 @@ static int intra8x8pred_vert(uint8_t *dst, int stride, int avail)
 	}
 	src = dst - stride;
 	s0 = *src++;
-	if (avail & 4) {
+	if (avail & 8) {
 		s2 = src[-2];
 	} else {
 		s2 = s0;
@@ -3175,7 +3175,7 @@ static int intra8x8pred_vert(uint8_t *dst, int stride, int avail)
 	dst[5] = FIR3(s1, s2, s0);
 	s1 = *src++;
 	dst[6] = FIR3(s2, s0, s1);
-	s2 = (avail & 8) ? *src : s1;
+	s2 = (avail & 4) ? *src : s1;
 	dst[7] = FIR3(s0, s1, s2);
 	uint64_t d0 = ((uint64_t *)dst)[0];
 	dst += stride;
@@ -3201,7 +3201,7 @@ static int sum8x8left(uint8_t *dst, int stride, int avail)
 	int s0, s1, s2;
 	int sum;
 	s1 = src[0];
-	if (avail & 4) {
+	if (avail & 8) {
 		s0 = src[-stride];
 	} else {
 		s0 = s1;
@@ -3235,7 +3235,7 @@ static int sum8x8top(uint8_t *dst, int stride, int avail)
 	int s0, s1, s2;
 	int sum;
 	s1 = *src++;
-	if (avail & 4) {
+	if (avail & 8) {
 		s0 = src[-2];
 	} else {
 		s0 = s1;
@@ -3254,7 +3254,7 @@ static int sum8x8top(uint8_t *dst, int stride, int avail)
 	sum += FIR3(s2, s0, s1);
 	s2 = *src++;
 	sum += FIR3(s0, s1, s2);
-	s0 = (avail & 8) ? *src : s2;
+	s0 = (avail & 4) ? *src : s2;
 	return sum + FIR3(s1, s2, s0);
 }
 
@@ -3289,7 +3289,7 @@ static inline void top8x8line(const uint8_t *src, uint32_t *dst, int avail, F La
 {
 	uint32_t s0, s1, s2;
 	s1 = *src++;
-	if (avail & 4) {
+	if (avail & 8) {
 		s0 = src[-2];
 	} else {
 		s0 = s1;
@@ -3315,7 +3315,7 @@ struct top8x8line_latter0 {
 
 struct top8x8line_latter1 {
 	void operator()(uint32_t *dst, const uint8_t *src, int avail, uint32_t s1, uint32_t s2) const {
-		uint32_t s0 = (avail & 8) ? *src : s2;
+		uint32_t s0 = (avail & 4) ? *src : s2;
 		dst[1] = (s1 + s2 * 2 + s0 + 2) >> 2;
 	}
 };
@@ -3323,7 +3323,7 @@ struct top8x8line_latter1 {
 struct top8x8line_latter8 {
 	void operator()(uint32_t *dst, const uint8_t *src, int avail, uint32_t s1, uint32_t s2) const {
 		uint32_t s0;
-		if (avail & 8) {
+		if (avail & 4) {
 			dst += 1;
 			int x = 8 / 2;
 			do {
@@ -3350,7 +3350,7 @@ static inline void left8x8line(const uint8_t *src, uint32_t *dst, int stride, in
 {
 	uint32_t s0, s1, s2;
 	s1 = *src;
-	if (avail & 4) {
+	if (avail & 8) {
 		s0 = src[-stride];
 	} else {
 		s0 = s1;
@@ -3476,7 +3476,7 @@ static int intra8x8pred_vr(uint8_t *dst, int stride, int avail)
   -6, -4, -2,  0,  2,  4,  6,  8,
   -7, -5, -3, -1,  1,  3,  5,  7,
 */
-	if ((avail & 7) != 7) {
+	if ((avail & 11) != 11) {
 		return -1;
 	}
 	uint32_t tmp[1 + 8 + 8];
@@ -3545,7 +3545,7 @@ static int intra8x8pred_hd(uint8_t *dst, int stride, int avail)
 	uint32_t tmp[7 + 1 + 8];
 	const uint32_t *src;
 	uint32_t t0, t1, t2, d0, d1;
-	if ((avail & 7) != 7) {
+	if ((avail & 11) != 11) {
 		return -1;
 	}
 	top8x8line(dst - stride, tmp, avail, top8x8line_latter0());
@@ -3917,14 +3917,14 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 	const int *offset = mb->offset4x4;
 	const int16_t *qmat = mb->qmaty8x8;
 
-	intra8x8pred_func[*pr++](luma, stride, avail_intra | (avail_intra & 2 ? 4 : 0));
+	intra8x8pred_func[*pr++](luma, stride, (avail_intra & ~4) | ((avail_intra & 2) * 2));
 	if (cbp & 1) {
 		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 64, qmat, avail_intra, 0, 5, 0x3f);
 		ac8x8transform(luma, coeff, stride, c0);
 	} else {
 		c0 = 0;
 	}
-	intra8x8pred_func[*pr++](luma + 8, stride, avail_intra | (avail_intra & 2 ? 5 : 1));
+	intra8x8pred_func[*pr++](luma + 8, stride, (avail_intra & ~8) | ((avail_intra & 2) * 4) | 1);
 	if (cbp & 2) {
 		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail_intra, 4, 5, 0x3f);
 		ac8x8transform(luma + 8, coeff, stride, c1);
@@ -3933,7 +3933,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 		c1 = 0;
 		left = 0;
 	}
-	intra8x8pred_func[*pr++](luma + offset[8], stride, 10 | ((avail_intra & 1) * 5));
+	intra8x8pred_func[*pr++](luma + offset[8], stride, 6 | ((avail_intra & 1) * 9));
 	if (cbp & 4) {
 		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail_intra, 8, 5, 0x3f);
 		ac8x8transform(luma + offset[8], coeff, stride, c2);
@@ -3942,7 +3942,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 		c2 = 0;
 		top = 0;
 	}
-	intra8x8pred_func[*pr++](luma + offset[12], stride, 7);
+	intra8x8pred_func[*pr++](luma + offset[12], stride, 11);
 	if (cbp & 8) {
 		c3 = ResidualBlock(mb, c2, c1, st, coeff, 64, qmat, avail_intra, 12, 5, 0x3f);
 		ac8x8transform(luma + offset[12], coeff, stride, c3);
