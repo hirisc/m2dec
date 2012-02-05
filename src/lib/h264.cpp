@@ -3411,7 +3411,7 @@ static int intra8x8pred_ddl(uint8_t *dst, int stride, int avail)
 		t1 = t2;
 	} while (--y);
 	dst += stride;
-	SHIFT8LEFT(d0, d1, FIR3(t1, t2, t2));
+	SHIFT8LEFT(d0, d1, FIR3(t0, t1, t1));
 	((uint32_t *)dst)[0] = d0;
 	((uint32_t *)dst)[1] = d1;
 	return 0;
@@ -3933,7 +3933,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 		c1 = 0;
 		left = 0;
 	}
-	intra8x8pred_func[*pr++](luma + offset[8], stride, avail_intra | 14);
+	intra8x8pred_func[*pr++](luma + offset[8], stride, 10 | ((avail_intra & 1) * 5));
 	if (cbp & 4) {
 		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail_intra, 8, 5, 0x3f);
 		ac8x8transform(luma + offset[8], coeff, stride, c2);
