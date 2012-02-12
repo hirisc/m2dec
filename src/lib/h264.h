@@ -347,7 +347,6 @@ struct mb_code;
 
 typedef struct mb_current {
 	int8_t is_constrained_intra;
-	int8_t transform8x8;
 	int8_t type;
 	int8_t qp, qp_chroma[2];
 	int8_t lefttop_ref[2];
