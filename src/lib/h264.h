@@ -187,8 +187,8 @@ typedef struct {
 } h264d_pps;
 
 typedef union {
-	uint32_t vector;
 	int16_t v[2];
+	uint32_t vector;
 } h264d_vector_t;
 
 typedef struct {
@@ -381,7 +381,7 @@ typedef struct mb_current {
 	prev_mb_t *top4x4inter;
 	h264d_col_mb_t *col_curr;
 	h264d_bdirect_t *bdirect;
-	void (*inter_pred)(const struct mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], int width, int height, int offsetx, int offsety);
+	void (*inter_pred)(const struct mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
 	const int8_t *sub_mb_ref_map;
 	uint32_t cbp, cbf;
 	deblock_info_t *deblock_curr;
