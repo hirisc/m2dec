@@ -976,7 +976,6 @@ static int read_slice(h264d_context *h2d, dec_bits *st)
 }
 
 static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_ref_frames, int num_frames, int max_num_frames);
-static int pred_weight_table(h264d_weighted_table_t *tbl, dec_bits *st, int active_num);
 static int dec_ref_pic_marking(int nal_id, h264d_marking_t *mrk, dec_bits *st);
 
 static int slice_type_adjust(int slice_type)
@@ -1443,9 +1442,29 @@ const h264d_bdirect_functions_t bdirect_functions[2][2][2] = {
 };
 
 static void set_mb_decode(h264d_mb_current *mb, const h264d_pps *pps);
-static void inter_pred_base(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
+static int pred_weight_table(h264d_weighted_table_elem_t *elem, dec_bits *st, int active_num, int log2_luma_denom);
+static void inter_pred_basic(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
 static void inter_pred_weighted1(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
 static void inter_pred_weighted2(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
+
+static int set_weighted_info(h264d_mb_current *mb, dec_bits *st, h264d_slice_header *hdr, int slice_type, int pred_type) {
+	mb->header = hdr;
+	if (pred_type == 1) {
+		unsigned denom;
+		READ_UE_RANGE(denom, st, 7);
+		hdr->pred_weighted_info.type1.shift = denom;
+		pred_weight_table(hdr->pred_weighted_info.type1.luma[0], st, hdr->num_ref_idx_lx_active_minus1[0], denom);
+		if (slice_type == B_SLICE) {
+			pred_weight_table(hdr->pred_weighted_info.type1.luma[1], st, hdr->num_ref_idx_lx_active_minus1[1], denom);
+		}
+		mb->inter_pred = inter_pred_weighted1;
+	} else {
+		h264d_weighted_cache_t* t2 = &hdr->pred_weighted_info.type2;
+		memset(t2->idx, -1, sizeof(t2->idx));
+		mb->inter_pred = inter_pred_weighted2;
+	}
+	return 0;
+}
 
 static int slice_header(h264d_context *h2d, dec_bits *st)
 {
@@ -1547,7 +1566,7 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		if (ref_pic_list_reordering(&hdr->reorder[0], st, sps->num_ref_frames, hdr->frame_num, max_frame_num)) {
 			return -1;
 		}
-		mb->inter_pred = inter_pred_base;
+		mb->inter_pred = inter_pred_basic;
 		if (hdr->slice_type == B_SLICE) {
 			if (ref_pic_list_reordering(&hdr->reorder[1], st, sps->num_ref_frames, hdr->frame_num, max_frame_num)) {
 				return -1;
@@ -1557,19 +1576,14 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 				create_map_col_to_list0(mb->bdirect->map_col_to_list0, mb->bdirect->scale, mb->frame->refs[0], mb->frame->refs[1], hdr->poc, sps->num_ref_frames);
 			}
 			if (pps->weighted_bipred_idc != 0) {
-				if (pps->weighted_bipred_idc == 1) {
-					pred_weight_table(&hdr->pred_weighted_info.type1[0], st, hdr->num_ref_idx_lx_active_minus1[0]);
-					pred_weight_table(&hdr->pred_weighted_info.type1[1], st, hdr->num_ref_idx_lx_active_minus1[1]);
-					mb->inter_pred = inter_pred_weighted1;
-				} else {
-					mb->inter_pred = inter_pred_weighted2;
+				if (set_weighted_info(mb, st, hdr, B_SLICE, pps->weighted_bipred_idc) < 0) {
+					return -1;
 				}
 			}
 		} else {
 			mb->sub_mb_ref_map = sub_mb_ref_map_p;
-			if (pps->weighted_pred_flag) {
-				pred_weight_table(&hdr->pred_weighted_info.type1[0], st, hdr->num_ref_idx_lx_active_minus1[0]);
-				mb->inter_pred = inter_pred_weighted1;
+			if (pps->weighted_pred_flag && (set_weighted_info(mb, st, hdr, P_SLICE, 1) < 0)) {
+				return -1;
 			}
 		}
 		mb->bdirect->func = &bdirect_functions[sps->direct_8x8_inference_flag][pps->transform_8x8_mode_flag][hdr->direct_spatial_mv_pred_flag];
@@ -1694,12 +1708,8 @@ static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_r
 	return 0;
 }
 
-static int pred_weight_table(h264d_weighted_table_t *tbl, dec_bits *st, int active_num)
+static int pred_weight_table(h264d_weighted_table_elem_t *elem, dec_bits *st, int active_num, int log2_luma_denom)
 {
-	unsigned log2_luma_denom;
-	assert(0);
-	READ_UE_RANGE(log2_luma_denom, st, 7);
-	tbl->shift = log2_luma_denom;
 	int default_weight = 1 << log2_luma_denom;
 	for (int i = 0; i < active_num; ++i) {
 		int weight, offset;
@@ -1710,8 +1720,8 @@ static int pred_weight_table(h264d_weighted_table_t *tbl, dec_bits *st, int acti
 			weight = default_weight;
 			offset = 0;
 		}
-		tbl->luma[i].weight = weight;
-		tbl->luma[i].offset = offset;
+		elem[i].weight = weight;
+		elem[i].offset = offset;
 	}
 	return 0;
 }
@@ -4586,8 +4596,12 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	mb->left4x4pred = 0x22222222;
 	*mb->top4x4pred = 0x22222222;
 	mb->deblock_curr->qpy = 0;
-	mb->deblock_curr->qpc[0] = 0;
-	mb->deblock_curr->qpc[1] = 0;
+	mb->deblock_curr->qpc[0] = mb->qp_chroma[0] - mb->qp;
+	mb->deblock_curr->qpc[1] = mb->qp_chroma[1] - mb->qp;
+	mb->deblock_curr->str4_horiz = 1;
+	mb->deblock_curr->str4_vert = 1;
+	mb->deblock_curr->str_horiz = 0xff00ff;
+	mb->deblock_curr->str_vert = 0xff00ff;
 	mb->prev_qp_delta = 0;
 	mb->cbp = 0x3f;
 	mb->cbf = 0x7ffffff;
@@ -4634,13 +4648,10 @@ static void (* const copy_inter_align[3])(const uint8_t *src, uint8_t *dst, int 
 	copy_inter16x_align
 };
 
-static inline void copy_inter(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int stride)
+static inline void copy_inter(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
-	int width = size.v[0];
-	int height = size.v[1];
 	if (((intptr_t)src & 3) == 0) {
 		copy_inter_align[(unsigned)width >> 3](src, dst, height, src_stride, stride);
-		VC_CHECK;
 	} else {
 		width = (unsigned)width >> 2;
 		do {
@@ -4670,7 +4681,7 @@ static inline void filter_chroma_horiz(const uint8_t *src, uint8_t *dst, const h
 	int c0 = (8 - frac) * 8;
 	int c1 = frac * 8;
 	int width = size.v[0] >> 1;
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	do {
 		int x = width;
 		const uint8_t *s = src;
@@ -4696,7 +4707,7 @@ static inline void filter_chroma_vert(const uint8_t *src, uint8_t *dst, const h2
 	int c0 = (8 - frac) * 8;
 	int c1 = frac * 8;
 	int width = size.v[0];
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 
 	do {
 		const uint8_t *s = src++;
@@ -4723,7 +4734,7 @@ static inline void filter_chroma_vert_horiz(const uint8_t *src, uint8_t *dst, co
 	c1 = fracx * (8 - fracy);
 	c2 = (8 - fracx) * fracy;
 	int width = size.v[0] >> 1;
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	do {
 		uint32_t t0, t2;
 		const uint8_t *src0, *src1;
@@ -4768,7 +4779,7 @@ static inline void extend_left_chroma(uint8_t *dst, int left, int width, int hei
 static inline void fill_left_top_chroma(const uint8_t *src, uint8_t *buf, int left, int top, const h264d_vector_t& size, int stride)
 {
 	int width = size.v[0];
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	int y;
 
 	src += top * stride + left;
@@ -4792,7 +4803,7 @@ static inline void fill_left_bottom_chroma(const uint8_t *src, uint8_t *buf, int
 {
 	uint8_t *dst = buf + left;
 	int width = size.v[0];
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	int y;
 
 	src += left;
@@ -4829,7 +4840,7 @@ static inline void fill_right_top_chroma(const uint8_t *src, uint8_t *buf, int r
 {
 	uint8_t *dst = buf;
 	int width = size.v[0];
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	int y;
 
 	src = src + top * stride;
@@ -4851,7 +4862,7 @@ static inline void fill_right_bottom_chroma(const uint8_t *src, uint8_t *buf, in
 {
 	uint8_t *dst = buf;
 	int width = size.v[0];
-	int height = size.v[1];
+	int height = size.v[1] >> 1;
 	int y;
 	for (y = 0; y < height - bottom; ++y) {
 		memcpy(dst, src, width - right);
@@ -4879,7 +4890,7 @@ static inline void fill_rect_umv_chroma(const uint8_t *src, uint8_t *buf, const 
 			/* left, top */
 			fill_left_top_chroma(src, buf, left, top, size, stride);
 		} else {
-			bottom = posy - vert_size + size.v[1];
+			bottom = posy - vert_size + (size.v[1] >> 1);
 			if (0 < bottom) {
 				/* left, bottom */
 				fill_left_bottom_chroma(src, buf, left, bottom, size, stride);
@@ -4899,7 +4910,7 @@ static inline void fill_rect_umv_chroma(const uint8_t *src, uint8_t *buf, const 
 				fill_left_top_chroma(src, buf, 0, top, size, stride);
 			}
 		} else {
-			bottom = posy - vert_size + size.v[1];
+			bottom = posy - vert_size + (size.v[1] >> 1);
 			if (0 < right) {
 				if (0 < bottom) {
 					/* right, bottom */
@@ -4921,13 +4932,11 @@ static inline void fill_rect_umv_chroma(const uint8_t *src, uint8_t *buf, const 
 	}
 }
 
-static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, const h264d_vector_t& pos, const h264d_vector_t& size, int src_stride, int vert_size, int dst_stride, const h264d_vector_t* mv)
+static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, int posx, int posy, const h264d_vector_t& size, int src_stride, int vert_size, int dst_stride, const h264d_vector_t* mv)
 {
 	uint32_t buf[18 * 9 / sizeof(uint32_t) + 1];
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	int width = size.v[0];
-	int height  = size.v[1];
+	int height = (unsigned)size.v[1] >> 1;
 
 	if (posx < -width) {
 		src += -width - posx;
@@ -4946,7 +4955,7 @@ static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, const h264
 	h264d_vector_t size_filter;
 	if (mv) {
 		size_filter.v[0] = width + 2;
-		size_filter.v[1] = height + 1;
+		size_filter.v[1] = size.v[1] + 2;
 	}
 	fill_rect_umv_chroma(src, (uint8_t *)buf, mv ? size_filter : size, src_stride, vert_size, posx, posy);
 	if (mv) {
@@ -4956,16 +4965,14 @@ static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, const h264
 	}
 }
 
-static void inter_pred_chroma(const uint8_t *src_chroma, const h264d_vector_t& pos, const h264d_vector_t& mv, const h264d_vector_t& size_c, int src_stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_chroma_base(const uint8_t *src_chroma, int posx, int posy, const h264d_vector_t& mv, const h264d_vector_t& size_c, int src_stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	int mvx = mv.v[0] & 7;
 	int mvy = mv.v[1] & 7;
-
 	src_chroma = src_chroma + inter_pred_mvoffset_luma(posx, posy, src_stride);
+	int height = size_c.v[1] >> 1;
 	if (mvx || mvy) {
-		if ((unsigned)posx <= (unsigned)(src_stride - size_c.v[0] - 2) && (unsigned)posy <= (unsigned)(vert_stride - size_c.v[1] - 1)) {
+		if ((unsigned)posx <= (unsigned)(src_stride - size_c.v[0] - 2) && (unsigned)posy <= (unsigned)(vert_stride - height - 1)) {
 			if (mvy) {
 				if (mvx) {
 					filter_chroma_vert_horiz(src_chroma, dst, size_c, mvx, mvy, src_stride, dst_stride);
@@ -4977,14 +4984,14 @@ static void inter_pred_chroma(const uint8_t *src_chroma, const h264d_vector_t& p
 			}
 		} else {
 			/* UMV */
-			chroma_inter_umv(src_chroma, dst, pos, size_c, src_stride, vert_stride, dst_stride, &mv);
+			chroma_inter_umv(src_chroma, dst, posx, posy, size_c, src_stride, vert_stride, dst_stride, &mv);
 		}
 
 	} else {
-		if ((unsigned)posx <= (unsigned)(src_stride - size_c.v[0]) && (unsigned)posy <= (unsigned)(vert_stride - size_c.v[1])) {
-			copy_inter(src_chroma, dst, size_c, src_stride, dst_stride);
+		if ((unsigned)posx <= (unsigned)(src_stride - size_c.v[0]) && (unsigned)posy <= (unsigned)(vert_stride - height)) {
+			copy_inter(src_chroma, dst, size_c.v[0], height, src_stride, dst_stride);
 		} else {
-			chroma_inter_umv(src_chroma, dst, pos, size_c, src_stride, vert_stride, dst_stride, 0);
+			chroma_inter_umv(src_chroma, dst, posx, posy, size_c, src_stride, vert_stride, dst_stride, 0);
 		}
 	}
 }
@@ -4995,10 +5002,8 @@ static inline uint32_t AVERAGE2(uint32_t s1, uint32_t s2)
 	return (s1 & s2) + ((x & ~0x01010101) >> 1) + (x & 0x01010101);
 }
 
-static inline void add_bidir(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int stride)
+static inline void add_bidir(const uint8_t *src, uint8_t *dst, int width, int height, int stride)
 {
-	int width = size.v[0];
-	int height = size.v[1];
 	int x_len = (uint32_t)width >> 2;
 	do {
 		int x = x_len;
@@ -5013,12 +5018,17 @@ static inline void add_bidir(const uint8_t *src, uint8_t *dst, const h264d_vecto
 	} while (--height);
 }
 
-static void inter_pred_chroma_bidir(const uint8_t *src_chroma, const h264d_vector_t& pos, const h264d_vector_t& mv, const h264d_vector_t& size_c, int src_stride, int vert_stride, uint8_t *dst)
+static void inter_pred_chroma_bidir(const uint8_t *src_chroma, int posx, int posy, const h264d_vector_t& mv, const h264d_vector_t& size_c, int src_stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
 	uint32_t tmp[(16 * 8) / sizeof(uint32_t)];
-	inter_pred_chroma(src_chroma, pos, mv, size_c, src_stride, vert_stride, size_c.v[0], (uint8_t *)tmp);
-	add_bidir((const uint8_t *)tmp, dst, size_c, src_stride);
+	inter_pred_chroma_base(src_chroma, posx, posy, mv, size_c, src_stride, vert_stride, (uint8_t *)tmp, size_c.v[0]);
+	add_bidir((const uint8_t *)tmp, dst, size_c.v[0], size_c.v[1] >> 1, src_stride);
 }
+
+static void (* const inter_pred_chroma[2])(const uint8_t *src_chroma, int posx, int posy, const h264d_vector_t& mv, const h264d_vector_t& size_c, int src_stride, int vert_stride, uint8_t *dst, int dst_stride) = {
+	inter_pred_chroma_base,
+	inter_pred_chroma_bidir
+};
 
 template <typename DSTTYPE, typename F>
 static inline void inter_pred_luma_filter02_core_base(const uint8_t *src, DSTTYPE *dst, const h264d_vector_t& size, int src_stride, int stride, F Store)
@@ -5127,7 +5137,7 @@ static inline void filter_1_3_v_post(const uint8_t *src, uint8_t *dst, const h26
 {
 	uint32_t buf[16 * 22 / sizeof(uint32_t)];
 	inter_pred_luma_filter20_core(src, (uint8_t *)buf, size, src_stride, size.v[0]);
-	add_bidir((uint8_t *)buf, dst, size, stride);
+	add_bidir((uint8_t *)buf, dst, size.v[0], size.v[1], stride);
 }
 
 struct store32 {
@@ -5558,10 +5568,8 @@ static inline void fill_rect_umv_luma(const uint8_t *src, uint8_t *buf, int widt
 	}
 }
 
-static void inter_pred_luma_umv(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int src_stride, int vert_size, int dst_stride, int fracx, int fracy, uint8_t *dst)
+static void inter_pred_luma_umv(const uint8_t *src, int posx, int posy, const h264d_vector_t& size, int src_stride, int vert_size, int dst_stride, void (* const filter)(const uint8_t *, uint8_t *, const h264d_vector_t&, int, int), uint8_t *dst)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	uint8_t buf[22 * 22];
 	int width = size.v[0] + 6;
 	int height = size.v[1] + 6;
@@ -5582,470 +5590,318 @@ static void inter_pred_luma_umv(const uint8_t *src, const h264d_vector_t& pos, c
 		posy = vert_size + 1;
 	}
 	fill_rect_umv_luma(src, buf, width, height, src_stride, vert_size, posx - 2, posy - 2);
-	inter_pred_luma_filter[fracy][fracx](buf, dst, size, width, dst_stride);
+	filter(buf, dst, size, width, dst_stride);
 }
 
-static void inter_pred_luma_frac00(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac00(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if ((unsigned)posx <= (unsigned)(stride - size.v[0]) && (unsigned)posy <= (unsigned)(vert_stride - size.v[1])) {
 		src_luma = src_luma + inter_pred_mvoffset_luma(2, 2, stride);
-		copy_inter(src_luma, dst, size, stride, dst_stride);
+		copy_inter(src_luma, dst, size.v[0], size.v[1], stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 0, 0, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter00, dst);
 	}
 }
 
-static void inter_pred_luma_frac01(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac01(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && (unsigned)posy < (unsigned)(vert_stride - size.v[1])) {
 		inter_pred_luma_filter01(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 1, 0, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter01, dst);
 	}
 }
 
-static void inter_pred_luma_frac02(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst) 
+static void inter_pred_luma_frac02(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride) 
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && (unsigned)posy < (unsigned)(vert_stride - size.v[1])) {
 		inter_pred_luma_filter02(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 2, 0, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter02, dst);
 	}
 }
 
-static void inter_pred_luma_frac03(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac03(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && (unsigned)posy < (unsigned)(vert_stride - size.v[1])) {
 		inter_pred_luma_filter03(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 3, 0, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter03, dst);
 	}
 }
 
-static void inter_pred_luma_frac10(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac10(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if ((unsigned)posx < (unsigned)(stride - size.v[0]) && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter10(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 0, 1, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter10, dst);
 	}
 }
 
-static void inter_pred_luma_frac11(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac11(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter11(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 1, 1, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter11, dst);
 	}
 }
 
-static void inter_pred_luma_frac12(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac12(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter12(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 2, 1, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter12, dst);
 	}
 }
 
-static void inter_pred_luma_frac13(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac13(const uint8_t *src_luma, int  posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter13(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 3, 1, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter13, dst);
 	}
 }
 
-static void inter_pred_luma_frac20(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac20(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if ((unsigned)posx < (unsigned)(stride - size.v[0]) && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter20(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 0, 2, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter20, dst);
 	}
 }
 
-static void inter_pred_luma_frac21(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac21(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter21(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 1, 2, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter21, dst);
 	}
 }
 
-static void inter_pred_luma_frac22(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac22(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter22(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 2, 2, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter22, dst);
 	}
 }
 
-static void inter_pred_luma_frac23(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac23(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter23(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 3, 2, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter23, dst);
 	}
 }
 
-static void inter_pred_luma_frac30(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac30(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if ((unsigned)posx < (unsigned)(stride - size.v[0]) && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter30(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 0, 3, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter30, dst);
 	}
 }
 
-static void inter_pred_luma_frac31(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac31(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter31(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 1, 3, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter31, dst);
 	}
 }
 
-static void inter_pred_luma_frac32(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac32(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter32(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 2, 3, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter32, dst);
 	}
 }
 
-static void inter_pred_luma_frac33(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, int dst_stride, uint8_t *dst)
+static void inter_pred_luma_frac33(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dst_stride)
 {
-	int posx = pos.v[0];
-	int posy = pos.v[1];
 	if (2 <= posx && posx < stride - size.v[0] - 2 && 2 <= posy && posy < vert_stride - size.v[1] - 2) {
 		inter_pred_luma_filter33(src_luma, dst, size, stride, dst_stride);
 	} else {
-		inter_pred_luma_umv(src_luma, pos, size, stride, vert_stride, dst_stride, 3, 3, dst);
+		inter_pred_luma_umv(src_luma, posx, posy, size, stride, vert_stride, dst_stride, inter_pred_luma_filter33, dst);
 	}
 }
 
 template <typename F>
-static inline void inter_pred_luma_bidir_latter(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst,
+static inline void inter_pred_luma_bidir_latter(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst,
 						F InterPred)
 {
 	uint32_t tmp[(16 * 16) / sizeof(uint32_t)];
 
-	InterPred(src_luma, pos, size, stride, vert_stride, size.v[0], (uint8_t *)tmp);
-	add_bidir((const uint8_t *)tmp, dst, size, stride);
+	InterPred(src_luma, posx, posy, size, stride, vert_stride, (uint8_t *)tmp, size.v[0]);
+	add_bidir((const uint8_t *)tmp, dst, size.v[0], size.v[1], stride);
 }
 
-static void inter_pred_luma_bidir_latter00(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter00(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac00);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac00);
 }
 
-static void inter_pred_luma_bidir_latter01(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter01(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac01);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac01);
 }
 
-static void inter_pred_luma_bidir_latter02(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter02(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac02);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac02);
 }
 
-static void inter_pred_luma_bidir_latter03(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter03(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac03);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac03);
 }
 
-static void inter_pred_luma_bidir_latter10(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter10(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac10);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac10);
 }
 
-static void inter_pred_luma_bidir_latter11(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter11(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac11);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac11);
 }
 
-static void inter_pred_luma_bidir_latter12(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter12(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac12);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac12);
 }
 
-static void inter_pred_luma_bidir_latter13(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter13(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac13);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac13);
 }
 
-static void inter_pred_luma_bidir_latter20(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter20(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac20);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac20);
 }
 
-static void inter_pred_luma_bidir_latter21(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter21(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac21);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac21);
 }
 
-static void inter_pred_luma_bidir_latter22(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter22(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac22);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac22);
 }
 
-static void inter_pred_luma_bidir_latter23(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter23(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac23);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac23);
 }
 
-static void inter_pred_luma_bidir_latter30(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter30(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac30);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac30);
 }
 
-static void inter_pred_luma_bidir_latter31(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter31(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac31);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac31);
 }
 
-static void inter_pred_luma_bidir_latter32(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter32(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac32);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac32);
 }
 
-static void inter_pred_luma_bidir_latter33(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst)
+static void inter_pred_luma_bidir_latter33(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, int dummy)
 {
-	inter_pred_luma_bidir_latter(src_luma, pos, size, stride, vert_stride, dst, inter_pred_luma_frac33);
+	inter_pred_luma_bidir_latter(src_luma, posx, posy, size, stride, vert_stride, dst, inter_pred_luma_frac33);
 }
 
-static void (* const inter_pred_luma[4][4])(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int src_stride, int vert_stride, int dst_stride, uint8_t *dst) = {
+static void (* const inter_pred_luma[2][4][4])(const uint8_t *src_luma, int posx, int posy, const h264d_vector_t& size, int src_stride, int vert_stride, uint8_t *dst, int dst_stride) = {
 	{
-		inter_pred_luma_frac00,
-		inter_pred_luma_frac01,
-		inter_pred_luma_frac02,
-		inter_pred_luma_frac03
+		{
+			inter_pred_luma_frac00,
+			inter_pred_luma_frac01,
+			inter_pred_luma_frac02,
+			inter_pred_luma_frac03
+		},
+		{
+			inter_pred_luma_frac10,
+			inter_pred_luma_frac11,
+			inter_pred_luma_frac12,
+			inter_pred_luma_frac13
+		},
+		{
+			inter_pred_luma_frac20,
+			inter_pred_luma_frac21,
+			inter_pred_luma_frac22,
+			inter_pred_luma_frac23
+		},
+		{
+			inter_pred_luma_frac30,
+			inter_pred_luma_frac31,
+			inter_pred_luma_frac32,
+			inter_pred_luma_frac33
+		}
 	},
 	{
-		inter_pred_luma_frac10,
-		inter_pred_luma_frac11,
-		inter_pred_luma_frac12,
-		inter_pred_luma_frac13
-	},
-	{
-		inter_pred_luma_frac20,
-		inter_pred_luma_frac21,
-		inter_pred_luma_frac22,
-		inter_pred_luma_frac23
-	},
-	{
-		inter_pred_luma_frac30,
-		inter_pred_luma_frac31,
-		inter_pred_luma_frac32,
-		inter_pred_luma_frac33
+		{
+			inter_pred_luma_bidir_latter00,
+			inter_pred_luma_bidir_latter01,
+			inter_pred_luma_bidir_latter02,
+			inter_pred_luma_bidir_latter03
+		},
+		{
+			inter_pred_luma_bidir_latter10,
+			inter_pred_luma_bidir_latter11,
+			inter_pred_luma_bidir_latter12,
+			inter_pred_luma_bidir_latter13
+		},
+		{
+			inter_pred_luma_bidir_latter20,
+			inter_pred_luma_bidir_latter21,
+			inter_pred_luma_bidir_latter22,
+			inter_pred_luma_bidir_latter23
+		},
+		{
+			inter_pred_luma_bidir_latter30,
+			inter_pred_luma_bidir_latter31,
+			inter_pred_luma_bidir_latter32,
+			inter_pred_luma_bidir_latter33
+		}
 	}
 };
 
-static void (* const inter_pred_luma_bidir[4][4])(const uint8_t *src_luma, const h264d_vector_t& pos, const h264d_vector_t& size, int src_stride, int vert_stride, uint8_t *dst) = {
-	{
-		inter_pred_luma_bidir_latter00,
-		inter_pred_luma_bidir_latter01,
-		inter_pred_luma_bidir_latter02,
-		inter_pred_luma_bidir_latter03
-	},
-	{
-		inter_pred_luma_bidir_latter10,
-		inter_pred_luma_bidir_latter11,
-		inter_pred_luma_bidir_latter12,
-		inter_pred_luma_bidir_latter13
-	},
-	{
-		inter_pred_luma_bidir_latter20,
-		inter_pred_luma_bidir_latter21,
-		inter_pred_luma_bidir_latter22,
-		inter_pred_luma_bidir_latter23
-	},
-	{
-		inter_pred_luma_bidir_latter30,
-		inter_pred_luma_bidir_latter31,
-		inter_pred_luma_bidir_latter32,
-		inter_pred_luma_bidir_latter33
-	}
-};
-
-static inline void add_bidir_weighted(const h264d_weighted_pred_t& pred, const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int stride)
+static inline void add_bidir_weighted(const h264d_weighted_pred_t& pred, const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride)
 {
 	int sft = pred.shift;
-	int w0 = pred.weight0;
-	int w1 = pred.weight1;
+	int w0 = pred.weight[0];
+	int w1 = pred.weight[1];
 	int ofs = pred.offset;
-	int rnd = 1 << (ofs - 1);
-	int width = size.v[0];
-	int height = size.v[1];
-	int x_len = (uint32_t)width >> 1;
+	int rnd = 1 << (sft - 1);
+	stride -= width;
+	width = (unsigned)width >> 1;
 	do {
-		int x = x_len;
-		const uint32_t *s = (const uint32_t *)src;
-		uint32_t *d = (uint32_t *)dst;
+		int x = width;
 		do {
-			d[0] = CLIP255C(((*s++ * w1 + d[0] * w0 + rnd) >> sft) + ofs);
-			d[1] = CLIP255C(((*s++ * w1 + d[1] * w0 + rnd) >> sft) + ofs);
-			d += 2;
+			dst[0] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> sft) + ofs);
+			dst[1] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> sft) + ofs);
+			dst += 2;
 		} while (--x);
-		src += width;
 		dst += stride;
 	} while (--height);
 }
-
-template <typename F>
-static inline void inter_pred_luma_bidir_weighted_latter(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t&size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred,
-						F InterPred)
-{
-	uint32_t tmp[(16 * 16) / sizeof(uint32_t)];
-
-	InterPred(src, pos, size, stride, vert_stride, size.v[0], (uint8_t *)tmp);
-	add_bidir_weighted(pred, (const uint8_t *)tmp, dst, size, stride);
-}
-
-static void inter_pred_luma_bidir_weighted_latter00(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac00);
-}
-
-static void inter_pred_luma_bidir_weighted_latter01(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac01);
-}
-
-static void inter_pred_luma_bidir_weighted_latter02(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac02);
-}
-
-static void inter_pred_luma_bidir_weighted_latter03(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac03);
-}
-
-static void inter_pred_luma_bidir_weighted_latter10(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac10);
-}
-
-static void inter_pred_luma_bidir_weighted_latter11(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac11);
-}
-
-static void inter_pred_luma_bidir_weighted_latter12(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac12);
-}
-
-static void inter_pred_luma_bidir_weighted_latter13(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac13);
-}
-
-static void inter_pred_luma_bidir_weighted_latter20(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac20);
-}
-
-static void inter_pred_luma_bidir_weighted_latter21(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac21);
-}
-
-static void inter_pred_luma_bidir_weighted_latter22(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac22);
-}
-
-static void inter_pred_luma_bidir_weighted_latter23(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac23);
-}
-
-static void inter_pred_luma_bidir_weighted_latter30(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac30);
-}
-
-static void inter_pred_luma_bidir_weighted_latter31(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac31);
-}
-
-static void inter_pred_luma_bidir_weighted_latter32(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac32);
-}
-
-static void inter_pred_luma_bidir_weighted_latter33(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred)
-{
-	inter_pred_luma_bidir_weighted_latter(src, pos, size, stride, vert_stride, dst, pred, inter_pred_luma_frac33);
-}
-
-static void (* const inter_pred_luma_bidir_weighted[4][4])(const uint8_t *src, const h264d_vector_t& pos, const h264d_vector_t& size, int src_stride, int vert_stride, uint8_t *dst, const h264d_weighted_pred_t& pred) = {
-	{
-		inter_pred_luma_bidir_weighted_latter00,
-		inter_pred_luma_bidir_weighted_latter01,
-		inter_pred_luma_bidir_weighted_latter02,
-		inter_pred_luma_bidir_weighted_latter03
-	},
-	{
-		inter_pred_luma_bidir_weighted_latter10,
-		inter_pred_luma_bidir_weighted_latter11,
-		inter_pred_luma_bidir_weighted_latter12,
-		inter_pred_luma_bidir_weighted_latter13
-	},
-	{
-		inter_pred_luma_bidir_weighted_latter20,
-		inter_pred_luma_bidir_weighted_latter21,
-		inter_pred_luma_bidir_weighted_latter22,
-		inter_pred_luma_bidir_weighted_latter23
-	},
-	{
-		inter_pred_luma_bidir_weighted_latter30,
-		inter_pred_luma_bidir_weighted_latter31,
-		inter_pred_luma_bidir_weighted_latter32,
-		inter_pred_luma_bidir_weighted_latter33
-	}
-};
 
 static inline uint32_t spread(uint32_t a)
 {
@@ -6278,9 +6134,9 @@ struct residual_luma_interNxN {
 		if (qp_delta) {
 			set_qp(mb, mb->qp + qp_delta);
 		}
+		mb->left4x4inter->transform8x8 = transform8x8mode;
+		mb->top4x4inter->transform8x8 = transform8x8mode;
 		if (transform8x8mode) {
-			mb->left4x4inter->transform8x8 = transform8x8mode;
-			mb->top4x4inter->transform8x8 = transform8x8mode;
 			residual_luma_inter8x8(mb, cbp, st, avail, ResidualBlock);
 		} else {
 			residual_luma_inter4x4(mb, cbp, st, avail, ResidualBlock);
@@ -6327,7 +6183,6 @@ static inline void determine_pmv(const int16_t *mva, const int16_t *mvb, const i
 	pmv[1] = pmvy;
 }
 
-
 static inline void calc_mv16x16(h264d_mb_current *mb, int16_t *pmv, const int16_t *&mvd_a, const int16_t *&mvd_b, int lx, int ref_idx, int avail)
 {
 	prev_mb_t *pmb;
@@ -6364,82 +6219,102 @@ static inline void calc_mv16x16(h264d_mb_current *mb, int16_t *pmv, const int16_
 	determine_pmv(mva, mvb, mvc, pmv, avail, idx_map);
 }
 
-//->inter_pred
-static inline void inter_pred_base(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety)
+static inline void inter_pred_basic(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety)
 {
-	bool is_bidir = false;
-	h264d_vector_t size_c = {{size.v[0], size.v[1] >> 1}};
+	int bidir = 0;
+	int stride = mb->max_x * 16;
+	int vert_size = mb->max_y * 16;
+	uint8_t *dst_luma = mb->luma + offsety * stride + offsetx;
+	uint8_t *dst_chroma = mb->chroma + (offsety >> 1) * stride + offsetx;
+	offsetx = mb->x * 16 + offsetx;
+	offsety = mb->y * 16 + offsety;
 	for (int lx = 0; lx < 2; ++lx) {
 		int idx;
 		if ((idx = *ref_idx++) < 0) {
 			continue;
 		}
 		m2d_frame_t *frms = &(mb->frame->frames[mb->frame->refs[lx][idx].frame_idx]);
-		int stride = mb->max_x * 16;
-		int vert_size = mb->max_y * 16;
 		int mvx = mv[lx].v[0];
 		int mvy = mv[lx].v[1];
-		int posx = mb->x * 16 + (mvx >> 2) + offsetx;
-		int posy = mb->y * 16 + (mvy >> 2) + offsety;
-		h264d_vector_t pos = {{posx, posy}};
-		const uint8_t *src_luma = frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride);
-		uint8_t *dst_luma = mb->luma + offsety * stride + offsetx;
-		if (!is_bidir) {
-			inter_pred_luma[mvy & 3][mvx & 3](src_luma, pos, size, stride, vert_size, stride, dst_luma);
-		} else {
-			inter_pred_luma_bidir[mvy & 3][mvx & 3](src_luma, pos, size, stride, vert_size, dst_luma);
-		}
-		pos.v[0] = mb->x * 16 + (mvx >> 3) * 2 + offsetx;
-		pos.v[1] = mb->y * 8 + (mvy >> 3) + (offsety >> 1);
-		vert_size >>= 1;
-		uint8_t *dst_chroma = mb->chroma + (offsety >> 1) * stride + offsetx;
-		if (!is_bidir) {
-			inter_pred_chroma(frms->chroma, pos, mv[lx], size_c, stride, vert_size, stride, dst_chroma);
-		} else {
-			inter_pred_chroma_bidir(frms->chroma, pos, mv[lx], size_c, stride, vert_size, dst_chroma);
-		}
-		is_bidir = true;
+		int posx = (mvx >> 2) + offsetx;
+		int posy = (mvy >> 2) + offsety;
+		inter_pred_luma[bidir][mvy & 3][mvx & 3](frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, dst_luma, stride);
+		inter_pred_chroma[bidir](frms->chroma, (mvx >> 3) * 2 + offsetx, (mvy >> 3) + (offsety >> 1), mv[lx], size, stride, vert_size >> 1, dst_chroma, stride);
+		bidir++;
 	}
+}
+
+static inline void inter_pred_weighted_bidir(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
+{
+	uint8_t luma_buf[2][16 * 16];
+	uint8_t chroma_buf[2][16 * 8];
+	int stride = mb->max_x * 16;
+	int vert_size = mb->max_y * 16;
+	int ofsx = mb->x * 16 + offsetx;
+	int ofsy = mb->y * 16 + offsety;
+	for (int lx = 0; lx < 2; ++lx) {
+		int mvx = mv[lx].v[0];
+		int mvy = mv[lx].v[1];
+		int posx = (mvx >> 2) + ofsx;
+		int posy = (mvy >> 2) + ofsy;
+		const m2d_frame_t *frms = &mb->frame->frames[mb->frame->refs[lx][ref_idx[lx]].frame_idx];
+		inter_pred_luma[0][mvy & 3][mvx & 3](frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf[lx], size.v[0]);
+		inter_pred_chroma[0](frms->chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv[lx], size, stride, vert_size >> 1, chroma_buf[lx], size.v[0]);
+	}
+	add_bidir_weighted(pred, luma_buf[0], luma_buf[1], mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
+	add_bidir_weighted(pred, chroma_buf[0], chroma_buf[1], mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
 static inline void inter_pred_weighted1(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety)
 {
 }
 
+static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h264d_mb_current *mb, int idx0, int idx1)//(int8_t weight[], const h264d_ref_frame_t **refs, int curr_poc)
+{
+	const h264d_ref_frame_t *refs0 = &mb->frame->refs[0][idx0];
+	const h264d_ref_frame_t *refs1 = &mb->frame->refs[1][idx1];
+	int poc0 = refs0->poc;
+	int poc1 = refs1->poc;
+	int w0, w1;
+
+	weighted->idx[0] = idx0;
+	weighted->idx[1] = idx1;
+	if ((poc0 == poc1) || (refs0->in_use != SHORT_TERM) || (refs1->in_use != SHORT_TERM)) {
+		w0 = 32;
+		w1 = 32;
+	} else {
+		w1 = dist_scale_factor(poc0, poc1, mb->header->poc) >> 2;
+		if ((w1 < -64) || (128 < w1)) {
+			w0 = 32;
+			w1 = 32;
+		} else {
+			w0 = 64 - w1;
+		}
+	}
+	weighted->weight[0] = w0;
+	weighted->weight[1] = w1;
+}
+
 static inline void inter_pred_weighted2(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety)
 {
-}
-
-static inline void direct_zero_pred_block(const uint8_t *src0, const uint8_t *src1, uint8_t *dst, const h264d_vector_t& size, int stride)
-{
-	int x_len = (uint32_t)size.v[0] >> 2;
-	int height = size.v[1];
-	do {
-		int x = x_len;
-		const uint32_t *s0 = (const uint32_t *)src0;
-		const uint32_t *s1 = (const uint32_t *)src1;
-		uint32_t *d = (uint32_t *)dst;
-		do {
-			*d++ = AVERAGE2(*s0++, *s1++);
-		} while (--x);
-		src0 += stride;
-		src1 += stride;
-		dst += stride;
-	} while (--height);
-}
-
-static inline void direct_zero_pred(h264d_mb_current *mb, const h264d_vector_t& size, int xoffset, int yoffset)
-{
-	m2d_frame_t *frms0 = &(mb->frame->frames[mb->frame->refs[0][0].frame_idx]);
-	m2d_frame_t *frms1 = &(mb->frame->frames[mb->frame->refs[1][0].frame_idx]);
-	int stride = mb->max_x * 16;
-	int offset;
-
-	offset = (mb->y * 16 + yoffset) * stride + mb->x * 16 + xoffset;
-	direct_zero_pred_block(frms0->luma + offset, frms1->luma + offset, mb->luma + yoffset * stride + xoffset, size, stride);
-	offset = (((mb->y * 16 + yoffset) * stride) >> 1) + mb->x * 16 + xoffset;
-	h264d_vector_t size_c = {{size.v[0], size.v[1] >> 1}};
-	direct_zero_pred_block(frms0->chroma + offset, frms1->chroma + offset, mb->chroma + ((yoffset * stride) >> 1) + xoffset, size_c, stride);
+	h264d_weighted_pred_t pred;
+	int idx0 = ref_idx[0];
+	int idx1 = ref_idx[1];
+	h264d_weighted_cache_t *weighted = &mb->header->pred_weighted_info.type2;
+	pred.offset = 0;
+	pred.shift = 6;
+	if ((0 <= idx0) && (0 <= idx1)) {
+		if ((weighted->idx[0] != idx0) || (weighted->idx[1] != idx1)) {
+			pred_weight_type2(weighted, mb, idx0, idx1);
+		}
+		pred.weight[0] = weighted->weight[0];
+		pred.weight[1] = weighted->weight[1];
+		inter_pred_weighted_bidir(mb, weighted->idx, mv, size, offsetx, offsety, pred);
+	} else if (mb->pps->weighted_pred_flag) {
+		inter_pred_weighted1(mb, ref_idx, mv, size, offsetx, offsety);
+	} else {
+		inter_pred_basic(mb, ref_idx, mv, size, offsetx, offsety);
+	}
 }
 
 static inline uint32_t str_previous_coef(uint32_t map, uint32_t prev4x4)
@@ -7736,7 +7611,7 @@ struct pred_direct_col_block_bidir {
 		if ((mv_curr[0].vector != 0U || mv_curr[1].vector != 0U) && ((unsigned)(mvcol->v[0] + 1) <= 2U) && ((unsigned)(mvcol->v[1] + 1) <= 2U)) {
 			mv_curr[0].vector = 0U;
 			mv_curr[1].vector = 0U;
-			direct_zero_pred(mb, size, xofs, yofs);
+			mb->inter_pred(mb, (const int8_t *)zero_mov, zero_mov, size, xofs, yofs);
 		} else {
 			direct_mv_pred(mb, ref_idx, mv_curr, size, xofs, yofs);
 		}
@@ -7844,7 +7719,7 @@ static void pred_direct8x8_spatial_dec(h264d_mb_current *mb, int blk_idx, prev8x
 		pblk->ref[0] = 0;
 		pblk->ref[1] = 0;
 		memset(pblk->mv, 0, sizeof(pblk->mv));
-		direct_zero_pred(mb, size, xoffset, yoffset);
+		mb->inter_pred(mb, (const int8_t *)zero_mov, zero_mov, size, xoffset, yoffset);
 	}
 }
 
@@ -9276,7 +9151,7 @@ static void pred_direct16x16(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector
 		ref_idx[1] = 0;
 		col_mb->type = COL_MB16x16;
 		memset(&mv[2], 0, sizeof(mv[2]) * 2);
-		direct_zero_pred(mb, size, 0, 0);
+		mb->inter_pred(mb, ref_idx, mv, size, 0, 0);
 	}
 }
 
@@ -9726,26 +9601,29 @@ static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0,
 template <int N>
 struct Strength4v {
 	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) const {
-		int q2 = dst[0];
-		int p2 = dst[stride * 5];
-		int aq = SQUARE(q0 - q2);
-		int ap = SQUARE(p0 - p2);
-		int t;
-
-		t = SQUARE(p0 - q0) < SQUARE((a >> 2) + 2);
-		if (N == 1 && ap < b2 && t) {
-			dst[stride * 3] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
-			dst[stride * 4] = (q0 + p0 + p1 + p2 + 2) >> 2;
-			dst[stride * 5] = (dst[stride * 6] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
-		} else {
-			dst[stride * 3] = (p1 * 2 + p0 + q1 + 2) >> 2;
-		}
-		if (N == 1 && aq < b2 && t) {
-			dst[stride * 2] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
-			dst[stride * 1] = (p0 + q0 + q1 + q2 + 2) >> 2;
-			dst[0] = (dst[-stride] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
+		int t = SQUARE(p0 - q0) < SQUARE((a >> 2) + 2);
+		if (N == 1 && t) {
+			int q2 = dst[0];
+			int p2 = dst[stride * 5];
+			int aq = SQUARE(q0 - q2);
+			int ap = SQUARE(p0 - p2);
+			if (ap < b2) {
+				dst[stride * 3] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
+				dst[stride * 4] = (q0 + p0 + p1 + p2 + 2) >> 2;
+				dst[stride * 5] = (dst[stride * 6] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
+			} else {
+				dst[stride * 3] = (p1 * 2 + p0 + q1 + 2) >> 2;
+			}
+			if (aq < b2) {
+				dst[stride * 2] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
+				dst[stride * 1] = (p0 + q0 + q1 + q2 + 2) >> 2;
+				dst[0] = (dst[-stride] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
+			} else {
+				dst[stride * 2] = (q1 * 2 + q0 + p1 + 2) >> 2;
+			}
 		} else {
 			dst[stride * 2] = (q1 * 2 + q0 + p1 + 2) >> 2;
+			dst[stride * 3] = (p1 * 2 + p0 + q1 + 2) >> 2;
 		}
 	}
 };

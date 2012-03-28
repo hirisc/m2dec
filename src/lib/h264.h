@@ -216,21 +216,22 @@ typedef struct {
 } h264d_reorder_t;
 
 typedef struct {
+	int8_t weight;
+	int8_t offset;
+} h264d_weighted_table_elem_t;
+
+typedef struct {
 	int8_t shift;
-	struct {
-		int8_t weight;
-		int8_t offset;
-	} luma[16];
+	h264d_weighted_table_elem_t luma[2][16];
 } h264d_weighted_table_t;
 
 typedef struct {
-	int8_t l0, l1;
-	int8_t shift;
-	int8_t weight0, weight1;
+	int8_t idx[2];
+	int8_t weight[2];
 } h264d_weighted_cache_t;
 
 typedef union {
-	h264d_weighted_table_t type1[2];
+	h264d_weighted_table_t type1;
 	h264d_weighted_cache_t type2;
 } h264d_weighted_info_t;
 
@@ -382,6 +383,7 @@ typedef struct mb_current {
 	h264d_col_mb_t *col_curr;
 	h264d_bdirect_t *bdirect;
 	void (*inter_pred)(const struct mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
+	h264d_slice_header *header;
 	const int8_t *sub_mb_ref_map;
 	uint32_t cbp, cbf;
 	deblock_info_t *deblock_curr;
@@ -406,8 +408,7 @@ typedef struct mb_current {
 
 typedef struct {
 	int8_t shift;
-	int8_t weight0;
-	int8_t weight1;
+	int8_t weight[2];
 	int8_t offset;
 } h264d_weighted_pred_t;
 
