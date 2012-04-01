@@ -1,10 +1,10 @@
 if DISP
 DEFDISP = -DENABLE_DISPLAY
-LDDISP = -L/usr/local/lib -lSDL
 else
 DEFDISP =
-LDDISP =
 endif
+
+LDDISP = -L/usr/local/lib -lSDL
 
 if AALIB
 DEFAA = -DENABLE_AALIB
