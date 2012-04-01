@@ -1,4 +1,3 @@
-#ifdef ENABLE_DISPLAY
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
@@ -479,25 +478,36 @@ struct Options {
 };
 
 struct UniSurface {
+#ifdef ENABLE_DISPLAY
 	SDL_Surface *surface;
 	SDL_Overlay *yuv;
 	SDL_Rect rect;
+#endif /* ENABLE_DISPLAY */
 	int suspended_;
 	void *id_;
-	UniSurface() : yuv(0), suspended_(0), id_(0) {
+	UniSurface() :
+#ifdef ENABLE_DISPLAY
+		yuv(0),
+#endif /* ENABLE_DISPLAY */
+		suspended_(0), id_(0) {
+#ifdef ENABLE_DISPLAY
 		UniEvent ev;
 		while (UniPollEvent(&ev)) ;
 		memset(&rect, 0, sizeof(rect));
+#endif /* ENABLE_DISPLAY */
 	};
 	~UniSurface() {
+#ifdef ENABLE_DISPLAY
 		if (yuv) {
 			SDL_FreeYUVOverlay(yuv);
 		}
+#endif /* ENABLE_DISPLAY */
 	}
 	int suspended() const {
 		return suspended_;
 	}
 	void display(const Frame& out) {
+#ifdef ENABLE_DISPLAY
 		if (out.id != id_) {
 			id_ = out.id;
 			change(out);
@@ -505,15 +515,19 @@ struct UniSurface {
 		SDL_LockYUVOverlay(yuv);
 		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
 		SDL_UnlockYUVOverlay(yuv);
+#endif /* ENABLE_DISPLAY */
 	}
 	void waitevents(int interval) {
+#ifdef ENABLE_DISPLAY
 		if (interval) {
 			waitevents_with_timer();
 		} else {
 			waitevents_without_timer();
 		}
+#endif /* ENABLE_DISPLAY */
 	}
 private:
+#ifdef ENABLE_DISPLAY
 	void waitevents_with_timer() {
 		UniEvent ev;
 		UniWaitEvent(&ev);
@@ -562,6 +576,7 @@ private:
 			yuv = SDL_CreateYUVOverlay(width, height, SDL_IYUV_OVERLAY, surface);
 		}
 	}
+#endif /* ENABLE_DISPLAY */
 };
 
 int run_loop(Options& opt, int outbuf) {
@@ -620,34 +635,35 @@ Uint32 DispTimer(Uint32 interval, void *param)
 #ifdef _M_IX86
 #include <crtdbg.h>
 #endif
-#endif /* ENABLE_DISPLAY */
 
 int main(int argc, char **argv)
 {
-#ifdef ENABLE_DISPLAY
-	SDL_TimerID timer;
-
 #if defined(_M_IX86) && !defined(NDEBUG)
 	_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_WNDW);
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
 	atexit((void (*)(void))_CrtCheckMemory);
 #endif
+#ifdef ENABLE_DISPLAY
+	SDL_TimerID timer;
 	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO) < 0) {
 		return -1;
 	}
 	atexit(SDL_Quit);
+#endif /* ENABLE_DISPLAY */
 	Options opt(argc, argv);
 	LogInit();
 	atexit(LogFin);
 	if (opt.logdump_) {
 		atexit(LogDump);
 	}
+#ifdef ENABLE_DISPLAY
 	SDL_EventState(SDL_ACTIVEEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
 	if (opt.interval_) {
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
+#endif /* ENABLE_DISPLAY */
 	do {
 		if (run_loop(opt, opt.outbuf_) < 0) {
 			break;
@@ -657,7 +673,6 @@ int main(int argc, char **argv)
 	if (opt.interval_) {
 		SDL_RemoveTimer(timer);
 	}
-#endif /* ENABLE_DISPLAY */
 	return 0;
 }
 
