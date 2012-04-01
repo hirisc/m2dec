@@ -407,8 +407,8 @@ typedef struct mb_current {
 } h264d_mb_current;
 
 typedef struct {
+	int16_t weight[2];
 	int8_t shift;
-	int8_t weight[2];
 	int8_t offset;
 } h264d_weighted_pred_t;
 
