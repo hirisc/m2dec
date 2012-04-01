@@ -669,10 +669,11 @@ int main(int argc, char **argv)
 			break;
 		}
 	} while (opt.repeat_);
-
+#ifdef ENABLE_DISPLAY
 	if (opt.interval_) {
 		SDL_RemoveTimer(timer);
 	}
+#endif /* ENABLE_DISPLAY */
 	return 0;
 }
 
