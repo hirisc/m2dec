@@ -187,8 +187,8 @@ typedef struct {
 } h264d_pps;
 
 typedef union {
-	uint32_t vector;
 	int16_t v[2];
+	uint32_t vector;
 } h264d_vector_t;
 
 typedef struct {
@@ -216,8 +216,24 @@ typedef struct {
 } h264d_reorder_t;
 
 typedef struct {
-	int8_t luma_weight[16];
-} h264d_weight_table_t;
+	int8_t weight;
+	int8_t offset;
+} h264d_weighted_table_elem_t;
+
+typedef struct {
+	int8_t shift;
+	h264d_weighted_table_elem_t luma[2][16];
+} h264d_weighted_table_t;
+
+typedef struct {
+	int8_t idx[2];
+	int8_t weight[2];
+} h264d_weighted_cache_t;
+
+typedef union {
+	h264d_weighted_table_t type1;
+	h264d_weighted_cache_t type2;
+} h264d_weighted_info_t;
 
 typedef struct {
 	int8_t op;
@@ -267,7 +283,7 @@ typedef struct {
 	};
 	uint32_t redundant_pic_cnt;
 	h264d_reorder_t reorder[2];
-	h264d_weight_table_t pred_weight_table[2];
+	h264d_weighted_info_t pred_weighted_info;
 	h264d_marking_t marking;
 } h264d_slice_header;
 
@@ -303,6 +319,7 @@ typedef struct {
 typedef struct {
 	int8_t type;
 	int8_t direct8x8;
+	int8_t transform8x8;
 	int8_t mb_skip;
 	int8_t chroma_pred_mode;
 	int8_t cbp;
@@ -314,7 +331,7 @@ typedef struct {
 } prev_mb_t;
 
 typedef struct {
-	int8_t idc, qpy, qpc, slicehdr;
+	int8_t idc, qpy, qpc[2], slicehdr;
 	int8_t str4_vert, str4_horiz;
 	uint32_t str_vert, str_horiz;
 } deblock_info_t;
@@ -342,10 +359,12 @@ typedef struct {
 #define ENC_SLICEHDR(hdr, a, b) (hdr = ((((b) + 6) << 4) | ((a) + 6)))
 #define DEC_SLICEHDR(hdr, a, b) (a = ((hdr & 15) - 6) * 2), (b = (((uint8_t)hdr >> 4) - 6) * 2)
 
+struct mb_code;
+
 typedef struct mb_current {
 	int8_t is_constrained_intra;
 	int8_t type;
-	int8_t qp, qp_chroma;
+	int8_t qp, qp_chroma[2];
 	int8_t lefttop_ref[2];
 	int8_t prev_qp_delta;
 	int8_t chroma_pred_mode;
@@ -363,6 +382,8 @@ typedef struct mb_current {
 	prev_mb_t *top4x4inter;
 	h264d_col_mb_t *col_curr;
 	h264d_bdirect_t *bdirect;
+	void (*inter_pred)(const struct mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety);
+	h264d_slice_header *header;
 	const int8_t *sub_mb_ref_map;
 	uint32_t cbp, cbf;
 	deblock_info_t *deblock_curr;
@@ -372,22 +393,31 @@ typedef struct mb_current {
 	int32_t *top4x4coef_base;
 	prev_mb_t *mb_base;
 	h264d_cabac_t *cabac;
+	const struct mb_code *mb_decode;
 	h264d_pps *pps;
 	int8_t *num_ref_idx_lx_active_minus1[2];
-	int16_t *qmatc_p;
+	int16_t *qmatc_p[2];
 	int16_t qmaty[16];
-	int16_t qmatc[16];
+	int16_t qmatc[2][16];
 	int offset4x4[16]; /* offset of each 4x4 block in a macroblock. */
+	int16_t qmaty8x8[64];
 	h264d_bdirect_t bdirect_i;
 	h264d_frame_info_t frame_i;
 	h264d_cabac_t cabac_i;
 } h264d_mb_current;
 
+typedef struct {
+	int16_t weight[2];
+	int8_t shift;
+	int8_t offset;
+} h264d_weighted_pred_t;
+
 struct h264d_bdirect_functions_t {
 	const prev8x8_t *(*direct8x8)(h264d_mb_current *mb, int blk_idx, prev8x8_t *curr_blk, int avail, const prev8x8_t *ref_blk);
 	void (*direct16x16)(h264d_mb_current *mb, int8_t *ref_idx, h264d_vector_set_t *mv);
 	void (* const *direct16x16_col8x8)(h264d_mb_current *mb, const h264d_col_mb_t *col_mb, const int8_t *ref_idx, h264d_vector_t *mv);
-	void (*store_info_inter)(h264d_mb_current *mb, const h264d_vector_set_t mv[], const int8_t ref_idx[], uint32_t str_vert, uint32_t str_horiz, uint32_t left4x4, uint32_t top4x4, int mb_type);
+	void (*store_info_inter)(h264d_mb_current *mb, const h264d_vector_set_t mv[], const int8_t ref_idx[], uint32_t left4x4, uint32_t top4x4, int mb_type);
+	bool (*need_transform_size_8x8_flag)(const int8_t sub_mb_type[]);
 };
 
 typedef struct mb_code {
