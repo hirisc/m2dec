@@ -217,7 +217,6 @@ static int test_intra_dc()
 
 int test_idct_horizontal();
 int test_motioncomp();
-int test_buffer();
 
 static int test_all()
 {
@@ -226,7 +225,7 @@ static int test_all()
 #if defined(__RENESAS_VERSION__)
 	return test_idct_horizontal() + test_motioncomp();
 #elif !defined(FAST_DECODE)
-	return test_buffer() | test_dec_bits() | test_parse_coef() | test_intra_dc();
+	return test_dec_bits() | test_parse_coef() | test_intra_dc();
 #endif
 
 #else

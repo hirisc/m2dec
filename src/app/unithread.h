@@ -1,56 +1,59 @@
 #ifndef __UNITHREAD_H__
 #define __UNITHREAD_H__
 
-#ifndef __RENESAS_VERSION__
-#include <SDL/SDL.h>
-
 static void RecordTime(int mark);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#ifdef __RENESAS_VERSION__
+#else
+#include <SDL/SDL.h>
+
 typedef SDL_Thread UniThread;
 typedef SDL_mutex UniMutex;
 typedef SDL_cond UniCond;
 typedef SDL_Event UniEvent;
 
-typedef std::map<int, const char *> Logmap;
-static Logmap LogTags;
-
-static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *label) {
-	UniThread *t = SDL_CreateThread(run, arg);
-	LogTags.insert(std::pair<int, const char *> (SDL_GetThreadID(t), label));
-	return t;
-}
+#define UniCreateThreadRaw(x, y) SDL_CreateThread((x), (y))
 #define UniThreadID SDL_ThreadID
 #define UniGetThreadID(x) SDL_GetThreadID(x)
 #define UniWaitThread(x, y) SDL_WaitThread((x), (y))
 #define UniKillThread(x) SDL_KillThread(x)
-
 #define UniCreateMutex SDL_CreateMutex
-#define UniLockMutex(x) {RecordTime(0); SDL_LockMutex(x); RecordTime(1);}
+#define UniLockMutexRaw(x) SDL_LockMutex(x)
 #define UniUnlockMutex(x) SDL_UnlockMutex(x)
 #define UniDestroyMutex(x) SDL_DestroyMutex(x)
 #define UniCreateCond SDL_CreateCond
 #define UniDestroyCond(x) SDL_DestroyCond(x)
+#define UniCondWaitRaw(x, y) SDL_CondWait((x), (y))
+#define UniCondWaitTimeoutRaw(x, y, z) SDL_CondWaitTimeout((x), (y), (z))
 #define UniCondSignal(x) SDL_CondSignal(x)
 #define UniCondBroadcast(x) SDL_CondBroadcast(x)
-#define UniCondWait(x, y) {RecordTime(0); SDL_CondWait((x), (y)); RecordTime(1);}
-#define UniCondWaitTimeout(x, y, z) {RecordTime(0); SDL_CondWaitTimeout((x), (y), (z)); RecordTime(1);}
 #define UniPollEvent(x) SDL_PollEvent(x)
-#define UniWaitEvent(x) {RecordTime(0); SDL_WaitEvent(x); RecordTime(1);}
 #define UniPushEvent(x) SDL_PushEvent(x)
+
+#define UniLockMutex(x) {RecordTime(0); UniLockMutexRaw(x); RecordTime(1);}
+#define UniCondWait(x, y) {RecordTime(0); UniCondWaitRaw(x, y); RecordTime(1);}
+#define UniCondWaitTimeout(x, y, z) {RecordTime(0); UniCondWaitTimeoutRaw(x, y, z); RecordTime(1);}
+#define UniWaitEvent(x) {RecordTime(0); SDL_WaitEvent(x); RecordTime(1);}
 #define UniDelay(x) {RecordTime(0); SDL_Delay(x); RecordTime(1);}
+
+typedef std::map<int, const char *> Logmap;
+static Logmap LogTags;
+
+static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *label) {
+	UniThread *t = UniCreateThreadRaw(run, arg);
+	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(t), label));
+	return t;
+}
+
+#endif /* __RENESAS_VERSION__ */
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* __RENESAS_VERSION__ */
-
-
-#ifndef __RENESAS_VERSION__
 
 static UniMutex *LogMutex;
 struct LogRecord {
@@ -77,7 +80,14 @@ static void LogFin()
 	LogMutex = 0;
 }
 
-#ifdef __GNUC__
+#ifdef __RENESAS_VERSION__
+
+static inline unsigned long long gettimer() {
+	return 0ULL;
+}
+
+#elif defined(__GNUC__)
+
 static inline unsigned long long gettimer() {
 	unsigned long long ret;
 	__asm__ volatile ("rdtsc" : "=A" (ret));
@@ -94,18 +104,12 @@ inline __int64 __fastcall gettimer() {
 }
 #endif
 
-#endif /* __RENESAS_VERSION__ */
-
 static void RecordTime(int mark)
 {
-#ifndef __RENESAS_VERSION__
-	SDL_LockMutex(LogMutex);
+	UniLockMutexRaw(LogMutex);
 	LogList.push_back(LogRecord(gettimer(), UniThreadID(), mark));
-	SDL_UnlockMutex(LogMutex);
-#endif
+	UniUnlockMutex(LogMutex);
 }
-
-#ifndef __RENESAS_VERSION__
 
 struct PrintLabel {
 	void operator() (std::pair<int, const char *> el) const {
@@ -119,11 +123,8 @@ struct PrintMark {
 	}
 };
 
-#endif
-
 static void LogDump()
 {
-#ifndef __RENESAS_VERSION__
 	printf("\"time\",");
 	std::for_each(LogTags.begin(), LogTags.end(), PrintLabel());
 	printf("\n");
@@ -141,7 +142,6 @@ static void LogDump()
 		std::for_each(marks.begin(), marks.end(), PrintMark());
 		printf("\n");
 	}
-#endif
 }
 
 #endif /* __UNITHREAD_H__ */
