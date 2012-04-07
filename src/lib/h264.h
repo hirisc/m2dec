@@ -290,13 +290,15 @@ typedef struct {
 typedef struct {
 	int poc;
 	int16_t frame_idx;
-	int16_t is_idr;
+	int8_t is_idr;
+	int8_t is_terminal;
 } h264d_dpb_elem_t;
 
 typedef struct {
 	int8_t size;
 	int8_t max;
 	int8_t output;
+	int8_t is_ready;
 	h264d_dpb_elem_t data[16];
 } h264d_dpb_t;
 
