@@ -796,16 +796,19 @@ static inline void dpb_insert_non_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 	if (0 < size) {
 		do {
 			--d;
-		} while (d != dpb->data && !d->is_idr && (poc < d->poc));
+		} while (d != dpb->data && !d->is_terminal && (poc < d->poc));
 		if (size < dpb->max) {
 			dpb->size = size + 1;
 			dpb->output = -1;
-			if (d->is_idr || (d->poc < poc)) {
+			if (d->is_terminal || (d->poc < poc)) {
 				++d;
 			}
 			memmove(d + 1, d, (end - d) * sizeof(*d));
 		} else {
 			dpb->output = dpb->data[0].frame_idx;
+			if (dpb->data[0].is_terminal) {
+				dpb->is_ready = 0;
+			}
 			memmove(dpb->data, dpb->data + 1, (d - dpb->data) * sizeof(*d));
 		}
 	} else {
@@ -815,6 +818,7 @@ static inline void dpb_insert_non_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 	d->poc = poc;
 	d->frame_idx = frame_idx;
 	d->is_idr = 0;
+	d->is_terminal = 0;
 }
 
 static inline void dpb_insert_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
@@ -825,12 +829,20 @@ static inline void dpb_insert_idr(h264d_dpb_t *dpb, int poc, int frame_idx)
 	} else {
 		size--;
 		dpb->output = dpb->data[0].frame_idx;
+		if (dpb->data[0].is_terminal) {
+			dpb->is_ready = 0;
+		}
 		memmove(dpb->data, dpb->data + 1, size * sizeof(dpb->data[0]));
 	}
 	h264d_dpb_elem_t *d = &dpb->data[size];
-	d->poc = poc;
+	d->poc = 0;
 	d->frame_idx = frame_idx;
 	d->is_idr = 1;
+	d->is_terminal = 0;
+	if (0 < size) {
+		d[-1].is_terminal = 1;
+		dpb->is_ready = 1;
+	}
 }
 
 static int dpb_force_pop(h264d_dpb_t *dpb)
@@ -846,6 +858,9 @@ static int dpb_force_pop(h264d_dpb_t *dpb)
 	size -= 1;
 	dpb->size = size;
 	dpb->output = -1;
+	if (dpb->data[0].is_terminal) {
+		dpb->is_ready = 0;
+	}
 	pop_idx = dpb->data[0].frame_idx;
 	memmove(dpb->data, dpb->data + 1, size * sizeof(dpb->data[0]));
 	return pop_idx;
@@ -886,7 +901,7 @@ int h264d_peek_decoded_frame(h264d_context *h2d, m2d_frame_t *frame, int bypass_
 	}
 	frm = h2d->mb_current.frame;
 	if (!bypass_dpb) {
-		if (h2d->slice_header->marking.idr || h2d->slice_header->marking.mmco5) {
+		if (frm->dpb.is_ready) {
 			frame_idx = dpb_force_peek(&frm->dpb);
 		} else {
 			frame_idx = frm->dpb.output;
@@ -911,7 +926,7 @@ int h264d_get_decoded_frame(h264d_context *h2d, m2d_frame_t *frame, int bypass_d
 	}
 	frm = h2d->mb_current.frame;
 	if (!bypass_dpb) {
-		if (h2d->slice_header->marking.idr || h2d->slice_header->marking.mmco5) {
+		if (frm->dpb.is_ready) {
 			frame_idx = dpb_force_pop(&frm->dpb);
 		} else {
 			frame_idx = frm->dpb.output;
@@ -1263,16 +1278,15 @@ static inline void calc_poc2(h264d_slice_header *hdr, const h264d_sps *sps, int 
 	if (hdr->first_mb_in_slice != 0) {
 		return;
 	}
+	uint32_t frame_num = hdr->frame_num;
 	if (hdr->marking.idr || hdr->marking.mmco5) {
 		hdr->poc2_prev_frameoffset = 0;
-		poc = 0;
 	} else {
-		uint32_t frame_num = hdr->frame_num;
 		if (frame_num < hdr->prev_frame_num) {
 			hdr->poc2_prev_frameoffset += (1 << sps->log2_max_frame_num);
 		}
-		poc = (frame_num + hdr->poc2_prev_frameoffset) * 2 - ((nal_id & 0x60) == 0);
 	}
+	poc = (frame_num + hdr->poc2_prev_frameoffset) * 2 - ((nal_id & 0x60) == 0);
 	hdr->poc = poc;
 	hdr->poc_bottom = poc;
 }
@@ -1735,6 +1749,7 @@ static int dec_ref_pic_marking(int nal_unit_type, h264d_marking_t *mrk, dec_bits
 		mrk->no_output_of_prior_pic_flag = tmp;
 		mrk->long_term_reference_flag = get_onebit(st);
 	} else {
+		mrk->no_output_of_prior_pic_flag = 0;
 		mrk->adaptive_ref_pic_marking_mode_flag = tmp;
 		if (tmp) {
 			h264d_mmco *mmco = mrk->mmco;
@@ -6271,7 +6286,7 @@ static inline void inter_pred_weighted1(const h264d_mb_current *mb, const int8_t
 {
 }
 
-static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h264d_mb_current *mb, int idx0, int idx1)//(int8_t weight[], const h264d_ref_frame_t **refs, int curr_poc)
+static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h264d_mb_current *mb, int idx0, int idx1)
 {
 	const h264d_ref_frame_t *refs0 = &mb->frame->refs[0][idx0];
 	const h264d_ref_frame_t *refs1 = &mb->frame->refs[1][idx1];
