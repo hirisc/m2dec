@@ -1725,6 +1725,7 @@ static int ref_pic_list_reordering(h264d_reorder_t *rdr, dec_bits *st, int num_r
 static int pred_weight_table(h264d_weighted_table_elem_t *elem, dec_bits *st, int active_num, int log2_luma_denom)
 {
 	int default_weight = 1 << log2_luma_denom;
+	active_num++;
 	for (int i = 0; i < active_num; ++i) {
 		int weight, offset;
 		if (get_onebit(st)) {
@@ -6240,7 +6241,7 @@ static inline void inter_pred_basic(const h264d_mb_current *mb, const int8_t ref
 		bidir++;
 	}
 }
-
+#if 0
 static inline void add_bidir_weighted(const h264d_weighted_pred_t& pred, const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride)
 {
 	int sft = pred.shift;
@@ -6259,6 +6260,47 @@ static inline void add_bidir_weighted(const h264d_weighted_pred_t& pred, const u
 		} while (--x);
 		dst += stride;
 	} while (--height);
+}
+#endif
+
+static inline void weighted_copy(const h264d_weighted_pred_t& pred, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+{
+	int shift = pred.shift;
+	int w0 = pred.weight[0];
+	int ofs = pred.offset;
+	int rnd = 1 << (shift - 1);
+	stride -= width;
+	width = (unsigned)width >> 2;
+	do {
+		int x = width;
+		do {
+			dst[0] = CLIP255C(((*src0++ * w0 + rnd) >> shift) + ofs);
+			dst[1] = CLIP255C(((*src0++ * w0 + rnd) >> shift) + ofs);
+			dst[2] = CLIP255C(((*src0++ * w0 + rnd) >> shift) + ofs);
+			dst[3] = CLIP255C(((*src0++ * w0 + rnd) >> shift) + ofs);
+			dst += 4;
+		} while (--x);
+		dst += stride;
+	} while (--height);
+}
+
+static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int frame_idx, const h264d_vector_t& mv, const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
+{
+	const m2d_frame_t& frms = mb->frame->frames[frame_idx];
+	uint8_t luma_buf[16 * 16];
+	uint8_t chroma_buf[16 * 8];
+	int stride = mb->max_x * 16;
+	int vert_size = mb->max_y * 16;
+	int ofsx = mb->x * 16 + offsetx;
+	int ofsy = mb->y * 16 + offsety;
+	int mvx = mv.v[0];
+	int mvy = mv.v[1];
+	int posx = (mvx >> 2) + ofsx;
+	int posy = (mvy >> 2) + ofsy;
+	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf, size.v[0]);
+	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, chroma_buf, size.v[0]);
+	weighted_copy(pred, luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
+	weighted_copy(pred, chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <typename F>
@@ -6284,8 +6326,51 @@ static inline void inter_pred_weighted_bidir(const h264d_mb_current *mb, const i
 	AddBidirWeighted(pred, chroma_buf[0], chroma_buf[1], mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
+struct add_bidir_weighted_type1 {
+	void operator()(const h264d_weighted_pred_t& pred, const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride) const {
+		int shift = pred.shift;
+		int w0 = pred.weight[0];
+		int w1 = pred.weight[1];
+		int ofs = pred.offset;
+		int rnd = 1 << (shift - 1);
+		stride -= width;
+		width = (unsigned)width >> 2;
+		do {
+			int x = width;
+			do {
+				dst[0] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> shift) + ofs);
+				dst[1] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> shift) + ofs);
+				dst[2] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> shift) + ofs);
+				dst[3] = CLIP255C(((*src1++ * w1 + *src0++ * w0 + rnd) >> shift) + ofs);
+				dst += 4;
+			} while (--x);
+			dst += stride;
+		} while (--height);
+	}
+};
+
 static inline void inter_pred_weighted1(const h264d_mb_current *mb, const int8_t ref_idx[], const h264d_vector_t mv[], const h264d_vector_t& size, int offsetx, int offsety)
 {
+	int ref0 = ref_idx[0];
+	int ref1 = ref_idx[1];
+	const h264d_weighted_table_t *tbl = &mb->header->pred_weighted_info.type1;
+	h264d_weighted_pred_t pred;
+	pred.shift = tbl->shift;
+	if (0 <= ref0) {
+		pred.weight[0] = tbl->luma[0][ref0].weight;
+		pred.offset = tbl->luma[0][ref0].offset;
+		if (0 <= ref1) {
+			pred.weight[1] = tbl->luma[1][ref1].weight;
+			pred.offset = (pred.offset + tbl->luma[1][ref1].offset) >> 1;
+			inter_pred_weighted_bidir(mb, ref_idx, mv, size, offsetx, offsety, pred, add_bidir_weighted_type1());
+		} else {
+			inter_pred_weighted_onedir(mb, mb->frame->refs[0][ref0].frame_idx, mv[0], size, offsetx, offsety, pred);
+		}
+	} else {
+		pred.weight[0] = tbl->luma[1][ref1].weight;
+		pred.offset = tbl->luma[1][ref1].offset;
+		inter_pred_weighted_onedir(mb, mb->frame->refs[1][ref1].frame_idx, mv[1], size, offsetx, offsety, pred);
+	}
 }
 
 static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h264d_mb_current *mb, int idx0, int idx1)
@@ -6449,7 +6534,6 @@ static inline int DIF_SQUARE(int a, int b) {
 static inline bool DIF_ABS_LARGER_THAN4(int a, int b) {
 	return 16 <= DIF_SQUARE(a, b);
 }
-
 
 template <int MV_STEP>
 static inline uint32_t str_mv_calc16x16_bidir_both(uint32_t str, int offset, const h264d_vector_set_t *mvxy, const prev_mb_t *prev)
