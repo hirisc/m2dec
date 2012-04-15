@@ -5898,14 +5898,16 @@ static void (* const inter_pred_luma[2][4][4])(const uint8_t *src_luma, int posx
 	}
 };
 
-static inline uint32_t spread(uint32_t a)
+static uint32_t transposition(uint32_t a)
 {
-	return ((a & 0xc0) << 18) | ((a & 0x30) << 12) | ((a & 0xc) << 6) | (a & 3);
-}
-
-static inline uint32_t transposition(uint32_t a)
-{
-	return (spread((a >> 24) & 0xff) << 6) | (spread((a >> 16) & 0xff) << 4) | (spread((a >> 8) & 0xff) << 2) | spread(a & 0xff);
+	uint32_t b = 0U;
+	for (int y = 0; y < 4 * 2; y += 2) {
+		for (int x = 0; x < 4 * 8; x += 8) {
+			b |= (a & 3U) << (x + y);
+			a >>= 2;
+		}
+	}
+	return b;
 }
 
 template <typename F0>
