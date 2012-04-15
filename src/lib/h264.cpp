@@ -7851,8 +7851,6 @@ static void pred_direct8x8_spatial(h264d_mb_current *mb, int blk_idx, prev8x8_t 
 {
 	if (type0_cnt == 0) {
 		b_direct_ref_mv_calc(mb, avail, ref_blk->ref, ref_blk->mv[0][0].v);
-//		b_direct_ref_mv_calc(mb, avail, curr_blk[blk_idx].ref, curr_blk[blk_idx].mv[0][0].v);
-//		*ref_blk = curr_blk[blk_idx];
 	}
 	fill_direct8x8_mv(&curr_blk[blk_idx], ref_blk);
 	pred_direct8x8_spatial_dec<BLOCK>(mb, blk_idx, &curr_blk[blk_idx]);
@@ -8175,15 +8173,36 @@ static uint32_t str_mv_calc8x8_edge(const h264d_mb_current *mb, uint32_t str, co
 }
 
 template <int N>
-static inline uint32_t str_mv_calc8x8_mid_bidir(uint32_t str, int offset, const prev8x8_t *p)
+static inline uint32_t str_mv_calc8x8_mid_bidir(uint32_t str, bool same_ref, int offset, const prev8x8_t *p)
 {
-	for (int j = 0; j < 2; ++j) {
-		if ((str & (2 << ((j + offset) * 2))) == 0) {
-			if (DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[0], p->mv[j * N + (3 - N)][0].v[0])
-				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[1], p->mv[j * N + (3 - N)][0].v[1])
-				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[0], p->mv[j * N + (3 - N)][1].v[0])
-				|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[1], p->mv[j * N + (3 - N)][1].v[1])) {
-				str = str | (1 << ((j + offset) * 2));
+	if (same_ref) {
+		for (int j = 0; j < 2; ++j) {
+			if ((str & (2 << ((j + offset) * 2))) == 0) {
+				int pmv0x = p->mv[j * N][0].v[0];
+				int pmv0y = p->mv[j * N][0].v[1];
+				int qmv0x = p->mv[j * N + (3 - N)][0].v[0];
+				int qmv0y = p->mv[j * N + (3 - N)][0].v[1];
+				int pmv1x = p->mv[j * N][1].v[0];
+				int pmv1y = p->mv[j * N][1].v[1];
+				int qmv1x = p->mv[j * N + (3 - N)][1].v[0];
+				int qmv1y = p->mv[j * N + (3 - N)][1].v[1];
+				if ((DIF_ABS_LARGER_THAN4(pmv0x, qmv0x)	|| DIF_ABS_LARGER_THAN4(pmv0y, qmv0y)
+					|| DIF_ABS_LARGER_THAN4(pmv1x, qmv1x) || DIF_ABS_LARGER_THAN4(pmv1y, qmv1y))
+					&& (DIF_ABS_LARGER_THAN4(pmv0x, qmv1x) || DIF_ABS_LARGER_THAN4(pmv0y, qmv1y)
+					|| DIF_ABS_LARGER_THAN4(pmv1x, qmv0x) || DIF_ABS_LARGER_THAN4(pmv1y, qmv0y))) {
+					str = str | (1 << ((j + offset) * 2));
+				}
+			}
+		}
+	} else {
+		for (int j = 0; j < 2; ++j) {
+			if ((str & (2 << ((j + offset) * 2))) == 0) {
+				if (DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[0], p->mv[j * N + (3 - N)][0].v[0])
+					|| DIF_ABS_LARGER_THAN4(p->mv[j * N][0].v[1], p->mv[j * N + (3 - N)][0].v[1])
+					|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[0], p->mv[j * N + (3 - N)][1].v[0])
+					|| DIF_ABS_LARGER_THAN4(p->mv[j * N][1].v[1], p->mv[j * N + (3 - N)][1].v[1])) {
+					str = str | (1 << ((j + offset) * 2));
+				}
 			}
 		}
 	}
@@ -8208,7 +8227,7 @@ template <int N>
 static inline uint32_t str_mv_calc8x8_mv_mid(uint32_t str, int ref0, int ref1, int offset, const prev8x8_t *p)
 {
 	if ((0 <= ref0) && (0 <= ref1)) {
-		return str_mv_calc8x8_mid_bidir<N>(str, offset, p);
+		return str_mv_calc8x8_mid_bidir<N>(str, ref0 == ref1, offset, p);
 	} else {
 		return str_mv_calc8x8_mid_onedir<N>(str, (0 <= ref1), offset, p);
 	}
@@ -8286,10 +8305,13 @@ static inline uint32_t str_mv_calc8x8_half(const h264d_mb_current *mb, uint32_t 
 template <int N>
 static uint32_t str_mv_calc8x8_inner(const h264d_mb_current *mb, uint32_t str, const prev8x8_t *p)
 {
+	int ref0, ref1;
 	for (int i = 0; i < 2; ++i) {
+		ref0 = frame_idx_of_ref(mb, p[i * N].ref[0], 0);
+		ref1 = frame_idx_of_ref(mb, p[i * N].ref[1], 1);
 		uint32_t mask = 0xa00 << (i * 4);
 		if ((str & mask) != mask) {
-			str = str_mv_calc8x8_mv_mid<N>(str, p[i * N].ref[0], p[i * N].ref[1], i * 2 + 4, p + i * N);
+			str = str_mv_calc8x8_mv_mid<N>(str, ref0, ref1, i * 2 + 4, p + i * N);
 		}
 	}
 	for (int i = 0; i < 2; ++i) {
@@ -8299,9 +8321,11 @@ static uint32_t str_mv_calc8x8_inner(const h264d_mb_current *mb, uint32_t str, c
 		}
 	}
 	for (int i = 0; i < 2; ++i) {
+		ref0 = frame_idx_of_ref(mb, p[i * N + (3 - N)].ref[0], 0);
+		ref1 = frame_idx_of_ref(mb, p[i * N + (3 - N)].ref[1], 1);
 		uint32_t mask = 0xa000000 << (i * 4);
 		if ((str & mask) != mask) {
-			str = str_mv_calc8x8_mv_mid<N>(str, p[i * N + (3 - N)].ref[0], p[i * N + (3 - N)].ref[1], i * 2 + 12, p + i * N + (3 - N));
+			str = str_mv_calc8x8_mv_mid<N>(str, ref0, ref1, i * 2 + 12, p + i * N + (3 - N));
 		}
 	}
 	return str;
