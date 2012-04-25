@@ -234,9 +234,9 @@ typedef struct {
 	int8_t weight[2];
 } h264d_weighted_cache_t;
 
-typedef union {
-	h264d_weighted_table_t type1;
+typedef struct {
 	h264d_weighted_cache_t type2;
+	h264d_weighted_table_t type1;
 } h264d_weighted_info_t;
 
 typedef struct {
