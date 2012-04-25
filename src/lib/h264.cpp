@@ -6507,8 +6507,8 @@ static inline void inter_pred_weighted2(const h264d_mb_current *mb, const int8_t
 		pred[0].weight_offset.e[0].weight = weighted->weight[0];
 		pred[1].weight_offset.e[0].weight = weighted->weight[1];
 		inter_pred_weighted_bidir(mb, weighted->idx, mv, size, offsetx, offsety, pred, add_bidir_weighted_type2(), add_bidir_weighted_type2());
-	} else if (mb->pps->weighted_pred_flag) {
-		inter_pred_weighted1(mb, ref_idx, mv, size, offsetx, offsety);
+//	} else if (mb->pps->weighted_pred_flag) {
+//		inter_pred_weighted1(mb, ref_idx, mv, size, offsetx, offsety);
 	} else {
 		inter_pred_basic(mb, ref_idx, mv, size, offsetx, offsety);
 	}
