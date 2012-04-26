@@ -6276,6 +6276,74 @@ static inline void weighted_copy(const h264d_weighted_table_elem_t& elem, int sh
 	} while (--height);
 }
 
+#if defined(__GNUC__) && defined(__i386__)
+static void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
+
+static void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+{
+	asm volatile ("\n\t"
+		"push	%%ebp\n\t"
+		"push	%%esi\n\t"
+		"push	%%edi\n\t"
+		"movl	%0, %%esi\n\t"
+		"movsxb	(%%esi), %%eax\n\t"
+		"movl	$1, %%edx\n\t"
+		"movsxb	1(%%esi), %%ecx\n\t"
+		"movd	%%eax, %%mm1\n\t"
+		"movd	%%ecx, %%mm2\n\t"
+		"movl	%1, %%ecx\n\t"
+		"shl	%%cl, %%edx\n\t"
+		"shr	$1, %%edx\n\t"
+		"movd	%%ecx, %%mm3\n\t"
+		"movd	%%edx, %%mm5\n\t"
+		"movl	%2, %%eax\n\t"
+		"movl	%3, %%ecx\n\t"
+		"movl	%4, %%edx\n\t"
+		"movl	%5, %%esi\n\t"
+		"movl	%6, %%edi\n\t"
+		"pshufw	$0, %%mm1, %%mm1\n\t"
+		"pshufw	$0, %%mm5, %%mm5\n\t"
+		"pshufw	$0, %%mm2, %%mm2\n\t"
+		"sub	%%edx, %%edi\n\t"
+		"shr	$2, %%edx\n\t"
+		"pxor	%%mm0, %%mm0\n\t"
+	"0:\n\t"
+		"movl	%%edx, %%ebp\n\t"
+	"1:\n\t"
+		"movd	(%%eax), %%mm4\n\t"
+		"add	$4, %%eax\n\t"
+		"punpcklbw	%%mm0, %%mm4\n\t"
+		"pmullw	%%mm1, %%mm4\n\t"
+		"paddsw	%%mm5, %%mm4\n\t"
+		"psraw	%%mm3, %%mm4\n\t"
+		"paddsw	%%mm2, %%mm4\n\t"
+		"packuswb	%%mm0, %%mm4\n\t"
+		"movd	%%mm4, (%%ecx)\n\t"
+		"add	$4, %%ecx\n\t"
+		"add	$-1, %%ebp\n\t"
+		"jnz	1b\n\t"
+		"add	%%edi, %%ecx\n\t"
+		"add	$-1, %%esi\n\t"
+		"jnz	0b\n\t"
+		"pop	%%edi\n\t"
+		"pop	%%esi\n\t"
+		"pop	%%ebp\n\t"
+		"emms"
+		:
+		: "m"(elem), "m"(shift), "m"(src0), "m"(dst), "m"(width), "m"(height), "m"(stride));
+}
+#else
+static inline void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+{
+	weighted_copy<1>(elem[0], shift, src0, dst, width, height, stride);
+}
+#endif
+static inline void weighted_copy_chroma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+{
+	weighted_copy<2>(elem[0], shift, src0, dst, width, height, stride);
+	weighted_copy<2>(elem[1], shift, src0 + 1, dst + 1, width, height, stride);
+}
+
 static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int frame_idx, const h264d_vector_t& mv, const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
 {
 	const m2d_frame_t& frms = mb->frame->frames[frame_idx];
@@ -6291,9 +6359,8 @@ static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int fr
 	int posy = (mvy >> 2) + ofsy;
 	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf, size.v[0]);
 	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, chroma_buf, size.v[0]);
-	weighted_copy<1>(pred.weight_offset.e[0], pred.shift[0], luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
-	weighted_copy<2>(pred.weight_offset.e[1], pred.shift[1], chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
-	weighted_copy<2>(pred.weight_offset.e[2], pred.shift[1], chroma_buf + 1, mb->chroma + (offsety >> 1) * stride + offsetx + 1, size.v[0], size.v[1] >> 1, stride);
+	weighted_copy_luma(&pred.weight_offset.e[0], pred.shift[0], luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
+	weighted_copy_chroma(&pred.weight_offset.e[1], pred.shift[1], chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <typename F0, typename F1>
@@ -6398,16 +6465,6 @@ static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h26
 }
 
 #if defined(__GNUC__) && defined(__i386__)
-
-extern "C" const unsigned long long
-#if !defined(__CYGWIN__) && !defined(__MINGW32__)
-_weighted_rnd[]
-#else
-weighted_rnd[]
-#endif
-__attribute__((used)) = {
-	0x0020002000200020ULL
-};
 static void add_bidir_weighted_type2_calc(const int8_t weight[], const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
 #endif
 
@@ -6421,8 +6478,10 @@ static void add_bidir_weighted_type2_calc(const int8_t weight[], const uint8_t *
 		"push	%%edi\n\t"
 		"movl	%0, %%esi\n\t"
 		"movsxb	(%%esi), %%eax\n\t"
+		"movl	$32, %%ebx\n\t"
 		"movsxb	1(%%esi), %%ecx\n\t"
 		"movd	%%eax, %%mm1\n\t"
+		"movd	%%ebx, %%mm5\n\t"
 		"movd	%%ecx, %%mm2\n\t"
 		"movl	%1, %%eax\n\t"
 		"movl	%2, %%ebx\n\t"
@@ -6431,10 +6490,10 @@ static void add_bidir_weighted_type2_calc(const int8_t weight[], const uint8_t *
 		"movl	%5, %%esi\n\t"
 		"movl	%6, %%edi\n\t"
 		"pshufw	$0, %%mm1, %%mm1\n\t"
+		"pshufw	$0, %%mm5, %%mm5\n\t"
 		"pshufw	$0, %%mm2, %%mm2\n\t"
 		"sub	%%edx, %%edi\n\t"
 		"shr	$2, %%edx\n\t"
-		"movq	_weighted_rnd, %%mm5\n\t"
 		"pxor	%%mm0, %%mm0\n\t"
 	"0:\n\t"
 		"movl	%%edx, %%ebp\n\t"
@@ -6507,8 +6566,6 @@ static inline void inter_pred_weighted2(const h264d_mb_current *mb, const int8_t
 		pred[0].weight_offset.e[0].weight = weighted->weight[0];
 		pred[1].weight_offset.e[0].weight = weighted->weight[1];
 		inter_pred_weighted_bidir(mb, weighted->idx, mv, size, offsetx, offsety, pred, add_bidir_weighted_type2(), add_bidir_weighted_type2());
-//	} else if (mb->pps->weighted_pred_flag) {
-//		inter_pred_weighted1(mb, ref_idx, mv, size, offsetx, offsety);
 	} else {
 		inter_pred_basic(mb, ref_idx, mv, size, offsetx, offsety);
 	}
@@ -11030,7 +11087,7 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	int pStateIdx;
 	uint32_t valMPS, binVal;
 	uint32_t range, offset, lps;
-	int is_lps;
+	const int8_t *trans_tbl;
 
 	pStateIdx = cb->context[ctxIdx];
 	valMPS = pStateIdx & 1;
@@ -11041,16 +11098,15 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	range = range - lps;
 	if (offset < range) {
 		binVal = valMPS;
-		is_lps = 0;
+		trans_tbl = state_trans[0];
 	} else {
 		binVal = valMPS ^ 1;
 		cb->offset = offset = offset - range;
 		range = lps;
 		valMPS = pStateIdx ? valMPS : valMPS ^ 1;
-		is_lps = 1;
+		trans_tbl = state_trans[1];
 	}
-	pStateIdx = state_trans[is_lps][pStateIdx] * 2 + valMPS;
-	cb->context[ctxIdx] = pStateIdx;
+	cb->context[ctxIdx] = trans_tbl[pStateIdx] * 2 + valMPS;
 	cabac_renorm(cb, st, range, offset);
 	return binVal;
 }
