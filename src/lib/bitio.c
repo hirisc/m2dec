@@ -78,7 +78,7 @@ void dec_bits_cachefill(dec_bits *ths) {
 			return;
 		} else {
 			ths->load_bytes(ths, (int)read_bytes);
-		}		
+		}
 	} else {
 		ths->load_bytes(ths, (int)read_bytes);
 	}
@@ -184,13 +184,15 @@ void skip_bits(dec_bits *ths, int pat_len)
 		ths->cache_len_ = cache_len;
 	} else {
 		unsigned bits_shortage = (unsigned)(-cache_len);
-		ths->buf_ += bits_shortage / 8;
-		ths->cache_ = 0;
-		ths->cache_len_ = 0;
-		dec_bits_cachefill(ths);
-		bits_shortage &= 7;
-		ths->cache_ <<= bits_shortage;
-		ths->cache_len_ = CACHE_BITS - bits_shortage;
+		if (bits_shortage & ~7) {
+			get_bits(ths, bits_shortage);
+		} else {
+			ths->cache_ = 0;
+			ths->cache_len_ = 0;
+			dec_bits_cachefill(ths);
+			ths->cache_ <<= bits_shortage;
+			ths->cache_len_ = CACHE_BITS - bits_shortage;
+		}
 	}
 }
 
