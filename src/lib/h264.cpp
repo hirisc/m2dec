@@ -407,10 +407,12 @@ static int skip_sei_message(dec_bits *stream);
 
 static int skip_sei(dec_bits *stream)
 {
+	uint32_t next3bytes;
 	do {
 		skip_sei_message(stream);
 		byte_align(stream);
-	} while (show_bits(stream, 8) != 0x80);
+		next3bytes = show_bits(stream, 24);
+	} while ((1 < next3bytes) && (0x80 != (next3bytes >> 16)));
 	return 0;
 }
 
@@ -6256,54 +6258,52 @@ static inline void inter_pred_basic(const h264d_mb_current *mb, const int8_t ref
 	}
 }
 
-template <int N>
-static inline void weighted_copy(const h264d_weighted_table_elem_t& elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
-{
-	int w0 = elem.weight;
-	int ofs = elem.offset;
-	int rnd = shift ? (1 << (shift - 1)) : 0;
-	stride -= width;
-	width = (unsigned)width >> N;
-	do {
-		int x = width;
-		do {
-			dst[0] = CLIP255C(((src0[0] * w0 + rnd) >> shift) + ofs);
-			dst[N] = CLIP255C(((src0[N] * w0 + rnd) >> shift) + ofs);
-			src0 += N * 2;
-			dst += N * 2;
-		} while (--x);
-		dst += stride;
-	} while (--height);
-}
-
 #if defined(__GNUC__) && defined(__i386__)
-static void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
+static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
 
-static void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
 {
 	asm volatile ("\n\t"
 		"push	%%ebp\n\t"
 		"push	%%esi\n\t"
 		"push	%%edi\n\t"
-		"movl	%0, %%esi\n\t"
-		"movsxb	(%%esi), %%eax\n\t"
-		"movl	$1, %%edx\n\t"
-		"movsxb	1(%%esi), %%ecx\n\t"
-		"movd	%%eax, %%mm1\n\t"
-		"movd	%%ecx, %%mm2\n\t"
 		"movl	%1, %%ecx\n\t"
+		"movl	$1, %%edx\n\t"
+		"movl	%%ecx, %%eax\n\t"
 		"shl	%%cl, %%edx\n\t"
 		"shr	$1, %%edx\n\t"
+		"and	$15, %%ecx\n\t"
 		"movd	%%ecx, %%mm3\n\t"
+		"cmp	%%eax, %%ecx\n\t"
 		"movd	%%edx, %%mm5\n\t"
+		"movl	%0, %%esi\n\t"
+		"movsxb	(%%esi), %%eax\n\t"
+		"movsxb	1(%%esi), %%ecx\n\t"
+		"jne	2f\n\t"
+
+		"movd	%%eax, %%mm1\n\t"
+		"movd	%%ecx, %%mm2\n\t"
+		"pshufw	$0, %%mm1, %%mm1\n\t"
+		"pshufw	$0, %%mm2, %%mm2\n\t"
+		"jmp	3f\n\t"
+	"2:\n\t"
+		"shl	$16, %%eax\n\t"
+		"shl	$16, %%ecx\n\t"
+		"movsxb	2(%%esi), %%edx\n\t"
+		"movsxb	3(%%esi), %%edi\n\t"
+		"movw	%%dx, %%ax\n\t"
+		"movw	%%di, %%cx\n\t"
+		"movd	%%eax, %%mm1\n\t"
+		"movd	%%ecx, %%mm2\n\t"
+		"pshufw	$17, %%mm1, %%mm1\n\t"
+		"pshufw	$17, %%mm2, %%mm2\n\t"
+	"3:\n\t"
+		"pshufw	$0, %%mm5, %%mm5\n\t"
 		"movl	%2, %%eax\n\t"
 		"movl	%3, %%ecx\n\t"
 		"movl	%4, %%edx\n\t"
 		"movl	%5, %%esi\n\t"
 		"movl	%6, %%edi\n\t"
-		"pshufw	$0, %%mm1, %%mm1\n\t"
-		"pshufw	$0, %%mm5, %%mm5\n\t"
-		"pshufw	$0, %%mm2, %%mm2\n\t"
 		"sub	%%edx, %%edi\n\t"
 		"shr	$2, %%edx\n\t"
 		"pxor	%%mm0, %%mm0\n\t"
@@ -6333,16 +6333,38 @@ static void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shif
 		: "m"(elem), "m"(shift), "m"(src0), "m"(dst), "m"(width), "m"(height), "m"(stride));
 }
 #else
-static inline void weighted_copy_luma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+
+template <int N>
+static inline void weighted_copy_base(const h264d_weighted_table_elem_t& elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
 {
-	weighted_copy<1>(elem[0], shift, src0, dst, width, height, stride);
+	int w0 = elem.weight;
+	int ofs = elem.offset;
+	int rnd = shift ? (1 << (shift - 1)) : 0;
+	stride -= width;
+	width = (unsigned)width >> N;
+	do {
+		int x = width;
+		do {
+			dst[0] = CLIP255C(((src0[0] * w0 + rnd) >> shift) + ofs);
+			dst[N] = CLIP255C(((src0[N] * w0 + rnd) >> shift) + ofs);
+			src0 += N * 2;
+			dst += N * 2;
+		} while (--x);
+		dst += stride;
+	} while (--height);
+}
+
+static inline void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+{
+	if ((shift & 256) == 0) {
+		weighted_copy_base<1>(elem[0], shift, src0, dst, width, height, stride);
+	} else {
+		shift &= 15;
+		weighted_copy_base<2>(elem[0], shift, src0, dst, width, height, stride);
+		weighted_copy_base<2>(elem[1], shift, src0 + 1, dst + 1, width, height, stride);
+	}
 }
 #endif
-static inline void weighted_copy_chroma(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
-{
-	weighted_copy<2>(elem[0], shift, src0, dst, width, height, stride);
-	weighted_copy<2>(elem[1], shift, src0 + 1, dst + 1, width, height, stride);
-}
 
 static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int frame_idx, const h264d_vector_t& mv, const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
 {
@@ -6359,8 +6381,8 @@ static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int fr
 	int posy = (mvy >> 2) + ofsy;
 	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf, size.v[0]);
 	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, chroma_buf, size.v[0]);
-	weighted_copy_luma(&pred.weight_offset.e[0], pred.shift[0], luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
-	weighted_copy_chroma(&pred.weight_offset.e[1], pred.shift[1], chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
+	weighted_copy(&pred.weight_offset.e[0], pred.shift[0], luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
+	weighted_copy(&pred.weight_offset.e[1], pred.shift[1] | 256, chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <typename F0, typename F1>
@@ -8820,8 +8842,8 @@ static void store_info_inter8x8(h264d_mb_current *mb, const h264d_vector_set_t m
 			mvdst[4].vector = mv[4].mv[lx].vector;
 			mvdst[5].vector = mv[5].mv[lx].vector;
 			if (blk & 1) {
-				mvdst += 8;
-				mv += 8;
+				mvdst += 6;
+				mv += 6;
 			} else {
 				mvdst += 2;
 				mv += 2;
@@ -8832,12 +8854,11 @@ static void store_info_inter8x8(h264d_mb_current *mb, const h264d_vector_set_t m
 			mvdst[1].vector = src;
 			mvdst[4].vector = src;
 			mvdst[5].vector = src;
+			mv += 1;
 			if (blk & 1) {
-				mvdst += 8;
-				mv += 2;
+				mvdst += 6;
 			} else {
 				mvdst += 2;
-				mv += 1;
 			}
 		}
 	}
@@ -9638,6 +9659,12 @@ static int skip_mbs(h264d_mb_current *mb, uint32_t skip_mb_num, int slice_type)
 	return 0;
 }
 
+static int check_more_data(dec_bits *st)
+{
+	const uint8_t *mem = dec_bits_current(st);
+	return (mem[1] != 0) || (mem[2] != 0) || (1 < mem[3]);
+}
+
 static int more_rbsp_data(dec_bits *st)
 {
 	int bits;
@@ -9647,7 +9674,7 @@ static int more_rbsp_data(dec_bits *st)
 		bits = 8;
 	}
 	if (show_bits(st, bits) == (1U << (bits - 1))) {
-		return (1 < (show_bits(st, bits + 24) & 0xffffff));
+		return (1 < (show_bits(st, bits + 24) & 0xffffff)) ? 1 : check_more_data(st);
 	} else {
 		return 1;
 	}
@@ -9665,7 +9692,6 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 	h264d_pps *pps = &h2d->pps_i[hdr->pic_parameter_set_id];
 	h264d_mb_current *mb = &h2d->mb_current;
 	int is_ae = pps->entropy_coding_mode_flag;
-
 	if (is_ae) {
 		init_cabac_context(mb->cabac, mb->qp, (hdr->slice_type == I_SLICE) ? 0 : hdr->cabac_init_idc + 1);
 		byte_align(st);
@@ -9702,46 +9728,35 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 	return post_process(h2d, mb);
 }
 
-/**Pair of alpha, square of beta.
- */
-static const int16_t deblock_ab2[52 - 16][2] = {
-	{4, 4}, {4, 4}, {5, 4}, {6, 9},
-	{7, 9}, {8, 9}, {9, 9}, {10, 16},
-	{12, 16}, {13, 16}, {15, 36}, {17, 36},
-	{20, 49}, {22, 49}, {25, 64}, {28, 64},
-	{32, 81}, {36, 81}, {40, 100}, {45, 100},
-	{50, 121}, {56, 121}, {63, 144}, {71, 144},
-	{80, 169}, {90, 169}, {101, 196}, {113, 196},
-	{127, 225}, {144, 225}, {162, 256}, {182, 256},
-	{203, 289}, {226, 289}, {255, 324}, {255, 324}
-};
-
-static const int8_t str1_3_tc0[52 - 16][3] = {
-	{0, 0, 0}, {0, 0, 1}, {0, 0, 1}, {0, 0, 1},
-	{0, 0, 1}, {0, 1, 1}, {0, 1, 1}, {1, 1, 1},
-	{1, 1, 1}, {1, 1, 1}, {1, 1, 1}, {1, 1, 2},
-	{1, 1, 2}, {1, 1, 2}, {1, 1, 2}, {1, 2, 3},
-	{1, 2, 3}, {2, 2, 3}, {2, 2, 4}, {2, 3, 4},
-	{2, 3, 4}, {3, 3, 5}, {3, 4, 6}, {3, 4, 6},
-	{4, 5, 7}, {4, 5, 8}, {4, 6, 9}, {5, 7, 10},
-	{6, 8, 11}, {6, 8, 13}, {7, 10, 14}, {8, 11, 16},
-	{9, 12, 18}, {10, 13, 20}, {11, 15, 23}, {13, 17, 25}
-};
-
-
 #define CLIP(a, x) ((unsigned)(x) <= (a) ? (x) : (a))
 
-static inline void AlphaBetaTc0(int &alpha, int &beta2, const int8_t **tc0, int q, int alpha_offset, int beta_offset) {
+static inline int AlphaBetaTc0(int &beta2, const int8_t **tc0, int q, int alpha_offset, int beta_offset)
+{
+	struct {
+		int8_t tc0[3];
+		uint8_t alpha;
+		int16_t beta;
+	} static const tbl[52 - 16] = {
+		{0, 0, 0, 4, 4}, {0, 0, 1, 4, 4}, {0, 0, 1, 5, 4}, {0, 0, 1, 6, 9},
+		{0, 0, 1, 7, 9}, {0, 1, 1, 8, 9}, {0, 1, 1, 9, 9}, {1, 1, 1, 10, 16},
+		{1, 1, 1, 12, 16}, {1, 1, 1, 13, 16}, {1, 1, 1, 15, 36}, {1, 1, 2, 17, 36},
+		{1, 1, 2, 20, 49}, {1, 1, 2, 22, 49}, {1, 1, 2, 25, 64}, {1, 2, 3, 28, 64},
+		{1, 2, 3, 32, 81}, {2, 2, 3, 36, 81}, {2, 2, 4, 40, 100}, {2, 3, 4, 45, 100},
+		{2, 3, 4, 50, 121}, {3, 3, 5, 56, 121}, {3, 4, 6, 63, 144}, {3, 4, 6, 71, 144},
+		{4, 5, 7, 80, 169}, {4, 5, 8, 90, 169}, {4, 6, 9, 101, 196}, {5, 7, 10, 113, 196},
+		{6, 8, 11, 127, 225}, {6, 8, 13, 144, 225}, {7, 10, 14, 162, 256}, {8, 11, 16, 182, 256},
+		{9, 12, 18, 203, 289}, {10, 13, 20, 226, 289}, {11, 15, 23, 255, 324}, {13, 17, 25, 255, 324}
+	};
 	int a = q + alpha_offset;
 	int b = q + beta_offset;
 	if (a < 16 || b < 16) {
-		alpha = 0;
+		return 0;
 	} else {
 		a = a <= 51 ? a : 51;
 		b = b <= 51 ? b : 51;
-		alpha = deblock_ab2[a - 16][0];
-		beta2 = deblock_ab2[b - 16][1];
-		*tc0 = str1_3_tc0[a - 16];
+		beta2 = tbl[b - 16].beta;
+		*tc0 = tbl[a - 16].tc0;
+		return tbl[a - 16].alpha;
 	}
 }
 
@@ -9751,38 +9766,42 @@ static inline int SQUARE(int x) {
 
 template<int N>
 struct Strength4h {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) const {
-		int q2 = dst[0];
-		int p2 = dst[5 * N];
-		int aq = SQUARE(q0 - q2);
-		int ap = SQUARE(p0 - p2);
-		int t;
-
-		t = SQUARE(p0 - q0) < SQUARE((a >> 2) + 2);
-		if (N == 1 && ap < b2 && t) {
-			dst[3 * N] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
-			dst[4 * N] = (q0 + p0 + p1 + p2 + 2) >> 2;
-			dst[5 * N] = (dst[6 * N] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2) const {
+		if (N == 1) {
+			int t = SQUARE(p0 - q0) < a2r;
+			if (t) {
+				int p2 = dst[5 * N];
+				if (SQUARE(p0 - p2) < b2) {
+					dst[3 * N] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
+					dst[4 * N] = (q0 + p0 + p1 + p2 + 2) >> 2;
+					dst[5 * N] = (dst[6 * N] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
+				} else {
+					dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
+				}
+				int q2 = dst[0];
+				if (SQUARE(q0 - q2) < b2) {
+					dst[2 * N] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
+					dst[N] = (p0 + q0 + q1 + q2 + 2) >> 2;
+					dst[0] = (dst[-N] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
+				} else {
+					dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
+				}
+			} else {
+				dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
+				dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
+			}
 		} else {
 			dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
-		}
-		if (N == 1 && aq < b2 && t) {
-			dst[2 * N] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
-			dst[N] = (p0 + q0 + q1 + q2 + 2) >> 2;
-			dst[0] = (dst[-N] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
-		} else {
 			dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
 		}
 	}
 };
 
-static inline int CLIP3(int x, int c) {
-	return (x < -c) ? -c : (c < x) ? c : x;
-}
+#define CLIP3(x, c) (*(deblock_clip3[c] + (x)))
 
 template<int N>
 struct Strength1_3h {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0) const {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2) const {
 		int q2 = dst[0 * N];
 		int p2 = dst[5 * N];
 		int aq_smaller = SQUARE(q2 - q0) < b2;
@@ -9815,12 +9834,15 @@ struct Strength1_3h {
 	}
 };
 
-template <typename T, int N, int LEN>
-static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int stride, T strength)
+template <int STR, int N, int LEN>
+static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int stride)
 {
 	uint8_t *dst = luma - 3 * N;
 	assert(a);
 	int a2 = SQUARE(a);
+	if (STR == 4) {
+		tc0 = SQUARE((a >> 2) + 2);
+	}
 	for (int y = 0; y < LEN; ++y) {
 		int q0, q1, p0, p1;
 		int t;
@@ -9834,7 +9856,11 @@ static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int
 				p1 = dst[4 * N];
 				t = p0 - p1;
 				if (SQUARE(t) < b2) {
-					strength(dst, q0, q1, p0, p1, a, b2, tc0);
+					if (STR == 4) {
+						Strength4h<N>()(dst, q0, q1, p0, p1, tc0, b2);
+					} else {
+						Strength1_3h<N>()(dst, q0, q1, p0, p1, tc0, b2);
+					}
 				}
 			}
 		}
@@ -9843,7 +9869,7 @@ static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int
 }
 
 static inline void deblock_luma_horiz_str4(int a, int b2, uint8_t *luma, int stride) {
-	deblock_luma_horiz<Strength4h<1>, 1, 16>(a, b2, luma, 0, stride, Strength4h<1>());
+	deblock_luma_horiz<4, 1, 16>(a, b2, luma, 0, stride);
 }
 
 static inline void deblock_luma_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_t *luma, int str, int stride)
@@ -9851,7 +9877,7 @@ static inline void deblock_luma_horiz_str1_3(int a, int b2, const int8_t *tc0, u
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_horiz<Strength1_3h<1>, 1, 4>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3h<1>());
+			deblock_luma_horiz<1, 1, 4>(a, b2, luma, tc0[strength_1 - 1], stride);
 		}
 		luma += stride * 4;
 		str = (unsigned)str >> 2;
@@ -9859,7 +9885,7 @@ static inline void deblock_luma_horiz_str1_3(int a, int b2, const int8_t *tc0, u
 }
 
 static inline void deblock_chroma_horiz_str4(int a, int b2, uint8_t *luma, int stride) {
-	deblock_luma_horiz<Strength4h<2>, 2, 8>(a, b2, luma, 0, stride, Strength4h<2>());
+	deblock_luma_horiz<4, 2, 8>(a, b2, luma, 0, stride);
 }
 
 static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_t *chroma, int str, int stride)
@@ -9867,18 +9893,17 @@ static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0,
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_horiz<Strength1_3h<2>, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride, Strength1_3h<2>());
+			deblock_luma_horiz<1, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride);
 		}
 		chroma += stride * 2;
 		str = (unsigned)str >> 2;
 	}
 }
 
-
 template <int N>
 struct Strength4v {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) const {
-		int t = SQUARE(p0 - q0) < SQUARE((a >> 2) + 2);
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2, int stride) const {
+		int t = SQUARE(p0 - q0) < a2r;
 		if (N == 1 && t) {
 			int q2 = dst[0];
 			int p2 = dst[stride * 5];
@@ -9907,7 +9932,7 @@ struct Strength4v {
 
 template <int N>
 struct Strength1_3v {
-	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a, int b2, int tc0, int stride) const {
+	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2, int stride) const {
 		int q2 = dst[0];
 		int p2 = dst[stride * 5];
 		int aq_smaller = SQUARE(q2 - q0) < b2;
@@ -9940,25 +9965,33 @@ struct Strength1_3v {
 	}
 };
 
-template <typename T, int LEN, int GAP>
-static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int stride, T strength)
+template <int STR, int LEN, int GAP>
+static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int stride)
 {
 	uint8_t *dst = luma - stride * 3;
 	assert(a);
+	int a2 = SQUARE(a);
+	if (STR == 4) {
+		tc0 = SQUARE((a >> 2) + 2);
+	}
 	for (int x = 0; x < LEN; ++x) {
 		int q0, q1, p0, p1;
 		int t;
 		q0 = dst[stride * 2];
 		p0 = dst[stride * 3];
 		t = q0 - p0;
-		if (SQUARE(t) < SQUARE(a)) {
+		if (SQUARE(t) < a2) {
 			q1 = dst[stride];
 			t = q1 - q0;
 			if (SQUARE(t) < b2) {
 				p1 = dst[stride * 4];
 				t = p0 - p1;
 				if (SQUARE(t) < b2) {
-					strength(dst, q0, q1, p0, p1, a, b2, tc0, stride);
+					if (STR == 4) {
+						Strength4v<GAP>()(dst, q0, q1, p0, p1, tc0, b2, stride);
+					} else {
+						Strength1_3v<GAP>()(dst, q0, q1, p0, p1, tc0, b2, stride);
+					}
 				}
 			}
 		}
@@ -9967,7 +10000,7 @@ static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int 
 }
 
 static inline void deblock_luma_vert_str4(int a, int b2, uint8_t *luma, int stride) {
-	deblock_luma_vert<Strength4v<1>, 16, 1>(a, b2, luma, 0, stride, Strength4v<1>());
+	deblock_luma_vert<4, 16, 1>(a, b2, luma, 0, stride);
 }
 
 static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *luma, int str, int stride)
@@ -9975,7 +10008,7 @@ static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, ui
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_vert<Strength1_3v<1>, 4, 1>(a, b2, luma, tc0[strength_1 - 1], stride, Strength1_3v<1>());
+			deblock_luma_vert<1, 4, 1>(a, b2, luma, tc0[strength_1 - 1], stride);
 		}
 		luma += 4;
 		str = (unsigned)str >> 2;
@@ -9983,7 +10016,7 @@ static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, ui
 }
 
 static inline void deblock_chroma_vert_str4(int a, int b2, uint8_t *chroma, int stride) {
-	deblock_luma_vert<Strength4v<2>, 8, 2>(a, b2, chroma, 0, stride, Strength4v<2>());
+	deblock_luma_vert<4, 8, 2>(a, b2, chroma, 0, stride);
 }
 
 static inline void deblock_chroma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *chroma, int str, int stride)
@@ -9991,7 +10024,7 @@ static inline void deblock_chroma_vert_str1_3(int a, int b2, const int8_t *tc0, 
 	for (int i = 0; i < 4; ++i) {
 		int strength_1 = str & 3;
 		if (strength_1) {
-			deblock_luma_vert<Strength1_3v<2>, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride, Strength1_3v<2>());
+			deblock_luma_vert<1, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride);
 		}
 		chroma += 4;
 		str >>= 2;
@@ -10029,7 +10062,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 			if ((x != 0) && (!idc || mb->firstline != max_x) && (str & 255)) {
 				/* alpha, beta of MB left edge */
 				qp = (curr->qpy + (curr - 1)->qpy + 1) >> 1;
-				AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+				a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
 				if (a) {
 					if (curr->str4_horiz) {
 						deblock_luma_horiz_str4(a, b2, luma, stride);
@@ -10041,7 +10074,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				}
 				for (int c = 0; c < 2; ++c) {
 					qp = (curr->qpc[c] + (curr - 1)->qpc[c] + 1) >> 1;
-					AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+					a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
 					if (a) {
 						if (curr->str4_horiz) {
 							deblock_chroma_horiz_str4(a, b2, chroma + c, stride);
@@ -10054,7 +10087,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				}
 			}
 			if (str & ~255) {
-				AlphaBetaTc0(a, b2, &tc0, curr->qpy, alpha_offset, beta_offset);
+				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
 				if (a) {
 					uint32_t str_tmp = str >> 8;
 					if (str_tmp & 255) {
@@ -10072,7 +10105,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				str >>= 16;
 				for (int c = 0; c < 2; ++c) {
 					if (curr->qpy != curr->qpc[c]) {
-						AlphaBetaTc0(a, b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
 					}
 					if (a) {
 						if (str & 0xff) {
@@ -10085,7 +10118,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 			if ((y != 0) && (!idc || mb->firstline < 0) && (str & 255)) {
 				/* top edge of MB */
 				qp = (curr->qpy + (curr - max_x)->qpy + 1) >> 1;
-				AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+				a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
 				if (a) {
 					if (curr->str4_vert) {
 						deblock_luma_vert_str4(a, b2, luma, stride);
@@ -10097,7 +10130,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				}
 				for (int c = 0; c < 2; ++c) {
 					qp = (curr->qpc[c] + (curr - max_x)->qpc[c] + 1) >> 1;
-					AlphaBetaTc0(a, b2, &tc0, qp, alpha_offset, beta_offset);
+					a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
 					if (a) {
 						if (curr->str4_vert) {
 							deblock_chroma_vert_str4(a, b2, chroma + c, stride);
@@ -10110,7 +10143,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				}
 			}
 			if (str & ~255) {
-				AlphaBetaTc0(a, b2, &tc0, curr->qpy, alpha_offset, beta_offset);
+				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
 				if (a) {
 					uint32_t str_tmp = str >> 8;
 					if (str_tmp & 255) {
@@ -10128,7 +10161,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				str >>= 16;
 				for (int c = 0; c < 2; ++c) {
 					if (curr->qpy != curr->qpc[c]) {
-						AlphaBetaTc0(a, b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
 					}
 					if (a) {
 						if (str & 255) {
