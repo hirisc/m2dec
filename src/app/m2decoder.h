@@ -2,9 +2,11 @@
 #define _M2DECODER_H_
 
 #include "frames.h"
+#include "m2d.h"
 #include "mpeg2.h"
 #include "h264.h"
 #include "mpeg_demux.h"
+#include <deque>
 
 typedef m2d_frame_t Frame;
 
@@ -16,6 +18,8 @@ public:
 		MODE_H264,
 		MODE_NONE
 	} type_t;
+	typedef std::pair<const uint8_t *, int> header_data_t;
+	typedef std::deque<header_data_t> header_data_list_t;
 	M2Decoder(type_t codec_mode, int outbuf, int (*reread_file)(void *arg), void *reread_arg)
 		: frames_(0),
 		outbuf_(outbuf), reread_file_(reread_file), reread_arg_(reread_arg),
@@ -76,6 +80,42 @@ public:
 	}
 	pes_demuxer_t *demuxer() {
 		return &demux_;
+	}
+	int skip_frames(const uint8_t *indata, int indata_bytes, int skip_frm, int& skipped_bytes, header_data_list_t& headers) {
+		int pos = 0;
+		int skipped_frm = 0;
+		int skipped_frm_key = 0;
+		const uint8_t *indata_key = 0;
+		while (pos < indata_bytes) {
+			int read_bytes = m2d_next_start_code(indata + pos, indata_bytes - pos);
+			if (read_bytes < 0) {
+				break;
+			}
+			pos += read_bytes;
+			bool is_keyframe, is_header;
+			if (is_h264frame_head(indata + pos, indata_bytes - pos, is_keyframe, is_header)) {
+				if (is_keyframe) {
+					indata_key = indata + pos - 3;
+					skipped_frm_key = skipped_frm;
+				}
+				if (skip_frm < ++skipped_frm) {
+					break;
+				}
+			} else if (is_header) {
+				int size = m2d_next_start_code(indata + pos, indata_bytes - pos);
+				headers.push_back(header_data_t(indata + pos - 3, size));
+			}
+		}
+		while (!headers.empty()) {
+			headers.push_back(header_data_t(0, 0));
+			func()->decode_picture(context());
+		}
+		if (indata_key) {
+			skipped_bytes = indata_key - indata;
+			return skipped_frm_key;
+		} else {
+			return -1;
+		}
 	}
 	int decode(void *obj, void (*post_dst)(void *, m2d_frame_t&), bool emptify_mode) {
 		m2d_frame_t frm;
@@ -155,6 +195,15 @@ private:
 	static int header_callback(void *arg, void *id) {
 		((M2Decoder *)arg)->SetFrames(id);
 		return 0;
+	}
+	bool is_h264frame_head(const uint8_t *indata, int indata_bytes, bool& is_keyframe, bool& is_header) {
+		if (indata_bytes < 2) {
+			return false;
+		}
+		int nal_type = indata[0] & 31;
+		is_keyframe = (nal_type == SLICE_IDR_NAL);
+		is_header = (nal_type == SPS_NAL) || (nal_type == PPS_NAL);
+		return (indata[1] & 128) && ((nal_type == SLICE_IDR_NAL) || (nal_type == SLICE_NONIDR_NAL));
 	}
 };
 

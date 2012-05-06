@@ -4,6 +4,7 @@
 #include <string.h>
 #include <limits.h>
 #include <memory>
+#include <deque>
 #include "frames.h"
 #include "filewrite.h"
 #include "m2decoder.h"
@@ -20,6 +21,8 @@ class option_t {
 	uint8_t *input_data_;
 	size_t input_len_;
 	size_t pos_;
+	int skipped_num_;
+	M2Decoder::header_data_list_t headers_;
 	FileWriter *fw_;
 	M2Decoder::type_t codec_;
 	int dpb_;
@@ -63,7 +66,16 @@ class option_t {
 		return 0;
 	}
 	int reread_file_impl() {
-		if (pos_ < input_len_) {
+		if (!headers_.empty()) {
+			if (headers_.front().first != 0) {
+				dec_bits_set_data(dec()->stream(), headers_.front().first, headers_.front().second, 0);
+				headers_.pop_front();
+				return 0;
+			} else {
+				headers_.clear();
+				return -1;
+			}
+		} else if (pos_ < input_len_) {
 			dec_bits_set_data(dec()->stream(), input_data_ + pos_, input_len_, 0);
 			pos_ += input_len_;
 			return 0;
@@ -80,6 +92,8 @@ class option_t {
 			"\th264dec [-b] [-d <dpb_size>] [-o|O ] <infile>\n"
 			"\t\t-b: Bypass DPB\n"
 			"\t\t-d <dpb_size>: Specify number of DPB frames -1, 1..16 (default: -1(auto))\n"
+			"\t\t-e: emptifiy DPB before next frames\n"
+			"\t\t-f <skip_num>: Specify number of frames to be skipped\n"
 			"\t\t-m: MPEG2 elementary input\n"
 			"\t\t-o: RAW output\n"
 			"\t\t-O: MD5 output\n"
@@ -90,11 +104,12 @@ class option_t {
 	}
 public:
 	option_t(int argc, char *argv[])
-		: pos_(0), fw_(0), codec_(M2Decoder::MODE_H264), dpb_(-1), force_exec_(false), dpb_emptify_(false), dec_(0) {
+		: pos_(0), skipped_num_(0), fw_(0), codec_(M2Decoder::MODE_H264), dpb_(-1), force_exec_(false), dpb_emptify_(false), dec_(0) {
 		FILE *fi;
 		int opt;
 		int filewrite_mode = FileWriter::WRITE_NONE;
-		while ((opt = getopt(argc, argv, "bd:emoOsx")) != -1) {
+		int skip_num = 0;
+		while ((opt = getopt(argc, argv, "bd:ef:moOsx")) != -1) {
 			switch (opt) {
 			case 'b':
 				dpb_ = 1;
@@ -108,6 +123,9 @@ public:
 				break;
 			case 'e':
 				dpb_emptify_ = true;
+				break;
+			case 'f':
+				skip_num = static_cast<int>(strtol(optarg, 0, 0));
 				break;
 			case 'm':
 				codec_ = M2Decoder::MODE_MPEG2;
@@ -148,6 +166,12 @@ public:
 #endif
 		fclose(fi);
 		dec_ = new M2Decoder(codec_, 0, reread_file, this);
+		if (skip_num != 0) {
+			int skipped_bytes;
+			skipped_num_ = dec_->skip_frames(input_data_, input_len_, skip_num, skipped_bytes, headers_);
+			pos_ += skipped_bytes;
+			fprintf(stderr, "Skip %d frames(%d bytes).\n", skipped_num_, skipped_bytes);
+		}
 	}
 	~option_t() {
 		if (dec_) {
@@ -171,6 +195,9 @@ public:
 	}
 	size_t input_len() const {
 		return input_len_;
+	}
+	int skipped_num() const {
+		return skipped_num_;
 	}
 	bool force_exec() const {
 		return force_exec_;
