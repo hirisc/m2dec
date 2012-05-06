@@ -67,6 +67,7 @@ typedef struct {
 
 int m2d_dec_vld_unary(dec_bits *stream, const vlc_t *vld_tab, int bitlen);
 int m2d_find_mpeg_data(dec_bits *stream);
+int m2d_next_start_code(const byte_t *org_src, int byte_len);
 
 #ifdef __cplusplus
 }
