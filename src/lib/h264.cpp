@@ -4833,12 +4833,13 @@ static inline void fill_left_top_chroma(const uint8_t *src, uint8_t *buf, int le
 
 static inline void fill_left_bottom_chroma(const uint8_t *src, uint8_t *buf, int left, int bottom, const h264d_vector_t& size, int stride)
 {
-	uint8_t *dst = buf + left;
 	int width = size.v[0];
 	int height = size.v[1] >> 1;
 	int y;
 
 	src += left;
+	left = (width == left) ? left - 2 : left;
+	uint8_t *dst = buf + left;
 	for (y = 0; y < height - bottom; ++y) {
 		memcpy(dst, src, width - left);
 		src += stride;
@@ -6369,8 +6370,7 @@ static inline void weighted_copy(const h264d_weighted_table_elem_t* elem, int sh
 static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int frame_idx, const h264d_vector_t& mv, const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
 {
 	const m2d_frame_t& frms = mb->frame->frames[frame_idx];
-	uint8_t luma_buf[16 * 16];
-	uint8_t chroma_buf[16 * 8];
+	uint8_t buf[16 * 16];
 	int stride = mb->max_x * 16;
 	int vert_size = mb->max_y * 16;
 	int ofsx = mb->x * 16 + offsetx;
@@ -6379,10 +6379,10 @@ static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int fr
 	int mvy = mv.v[1];
 	int posx = (mvx >> 2) + ofsx;
 	int posy = (mvy >> 2) + ofsy;
-	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf, size.v[0]);
-	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, chroma_buf, size.v[0]);
-	weighted_copy(&pred.weight_offset.e[0], pred.shift[0], luma_buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
-	weighted_copy(&pred.weight_offset.e[1], pred.shift[1] | 256, chroma_buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
+	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, buf, size.v[0]);
+	weighted_copy(&pred.weight_offset.e[0], pred.shift[0], buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
+	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, buf, size.v[0]);
+	weighted_copy(&pred.weight_offset.e[1], pred.shift[1] | 256, buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <typename F0, typename F1>
