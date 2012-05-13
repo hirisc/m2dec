@@ -11097,30 +11097,29 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	};
 	static const int8_t state_trans[2][64] = {
 		{
-			1, 2, 3, 4, 5, 6, 7, 8,
-			9, 10, 11, 12, 13, 14, 15, 16,
-			17, 18, 19, 20, 21, 22, 23, 24,
-			25, 26, 27, 28, 29, 30, 31, 32,
-			33, 34, 35, 36, 37, 38, 39, 40,
-			41, 42, 43, 44, 45, 46, 47, 48,
-			49, 50, 51, 52, 53, 54, 55, 56,
-			57, 58, 59, 60, 61, 62, 62, 63
+			2, 4, 6, 8, 10, 12, 14, 16,
+			18, 20, 22, 24, 26, 28, 30, 32,
+			34, 36, 38, 40, 42, 44, 46, 48,
+			50, 52, 54, 56, 58, 60, 62, 64,
+			66, 68, 70, 72, 74, 76, 78, 80,
+			82, 84, 86, 88, 90, 92, 94, 96,
+			98, 100, 102, 104, 106, 108, 110, 112,
+			114, 116, 118, 120, 122, 124, 124, 126
 		},
 		{
-			0, 0, 1, 2, 2, 4, 4, 5,
-			6, 7, 8, 9, 9, 11, 11, 12,
-			13, 13, 15, 15, 16, 16, 18, 18,
-			19, 19, 21, 21, 22, 22, 23, 24,
-			24, 25, 26, 26, 27, 27, 28, 29,
-			29, 30, 30, 30, 31, 32, 32, 33,
-			33, 33, 34, 34, 35, 35, 35, 36,
-			36, 36, 37, 37, 37, 38, 38, 63
+			1, 0, 2, 4, 4, 8, 8, 10,
+			12, 14, 16, 18, 18, 22, 22, 24,
+			26, 26, 30, 30, 32, 32, 36, 36,
+			38, 38, 42, 42, 44, 44, 46, 48,
+			48, 50, 52, 52, 54, 54, 56, 58,
+			58, 60, 60, 60, 62, 64, 64, 66,
+			66, 66, 68, 68, 70, 70, 70, 72,
+			72, 72, 74, 74, 74, 76, 76, 126
 		}
 	};
 	int pStateIdx;
 	uint32_t valMPS, binVal;
 	uint32_t range, offset, lps;
-	const int8_t *trans_tbl;
 
 	pStateIdx = cb->context[ctxIdx];
 	valMPS = pStateIdx & 1;
@@ -11131,15 +11130,13 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	range = range - lps;
 	if (offset < range) {
 		binVal = valMPS;
-		trans_tbl = state_trans[0];
+		cb->context[ctxIdx] = state_trans[0][pStateIdx] | valMPS;
 	} else {
 		binVal = valMPS ^ 1;
 		cb->offset = offset = offset - range;
 		range = lps;
-		valMPS = pStateIdx ? valMPS : valMPS ^ 1;
-		trans_tbl = state_trans[1];
+		cb->context[ctxIdx] = state_trans[1][pStateIdx] ^ valMPS;
 	}
-	cb->context[ctxIdx] = trans_tbl[pStateIdx] * 2 + valMPS;
 	cabac_renorm(cb, st, range, offset);
 	return binVal;
 }

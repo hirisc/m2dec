@@ -11,6 +11,7 @@ extern "C" {
 //typedef unsigned long uintptr_t;
 typedef unsigned int uint32_t;
 typedef signed int int32_t;
+#define __attribute__(x)
 
 #elif defined(__GNUC__)
 
@@ -30,6 +31,7 @@ typedef signed int int32_t;
 #include <stddef.h>
 typedef unsigned int uint32_t;
 typedef signed int int32_t;
+#define __attribute__(x)
 
 #endif /* _M_IX86 */
 
