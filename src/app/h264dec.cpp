@@ -4,7 +4,6 @@
 #include <string.h>
 #include <limits.h>
 #include <memory>
-#include <deque>
 #include "frames.h"
 #include "filewrite.h"
 #include "m2decoder.h"
