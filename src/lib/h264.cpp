@@ -11583,15 +11583,29 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 
 static inline int cabac_decode_bypass_coeff(h264d_cabac_t *cb, dec_bits *st)
 {
-	int left_cnt = 0;
-	while (cabac_decode_bypass(cb, st)) {
-		left_cnt++;
+	const int MAX = 16;
+	int range = cb->range;
+	int offset = cb->offset;
+	int i = MAX;
+	do {
+		offset = (offset * 2) | get_onebit(st);
+		if (offset < range) {
+			break;
+		}
+		offset -= range;
+	} while (--i);
+	i = MAX - i;
+	int lvl = 1;
+	while (i--) {
+		offset = (offset * 2) | get_onebit(st);
+		lvl *= 2;
+		if (range <= offset) {
+			offset -= range;
+			lvl++;
+		}
 	}
-	int abs_level = 1;
-	while (left_cnt--) {
-		abs_level += abs_level + cabac_decode_bypass(cb, st);
-	}
-	return abs_level + 14;
+	cb->offset = offset;
+	return lvl + 14;
 }
 
 static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat)
