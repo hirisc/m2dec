@@ -2216,7 +2216,7 @@ static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int str
 /** Reconstruct 4x4 coefficients.
  */
 template <int N>
-static inline void ac4x4transform_acdc(uint8_t *dst, const int *coeff, int stride)
+static void ac4x4transform_acdc(uint8_t *dst, const int *coeff, int stride)
 {
 	int tmp[16];
 	transform4x4_vert_loop(tmp, coeff);
@@ -3940,7 +3940,7 @@ static inline void ac8x8transform_vert(uint8_t *dst, const int *src, int stride)
 
 /** Reconstruct 8x8 coefficients.
  */
-static inline void ac8x8transform_acdc(uint8_t *dst, const int *coeff, int stride)
+static void ac8x8transform_acdc(uint8_t *dst, const int *coeff, int stride)
 {
 	int tmp[8 * 8];
 	ac8x8transform_horiz(tmp, coeff);
@@ -3949,7 +3949,7 @@ static inline void ac8x8transform_acdc(uint8_t *dst, const int *coeff, int strid
 
 /** Reconstruct 8x8 coefficients.
  */
-static inline void ac8x8transform(uint8_t *dst, const int *coeff, int stride, int coeff_num)
+static void ac8x8transform(uint8_t *dst, const int *coeff, int stride, int coeff_num)
 {
 	int c0;
 	if ((coeff_num == 1) && ((c0 = coeff[0]) != 0)) {
@@ -5412,33 +5412,6 @@ static void inter_pred_luma_filter33(const uint8_t *src, uint8_t *dst, const h26
 	inter_pred_luma_filter02_core(src + src_stride * 3, dst, size, src_stride, stride);
 	filter_1_3_v_post(src + 3, dst, size, src_stride, stride);
 }
-
-static void (* const inter_pred_luma_filter[4][4])(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int dst_stride) = {
-	{
-		inter_pred_luma_filter00,
-		inter_pred_luma_filter01,
-		inter_pred_luma_filter02,
-		inter_pred_luma_filter03
-	},
-	{
-		inter_pred_luma_filter10,
-		inter_pred_luma_filter11,
-		inter_pred_luma_filter12,
-		inter_pred_luma_filter13
-	},
-	{
-		inter_pred_luma_filter20,
-		inter_pred_luma_filter21,
-		inter_pred_luma_filter22,
-		inter_pred_luma_filter23
-	},
-	{
-		inter_pred_luma_filter30,
-		inter_pred_luma_filter31,
-		inter_pred_luma_filter32,
-		inter_pred_luma_filter33
-	},
-};
 
 static inline void extend_left_luma(uint8_t *dst, int left, int width, int height)
 {
@@ -11044,13 +11017,8 @@ static void init_cabac_context(h264d_cabac_t *cabac, int slice_qp, int idc)
 	} while (--i);
 }
 
-
 static inline void cabac_renorm(h264d_cabac_t *cb, dec_bits *st, int range, int offset)
 {
-	if (256 <= range) {
-		cb->range = range;
-		return;
-	}
 	do {
 		range = (uint16_t)(range * 2);
 		offset = (uint16_t)(offset * 2 + get_onebit_inline(st));
@@ -11118,7 +11086,7 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 		}
 	};
 	int pStateIdx;
-	uint32_t valMPS, binVal;
+	uint32_t valMPS;
 	uint32_t range, offset, lps;
 
 	pStateIdx = cb->context[ctxIdx];
@@ -11129,16 +11097,19 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	lps = rangeTabLPS[pStateIdx][(range >> 6) & 3];
 	range = range - lps;
 	if (offset < range) {
-		binVal = valMPS;
 		cb->context[ctxIdx] = state_trans[0][pStateIdx] | valMPS;
+		if (256 <= range) {
+			cb->range = range;
+			return valMPS;
+		}
 	} else {
-		binVal = valMPS ^ 1;
-		cb->offset = offset = offset - range;
+		offset = offset - range;
 		range = lps;
 		cb->context[ctxIdx] = state_trans[1][pStateIdx] ^ valMPS;
+		valMPS ^= 1;
 	}
 	cabac_renorm(cb, st, range, offset);
-	return binVal;
+	return valMPS;
 }
 
 static inline int cabac_decode_bypass(h264d_cabac_t *cb, dec_bits *st)
@@ -11163,7 +11134,11 @@ static inline int cabac_decode_terminate(h264d_cabac_t *cb, dec_bits *st)
 		cb->range = range;
 		return 1;
 	} else {
-		cabac_renorm(cb, st, range, offset);
+		if (range < 256) {
+			cabac_renorm(cb, st, range, offset);
+		} else {
+			cb->range = range;
+		}
 		return 0;
 	}
 }
@@ -11606,6 +11581,19 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 	return map_cnt;
 }
 
+static inline int cabac_decode_bypass_coeff(h264d_cabac_t *cb, dec_bits *st)
+{
+	int left_cnt = 0;
+	while (cabac_decode_bypass(cb, st)) {
+		left_cnt++;
+	}
+	int abs_level = 1;
+	while (left_cnt--) {
+		abs_level += abs_level + cabac_decode_bypass(cb, st);
+	}
+	return abs_level + 14;
+}
+
 static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat)
 {
 	static const int8_t coeff_abs_level_ctx[2][8] = {
@@ -11638,15 +11626,7 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 				abs_level++;
 			}
 			if (abs_level == 15) {
-				int left_cnt = 0;
-				while (cabac_decode_bypass(cb, st)) {
-					left_cnt++;
-				}
-				abs_level = 1;
-				while (left_cnt--) {
-					abs_level += abs_level + cabac_decode_bypass(cb, st);
-				}
-				abs_level += 14;
+				abs_level = cabac_decode_bypass_coeff(cb, st);
 			}
 		}
 		idx = zigzag[coeff_map[--mp] + coeff_offset];
