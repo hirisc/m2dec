@@ -1802,27 +1802,37 @@ static int dec_ref_pic_marking(int nal_unit_type, h264d_marking_t *mrk, dec_bits
 static inline int get_nC(int na, int nb)
 {
 	int nc;
-	if (na < 0) {
-		if (nb < 0) {
-			nc = 0;
+	if (0 <= na) {
+		if (0 <= nb) {
+			nc = (na + nb + 1) >> 1;
 		} else {
-			nc = nb;
+			nc = na;
 		}
-	} else if (nb < 0) {
-		nc = na;
+	} else if (0 <= nb) {
+		nc = nb;
 	} else {
-		nc = (na + nb + 1) >> 1;
+		nc = 0;
 	}
 	return nc;
 }
 
+static inline void read_trailing_ones(dec_bits *st, int *level, int trailing_ones)
+{
+	if (trailing_ones) {
+		uint32_t ones = get_bits(st, trailing_ones) * 2;
+		level += trailing_ones;
+		do {
+			*--level = 1 - (ones & 2);
+			ones >>= 1;
+		} while (--trailing_ones);
+	}
+}
+
 static inline int level_prefix(dec_bits *st)
 {
-	int val, len;
-
 	const vlc_t *d = &level_prefix_bit8[show_bits(st, 8)];
-	val = d->pattern;
-	len = d->length;
+	int val = d->pattern;
+	int len = d->length;
 	while (len < 0) {
 		skip_bits(st, 8);
 		d = &level_prefix_bit8[show_bits(st, 8)];
@@ -1935,12 +1945,15 @@ static int8_t total_zeros4(dec_bits *st, int total_coeff)
 	}
 }
 
-static int8_t run_before(dec_bits *st, int zeros_left)
+static inline int run_before(dec_bits *st, int zeros_left)
 {
 	const vlc_t *d;
 	int r;
 
 	switch (zeros_left) {
+	case 0:
+		r = 0;
+		break;
 	case 1:
 		r = get_onebit(st) ^ 1;
 		break;
@@ -2064,64 +2077,62 @@ struct transform_size_8x8_flag_cavlc {
 	}
 };
 
+static inline int SQUARE(int x) {
+	return x * x;
+}
+
 struct residual_block_cavlc {
 	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int level[16];
 		int8_t run[16];
-		int val;
-		int trailing_ones;
-		int total_coeff;
+		const vlc_t *tbl;
 		int zeros_left;
 
 		if (num_coeff <= 4) {
-			val = m2d_dec_vld_unary(st, total_ones_nc_chroma_bit6, 6);
+			tbl = total_ones_nc_chroma_bit6;
 		} else {
 			int nc = get_nC(na, nb);
-			if (nc < 2) {
-				val = m2d_dec_vld_unary(st, total_ones_nc02_bit6, 6);
-			} else if (nc < 4) {
-				val = m2d_dec_vld_unary(st, total_ones_nc24_bit6, 6);
-			} else if (nc < 8) {
-				val = m2d_dec_vld_unary(st, total_ones_nc48_bit6, 6);
+			if (8 <= nc) {
+				tbl = total_ones_nc8_bit6;
+			} else if (4 <= nc) {
+				tbl = total_ones_nc48_bit6;
+			} else if (2 <= nc) {
+				tbl = total_ones_nc24_bit6;
 			} else {
-				val = m2d_dec_vld_unary(st, total_ones_nc8_bit6, 6);
+				tbl = total_ones_nc02_bit6;
 			}
 		}
-		trailing_ones = val >> 5;
-		total_coeff = val & 31;
+		int val = m2d_dec_vld_unary(st, tbl, 6);
+		int total_coeff = val & 31;
 		if (total_coeff == 0) {
 			return 0;
 		}
+		int trailing_ones = val >> 5;
+		read_trailing_ones(st, level, trailing_ones);
 		int suffix_len = ((10 < total_coeff) && (trailing_ones < 3));
-		for (int i = 0; i < total_coeff; ++i) {
-			if (i < trailing_ones) {
-				level[i] = 1 - get_onebit_inline(st) * 2;
-			} else {
-				int lvl_prefix = level_prefix(st);
-				int lvl = lvl_prefix << suffix_len;
-				if (0 < suffix_len || 14 <= lvl_prefix) {
-					int size = suffix_len;
-					if (lvl_prefix == 14 && !size) {
-						size = 4;
-					} else if (lvl_prefix == 15) {
-						size = 12;
-					}
-					if (size) {
-						lvl += get_bits(st, size);
-					}
+		for (int i = trailing_ones; i < total_coeff; ++i) {
+			int lvl_prefix = level_prefix(st);
+			int lvl = lvl_prefix << suffix_len;
+			if (0 < suffix_len || 14 <= lvl_prefix) {
+				int size = suffix_len;
+				if (lvl_prefix == 14 && !size) {
+					size = 4;
+				} else if (lvl_prefix == 15) {
+					size = 12;
 				}
-				if (suffix_len == 0 && lvl_prefix == 15) {
-					lvl += 15;
-				}
-				if (i == trailing_ones && trailing_ones < 3) {
-					lvl += 2;
-				}
-				level[i] = lvl = ((lvl & 1) ? (-lvl - 1) : (lvl + 2)) >> 1;
-				suffix_len = suffix_len ? suffix_len : 1;
-				if (suffix_len < 6 && ((3 << (suffix_len - 1)) < ABS(lvl))) {
-					suffix_len++;
+				if (size) {
+					lvl += get_bits(st, size);
 				}
 			}
+			if (suffix_len == 0 && lvl_prefix == 15) {
+				lvl += 15;
+			}
+			if (i == trailing_ones && trailing_ones < 3) {
+				lvl += 2;
+			}
+			level[i] = lvl = ((-(lvl & 1) ^ lvl) >> 1) + ((lvl & 1) ^ 1); // ((lvl & 1) ? ~lvl : (lvl + 2)) >> 1;
+			suffix_len = suffix_len ? suffix_len : 1;
+			suffix_len += ((suffix_len < 6) && (SQUARE(3 << (suffix_len - 1)) < SQUARE(lvl)));
 		}
 		if (total_coeff < num_coeff) {
 			if (4 < num_coeff) {
@@ -2133,8 +2144,8 @@ struct residual_block_cavlc {
 			zeros_left = 0;
 		}
 		for (int i = 0; i < total_coeff - 1; ++i) {
-			int r;
-			run[i] = r = (0 < zeros_left) ? run_before(st, zeros_left) : 0;
+			int r = run_before(st, zeros_left);
+			run[i] = r;
 			zeros_left -= r;
 		}
 		run[total_coeff - 1] = zeros_left;
@@ -2426,7 +2437,6 @@ static int intra4x4pred_vert(uint8_t *dst, int stride, int avail)
 
 #define FIR3(a, b, c) (((a) + (b) * 2 + (c) + 2) >> 2)
 #define FIR2(a, b) (((a) + (b) + 1) >> 1)
-
 
 /**Intra 4x4 prediction Diagonal Down Left.
  */
@@ -9733,39 +9743,29 @@ static inline int AlphaBetaTc0(int &beta2, const int8_t **tc0, int q, int alpha_
 	}
 }
 
-static inline int SQUARE(int x) {
-	return x * x;
-}
-
 template<int N>
 struct Strength4h {
 	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2) const {
-		if (N == 1) {
-			int t = SQUARE(p0 - q0) < a2r;
-			if (t) {
-				int p2 = dst[5 * N];
-				if (SQUARE(p0 - p2) < b2) {
-					dst[3 * N] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
-					dst[4 * N] = (q0 + p0 + p1 + p2 + 2) >> 2;
-					dst[5 * N] = (dst[6 * N] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
-				} else {
-					dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
-				}
-				int q2 = dst[0];
-				if (SQUARE(q0 - q2) < b2) {
-					dst[2 * N] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
-					dst[N] = (p0 + q0 + q1 + q2 + 2) >> 2;
-					dst[0] = (dst[-N] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
-				} else {
-					dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
-				}
+		if ((N == 1) && (SQUARE(p0 - q0) < a2r)) {
+			int p2 = dst[4 * N];
+			if (SQUARE(p0 - p2) < b2) {
+				dst[2 * N] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
+				dst[3 * N] = (q0 + p0 + p1 + p2 + 2) >> 2;
+				dst[4 * N] = (dst[5 * N] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
 			} else {
-				dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
-				dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
+				dst[2 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
+			}
+			int q2 = dst[-N];
+			if (SQUARE(q0 - q2) < b2) {
+				dst[1 * N] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
+				dst[0] = (p0 + q0 + q1 + q2 + 2) >> 2;
+				dst[-N] = (dst[-N * 2] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
+			} else {
+				dst[1 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
 			}
 		} else {
-			dst[3 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
-			dst[2 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
+			dst[2 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
+			dst[1 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
 		}
 	}
 };
@@ -9775,33 +9775,37 @@ struct Strength4h {
 template<int N>
 struct Strength1_3h {
 	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2) const {
-		int q2 = dst[0 * N];
-		int p2 = dst[5 * N];
-		int aq_smaller = SQUARE(q2 - q0) < b2;
-		int ap_smaller = SQUARE(p2 - p0) < b2;
-		if (N == 1 && tc0) {
-			if (aq_smaller) {
-				int t = (q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1;
-				if (t) {
-					dst[1 * N] = CLIP3(t, tc0) + q1;
+		if (N == 1) {
+			int q2 = dst[-N];
+			int p2 = dst[4 * N];
+			int aq_smaller = SQUARE(q2 - q0) < b2;
+			int ap_smaller = SQUARE(p2 - p0) < b2;
+			if (tc0) {
+				if (aq_smaller) {
+					int t = (q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1;
+					if (t) {
+						dst[0] = CLIP3(t, tc0) + q1;
+					}
+				}
+				if (ap_smaller) {
+					int t = (p2 + ((q0 + p0 + 1) >> 1) - (p1 * 2)) >> 1;
+					if (t) {
+						dst[3 * N] = CLIP3(t, tc0) + p1;
+					}
 				}
 			}
-			if (ap_smaller) {
-				int t = (p2 + ((q0 + p0 + 1) >> 1) - (p1 * 2)) >> 1;
-				if (t) {
-					dst[4 * N] = CLIP3(t, tc0) + p1;
-				}
-			}
+			tc0 = tc0 + aq_smaller + ap_smaller;
+		} else {
+			tc0 += 1;
 		}
-		tc0 = tc0 + ((N == 1) ? aq_smaller + ap_smaller : 1);
 		if (tc0) {
 			int delta = (((p0 - q0) * 4) + q1 - p1 + 4) >> 3;
 			if (delta) {
 				delta = CLIP3(delta, tc0);
 				q0 = q0 + delta;
 				p0 = p0 - delta;
-				dst[2 * N] = CLIP255C(q0);
-				dst[3 * N] = CLIP255C(p0);
+				dst[1 * N] = CLIP255C(q0);
+				dst[2 * N] = CLIP255C(p0);
 			}
 		}
 	}
@@ -9810,8 +9814,7 @@ struct Strength1_3h {
 template <int STR, int N, int LEN>
 static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int stride)
 {
-	uint8_t *dst = luma - 3 * N;
-	assert(a);
+	uint8_t *dst = luma - 2 * N;
 	int a2 = SQUARE(a);
 	if (STR == 4) {
 		tc0 = SQUARE((a >> 2) + 2);
@@ -9819,14 +9822,14 @@ static inline void deblock_luma_horiz(int a, int b2, uint8_t *luma, int tc0, int
 	for (int y = 0; y < LEN; ++y) {
 		int q0, q1, p0, p1;
 		int t;
-		q0 = dst[2 * N];
-		p0 = dst[3 * N];
-		t = q0 - p0;
-		if (SQUARE(t) < a2) {
-			q1 = dst[1 * N];
-			t = q1 - q0;
-			if (SQUARE(t) < b2) {
-				p1 = dst[4 * N];
+		q0 = dst[1 * N];
+		q1 = dst[0];
+		t = q1 - q0;
+		if (SQUARE(t) < b2) {
+			p0 = dst[2 * N];
+			t = q0 - p0;
+			if (SQUARE(t) < a2) {
+				p1 = dst[3 * N];
 				t = p0 - p1;
 				if (SQUARE(t) < b2) {
 					if (STR == 4) {
@@ -9847,7 +9850,8 @@ static inline void deblock_luma_horiz_str4(int a, int b2, uint8_t *luma, int str
 
 static inline void deblock_luma_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_t *luma, int str, int stride)
 {
-	for (int i = 0; i < 4; ++i) {
+	str &= 255;
+	while (str) {
 		int strength_1 = str & 3;
 		if (strength_1) {
 			deblock_luma_horiz<1, 1, 4>(a, b2, luma, tc0[strength_1 - 1], stride);
@@ -9863,7 +9867,8 @@ static inline void deblock_chroma_horiz_str4(int a, int b2, uint8_t *luma, int s
 
 static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_t *chroma, int str, int stride)
 {
-	for (int i = 0; i < 4; ++i) {
+	str &= 255;
+	while (str) {
 		int strength_1 = str & 3;
 		if (strength_1) {
 			deblock_luma_horiz<1, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride);
@@ -9876,29 +9881,26 @@ static inline void deblock_chroma_horiz_str1_3(int a, int b2, const int8_t *tc0,
 template <int N>
 struct Strength4v {
 	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2, int stride) const {
-		int t = SQUARE(p0 - q0) < a2r;
-		if (N == 1 && t) {
-			int q2 = dst[0];
-			int p2 = dst[stride * 5];
-			int aq = SQUARE(q0 - q2);
-			int ap = SQUARE(p0 - p2);
-			if (ap < b2) {
-				dst[stride * 3] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
-				dst[stride * 4] = (q0 + p0 + p1 + p2 + 2) >> 2;
-				dst[stride * 5] = (dst[stride * 6] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
+		if ((N == 1) && (SQUARE(p0 - q0) < a2r)) {
+			int p2 = dst[stride * 4];
+			if (SQUARE(p0 - p2) < b2) {
+				dst[stride * 2] = ((p0 + p1 + q0) * 2 + q1 + p2 + 4) >> 3;
+				dst[stride * 3] = (q0 + p0 + p1 + p2 + 2) >> 2;
+				dst[stride * 4] = (dst[stride * 5] * 2 + p2 * 3 + p1 + p0 + q0 + 4) >> 3;
 			} else {
-				dst[stride * 3] = (p1 * 2 + p0 + q1 + 2) >> 2;
+				dst[stride * 2] = (p1 * 2 + p0 + q1 + 2) >> 2;
 			}
-			if (aq < b2) {
-				dst[stride * 2] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
-				dst[stride * 1] = (p0 + q0 + q1 + q2 + 2) >> 2;
-				dst[0] = (dst[-stride] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
+			int q2 = dst[-stride];
+			if (SQUARE(q0 - q2) < b2) {
+				dst[stride * 1] = ((q0 + q1 + p0) * 2 + p1 + q2 + 4) >> 3;
+				dst[0] = (p0 + q0 + q1 + q2 + 2) >> 2;
+				dst[-stride] = (dst[-stride * 2] * 2 + q2 * 3 + q1 + q0 + p0 + 4) >> 3;
 			} else {
-				dst[stride * 2] = (q1 * 2 + q0 + p1 + 2) >> 2;
+				dst[stride * 1] = (q1 * 2 + q0 + p1 + 2) >> 2;
 			}
 		} else {
-			dst[stride * 2] = (q1 * 2 + q0 + p1 + 2) >> 2;
-			dst[stride * 3] = (p1 * 2 + p0 + q1 + 2) >> 2;
+			dst[stride * 1] = (q1 * 2 + q0 + p1 + 2) >> 2;
+			dst[stride * 2] = (p1 * 2 + p0 + q1 + 2) >> 2;
 		}
 	}
 };
@@ -9906,43 +9908,46 @@ struct Strength4v {
 template <int N>
 struct Strength1_3v {
 	void operator()(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2, int stride) const {
-		int q2 = dst[0];
-		int p2 = dst[stride * 5];
-		int aq_smaller = SQUARE(q2 - q0) < b2;
-		int ap_smaller = SQUARE(p2 - p0) < b2;
-		if (N == 1 && tc0) {
-			if (aq_smaller) {
-				int t = (q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1;
-				if (t) {
-					dst[stride * 1] = CLIP3(t, tc0) + q1;
+		if (N == 1) {
+			int q2 = dst[-stride];
+			int p2 = dst[stride * 4];
+			int aq_smaller = SQUARE(q2 - q0) < b2;
+			int ap_smaller = SQUARE(p2 - p0) < b2;
+			if (tc0) {
+				if (aq_smaller) {
+					int t = (q2 + ((p0 + q0 + 1) >> 1) - (q1 * 2)) >> 1;
+					if (t) {
+						dst[0] = CLIP3(t, tc0) + q1;
+					}
+				}
+				if (ap_smaller) {
+					int t = (p2 + ((q0 + p0 + 1) >> 1) - (p1 * 2)) >> 1;
+					if (t) {
+						dst[stride * 3] = CLIP3(t, tc0) + p1;
+					}
 				}
 			}
-			if (ap_smaller) {
-				int t = (p2 + ((q0 + p0 + 1) >> 1) - (p1 * 2)) >> 1;
-				if (t) {
-					dst[stride * 4] = CLIP3(t, tc0) + p1;
-				}
-			}
+			tc0 = tc0 + aq_smaller + ap_smaller;
+		} else {
+			tc0 = tc0 + 1;
 		}
-		tc0 = tc0 + ((N == 1) ? aq_smaller + ap_smaller : 1);
 		if (tc0) {
 			int delta = (((p0 - q0) * 4) + q1 - p1 + 4) >> 3;
 			if (delta) {
 				delta = CLIP3(delta, tc0);
 				q0 = q0 + delta;
 				p0 = p0 - delta;
-				dst[stride * 2] = CLIP255C(q0);
-				dst[stride * 3] = CLIP255C(p0);
+				dst[stride * 1] = CLIP255C(q0);
+				dst[stride * 2] = CLIP255C(p0);
 			}
 		}
 	}
 };
 
 template <int STR, int LEN, int GAP>
-static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int stride)
+static inline void deblock_luma_vert(int a, int b2, uint8_t *dst, int tc0, int stride)
 {
-	uint8_t *dst = luma - stride * 3;
-	assert(a);
+	dst = dst - stride * 2;
 	int a2 = SQUARE(a);
 	if (STR == 4) {
 		tc0 = SQUARE((a >> 2) + 2);
@@ -9950,14 +9955,14 @@ static inline void deblock_luma_vert(int a, int b2, uint8_t *luma, int tc0, int 
 	for (int x = 0; x < LEN; ++x) {
 		int q0, q1, p0, p1;
 		int t;
-		q0 = dst[stride * 2];
-		p0 = dst[stride * 3];
-		t = q0 - p0;
-		if (SQUARE(t) < a2) {
-			q1 = dst[stride];
-			t = q1 - q0;
-			if (SQUARE(t) < b2) {
-				p1 = dst[stride * 4];
+		q1 = dst[0];
+		q0 = dst[stride];
+		t = q1 - q0;
+		if (SQUARE(t) < b2) {
+			p0 = dst[stride * 2];
+			t = q0 - p0;
+			if (SQUARE(t) < a2) {
+				p1 = dst[stride * 3];
 				t = p0 - p1;
 				if (SQUARE(t) < b2) {
 					if (STR == 4) {
@@ -9978,7 +9983,8 @@ static inline void deblock_luma_vert_str4(int a, int b2, uint8_t *luma, int stri
 
 static inline void deblock_luma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *luma, int str, int stride)
 {
-	for (int i = 0; i < 4; ++i) {
+	str &= 255;
+	while (str) {
 		int strength_1 = str & 3;
 		if (strength_1) {
 			deblock_luma_vert<1, 4, 1>(a, b2, luma, tc0[strength_1 - 1], stride);
@@ -9994,7 +10000,8 @@ static inline void deblock_chroma_vert_str4(int a, int b2, uint8_t *chroma, int 
 
 static inline void deblock_chroma_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *chroma, int str, int stride)
 {
-	for (int i = 0; i < 4; ++i) {
+	str &= 255;
+	while (str) {
 		int strength_1 = str & 3;
 		if (strength_1) {
 			deblock_luma_vert<1, 2, 2>(a, b2, chroma, tc0[strength_1 - 1], stride);
@@ -10040,9 +10047,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 					if (curr->str4_horiz) {
 						deblock_luma_horiz_str4(a, b2, luma, stride);
 					} else {
-						if (str & 255) {
-							deblock_luma_horiz_str1_3(a, b2, tc0, luma, str, stride);
-						}
+						deblock_luma_horiz_str1_3(a, b2, tc0, luma, str, stride);
 					}
 				}
 				for (int c = 0; c < 2; ++c) {
@@ -10052,9 +10057,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						if (curr->str4_horiz) {
 							deblock_chroma_horiz_str4(a, b2, chroma + c, stride);
 						} else {
-							if (str & 255) {
-								deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + c, str, stride);
-							}
+							deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + c, str, stride);
 						}
 					}
 				}
@@ -10063,27 +10066,25 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
 				if (a) {
 					uint32_t str_tmp = str >> 8;
-					if (str_tmp & 255) {
-						deblock_luma_horiz_str1_3(a, b2, tc0, luma + 4, str_tmp, stride);
-					}
+					deblock_luma_horiz_str1_3(a, b2, tc0, luma + 4, str_tmp, stride);
 					str_tmp >>= 8;
-					if (str_tmp & 255) {
-						deblock_luma_horiz_str1_3(a, b2, tc0, luma + 8, str_tmp, stride);
-					}
+					deblock_luma_horiz_str1_3(a, b2, tc0, luma + 8, str_tmp, stride);
 					str_tmp >>= 8;
-					if (str_tmp & 255) {
-						deblock_luma_horiz_str1_3(a, b2, tc0, luma + 12, str_tmp, stride);
-					}
+					deblock_luma_horiz_str1_3(a, b2, tc0, luma + 12, str_tmp, stride);
 				}
 				str >>= 16;
-				for (int c = 0; c < 2; ++c) {
-					if (curr->qpy != curr->qpc[c]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+				if (str & 0xff) {
+					if (curr->qpy != curr->qpc[0]) {
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[0], alpha_offset, beta_offset);
 					}
 					if (a) {
-						if (str & 0xff) {
-							deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8 + c, str, stride);
-						}
+						deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8, str, stride);
+					}
+					if (curr->qpc[0] != curr->qpc[1]) {
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[1], alpha_offset, beta_offset);
+					}
+					if (a) {
+						deblock_chroma_horiz_str1_3(a, b2, tc0, chroma + 8 + 1, str, stride);
 					}
 				}
 			}
@@ -10096,9 +10097,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 					if (curr->str4_vert) {
 						deblock_luma_vert_str4(a, b2, luma, stride);
 					} else {
-						if (str & 255) {
-							deblock_luma_vert_str1_3(a, b2, tc0, luma, str, stride);
-						}
+						deblock_luma_vert_str1_3(a, b2, tc0, luma, str, stride);
 					}
 				}
 				for (int c = 0; c < 2; ++c) {
@@ -10108,9 +10107,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 						if (curr->str4_vert) {
 							deblock_chroma_vert_str4(a, b2, chroma + c, stride);
 						} else {
-							if (str & 255) {
-								deblock_chroma_vert_str1_3(a, b2, tc0, chroma + c, str, stride);
-							}
+							deblock_chroma_vert_str1_3(a, b2, tc0, chroma + c, str, stride);
 						}
 					}
 				}
@@ -10119,27 +10116,25 @@ static inline void deblock_pb(h264d_mb_current *mb)
 				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
 				if (a) {
 					uint32_t str_tmp = str >> 8;
-					if (str_tmp & 255) {
-						deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 4, str_tmp, stride);
-					}
+					deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 4, str_tmp, stride);
 					str_tmp >>= 8;
-					if (str_tmp & 255) {
-						deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 8, str_tmp, stride);
-					}
+					deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 8, str_tmp, stride);
 					str_tmp >>= 8;
-					if (str_tmp & 255) {
-						deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 12, str_tmp, stride);
-					}
+					deblock_luma_vert_str1_3(a, b2, tc0, luma + stride * 12, str_tmp, stride);
 				}
 				str >>= 16;
-				for (int c = 0; c < 2; ++c) {
-					if (curr->qpy != curr->qpc[c]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[c], alpha_offset, beta_offset);
+				if (str & 0xff) {
+					if (curr->qpy != curr->qpc[0]) {
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[0], alpha_offset, beta_offset);
 					}
 					if (a) {
-						if (str & 255) {
-							deblock_chroma_vert_str1_3(a, b2, tc0, chroma + stride * 4 + c, str, stride);
-						}
+						deblock_chroma_vert_str1_3(a, b2, tc0, chroma + stride * 4, str, stride);
+					}
+					if (curr->qpc[0] != curr->qpc[1]) {
+						a = AlphaBetaTc0(b2, &tc0, curr->qpc[1], alpha_offset, beta_offset);
+					}
+					if (a) {
+						deblock_chroma_vert_str1_3(a, b2, tc0, chroma + stride * 4 + 1, str, stride);
 					}
 				}
 			}
