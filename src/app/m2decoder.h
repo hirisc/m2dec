@@ -107,7 +107,7 @@ public:
 			}
 		}
 		while (!headers.empty()) {
-			headers.push_back(header_data_t(0, 0));
+			headers.push_back(header_data_t(reinterpret_cast<const uint8_t *>(0), 0));
 			func()->decode_picture(context());
 		}
 		if (indata_key) {
@@ -121,7 +121,7 @@ public:
 		m2d_frame_t frm;
 		int err = -1;
 		while (func()->peek_decoded_frame(context(), &frm, 0) <= 0) {
-			err = func()->decode_picture(context());
+ 			err = func()->decode_picture(context());
 			if (err < 0) {
 				while (func()->peek_decoded_frame(context(), &frm, 1)) {
 					post_dst(obj, frm);

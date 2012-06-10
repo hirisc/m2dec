@@ -18,7 +18,7 @@ typedef signed int int32_t;
 #include <stddef.h>
 #include <stdint.h>
 
-#elif defined(_M_IX86)
+#elif defined(_M_IX86) || defined(_M_AMD64)
 
 #undef __LIBM2DEC_API
 #ifdef _WINDLL
@@ -68,12 +68,8 @@ typedef unsigned char byte_t;
 #ifndef __x86_64__
 typedef unsigned long long uint64_t;
 #endif
-#if SIZEOF_INT_P > 4
-#define ENCBIT64
-typedef uint64_t cache_t;
-#else
-typedef unsigned int cache_t;
-#endif
+
+typedef uintptr_t cache_t;
 
 #ifdef __cplusplus
 }
