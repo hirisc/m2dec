@@ -102,6 +102,8 @@ inline __int64 __fastcall gettimer() {
 		rdtsc
 	}
 }
+#elif defined(_M_AMD64)
+#define gettimer __rdtsc
 #endif
 
 static void RecordTime(int mark)
