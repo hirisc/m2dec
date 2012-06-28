@@ -1,1 +1,1 @@
-EXTRA_DIST = DefaultSession.hsf h264dec.hwp
+EXTRA_DIST = h264dec.hwp
