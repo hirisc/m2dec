@@ -317,7 +317,128 @@ private:
 	}
 };
 
-void display_write(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
+#include <emmintrin.h>
+
+void display_write_halve(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
+		   uint16_t *pitches, int width, int height)
+{
+	const uint8_t *src = src_luma;
+	uint8_t *dst0 = dst[0];
+	int pitch0 = pitches[0];
+	int y = height - 1;
+	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
+	msk = _mm_shuffle_epi32(msk, 0);
+	do {
+		for (int x = 0; x < width; x += 16) {
+			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
+			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
+			__m128i d0l = _mm_and_si128(d0, msk);
+			__m128i d1l = _mm_and_si128(d1, msk);
+			d0 = _mm_srli_epi16(d0, 8);
+			d1 = _mm_srli_epi16(d1, 8);
+			d0 = _mm_add_epi16(d0, d0l);
+			d1 = _mm_add_epi16(d1, d1l);
+			__m128i d2 = _mm_load_si128((__m128i const *)&src[x * 2 + src_stride]);
+			__m128i d3 = _mm_load_si128((__m128i const *)&src[x * 2 + 16 + src_stride]);
+			__m128i d2l = _mm_and_si128(d2, msk);
+			__m128i d3l = _mm_and_si128(d3, msk);
+			d0 = _mm_add_epi16(d0, d2l);
+			d1 = _mm_add_epi16(d1, d3l);
+			d2 = _mm_srli_epi16(d2, 8);
+			d3 = _mm_srli_epi16(d3, 8);
+			d0 = _mm_add_epi16(d0, d2);
+			d1 = _mm_add_epi16(d1, d3);
+			d0 = _mm_srli_epi16(d0, 2);
+			d1 = _mm_srli_epi16(d1, 2);
+			d0 = _mm_packus_epi16(d0, d1);
+			_mm_storeu_si128((__m128i *)&dst0[x], d0);
+		}
+		src += src_stride * 2;
+		dst0 += pitch0;
+	} while (--y);
+
+	src = src_chroma;
+	dst0 = dst[1];
+	uint8_t *dst1 = dst[2];
+	width = width >> 1;
+	height = height >> 1;
+	src_stride *= 2;
+	pitch0 = pitches[1];
+	int pitch1 = pitches[2];
+	do {
+		for (int x = 0; x < width; x += 8) {
+			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 4]);
+			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 4 + 16]);
+			__m128i d0l = _mm_and_si128(d0, msk);
+			__m128i d1l = _mm_and_si128(d1, msk);
+			d0 = _mm_srli_epi16(d0, 8);
+			d1 = _mm_srli_epi16(d1, 8);
+			d0l = _mm_packus_epi16(d0l, d1l);
+			d0 = _mm_packus_epi16(d0, d1);
+			d0l = _mm_and_si128(d0l, msk);
+			d0 = _mm_and_si128(d0, msk);
+			d0l = _mm_packus_epi16(d0l, d0l);
+			d0 = _mm_packus_epi16(d0, d0);
+			_mm_storel_epi64((__m128i *)&dst0[x], d0l);
+			_mm_storel_epi64((__m128i *)&dst1[x], d0);
+		}
+		src += src_stride;
+		dst0 += pitch0;
+		dst1 += pitch1;
+	} while (--height);
+}
+
+void display_write_normal(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
+		   uint16_t *pitches, int width, int height)
+{
+	const uint8_t *src = src_luma;
+	uint8_t *dst0 = dst[0];
+	int pitch0 = pitches[0];
+	int y = height - 1;
+	do {
+		for (int x = 0; x < width; x += 32) {
+			__m128i d0 = _mm_load_si128((__m128i const *)&src[x]);
+			__m128i d1 = _mm_load_si128((__m128i const *)&src[x + 16]);
+			_mm_storeu_si128((__m128i *)&dst0[x], d0);
+			_mm_storeu_si128((__m128i *)&dst0[x + 16], d1);
+		}
+		src += src_stride;
+		dst0 += pitch0;
+	} while (--y);
+	memcpy(dst0, src, width);
+
+	src = src_chroma;
+	dst0 = dst[1];
+	uint8_t *dst1 = dst[2];
+	height = (height >> 1) - 1;
+	pitch0 = pitches[1];
+	int pitch1 = pitches[2];
+	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
+	msk = _mm_shuffle_epi32(msk, 0);
+	do {
+		for (int x = 0; x < width; x += 16) {
+			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
+			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
+			__m128i d0l = _mm_and_si128(d0, msk);
+			__m128i d1l = _mm_and_si128(d1, msk);
+			d0 = _mm_srli_epi16(d0, 8);
+			d1 = _mm_srli_epi16(d1, 8);
+			d0l = _mm_packus_epi16(d0l, d1l);
+			d0 = _mm_packus_epi16(d0, d1);
+			_mm_storeu_si128((__m128i *)&dst0[x], d0l);
+			_mm_storeu_si128((__m128i *)&dst1[x], d0);
+		}
+		src += src_stride;
+		dst0 += pitch0;
+		dst1 += pitch1;
+	} while (--height);
+	for (int j = 0; j < width; j += 2) {
+		dst0[j] = src[j];
+		dst1[j] = src[j + 1];
+	}
+}
+
+void display_write_small(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
 		   uint16_t *pitches, int width, int height)
 {
 	uint8_t *dst0 = dst[0];
@@ -355,7 +476,7 @@ static void BlameUser() {
 		"\t-f frame_num(3-256) : specify number of frames before display.\n"
 		"\t-e : DPB emptify mode\n"
 		"\t-t interval : specify interval of each frame in ms unit\n");
-	exit(-1);
+	exit(1);
 }
 
 struct DeleteFw {
@@ -482,12 +603,15 @@ struct UniSurface {
 	SDL_Surface *surface;
 	SDL_Overlay *yuv;
 	SDL_Rect rect;
+	int scale_;
+	void (*display_write)(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride, uint16_t *pitches, int width, int height);
 #endif /* ENABLE_DISPLAY */
 	int suspended_;
 	void *id_;
 	UniSurface() :
 #ifdef ENABLE_DISPLAY
 		yuv(0),
+		scale_(1),
 #endif /* ENABLE_DISPLAY */
 		suspended_(0), id_(0) {
 #ifdef ENABLE_DISPLAY
@@ -562,11 +686,21 @@ private:
 		}
 	}
 	void change(const Frame& out) {
-		int width = rect.w;
-		int height = rect.h;
+		int width = rect.w * scale_;
+		int height = rect.h * scale_;
 		if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
 			width = out.width - out.crop[1];
 			height = out.height - out.crop[3];
+			if ((1440 < width) || (720 < height)) {
+				scale_ = 2;
+				width >>= 1;
+				height >>= 1;
+				display_write = display_write_halve;
+			} else if ((32 <= width) && (2 < height)) {
+				display_write = display_write_normal;
+			} else {
+				display_write = display_write_small;
+			}
 			rect.w = width;
 			rect.h = height;
 			surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);

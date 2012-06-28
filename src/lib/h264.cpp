@@ -28,7 +28,15 @@
 #include <stdlib.h>
 #include <limits.h>
 
-#ifdef __RENESAS_VERSION__
+#if defined(_M_IX86) || defined(_M_AMD64)
+#define ALIGN16VC __declspec(align(16))
+#else
+#define ALIGN16VC
+#endif
+#if (defined(__GNUC__) && defined(__SSE2__)) || defined(_M_IX86) || defined(_M_AMD64)
+#define X86ASM
+#include <emmintrin.h>
+#elif defined(__RENESAS_VERSION__)
 extern "C" {
 void exit(int);
 }
@@ -1987,7 +1995,7 @@ static inline int run_before(dec_bits *st, int zeros_left)
 	return r;
 }
 
-static const int8_t inverse_zigzag4x4[2][16] = {
+static const int8_t inverse_zigzag4x4dc[2][16] = {
 	{
 		0, 1, 4, 8,
 		5, 2, 3, 6,
@@ -2001,6 +2009,23 @@ static const int8_t inverse_zigzag4x4[2][16] = {
 		3, 7, 11, 15
 	}
 };
+
+#if 1
+static const int8_t inverse_zigzag4x4[2][16] = {
+	{
+		0, 4, 1, 2,
+		5, 8, 12, 9,
+		6, 3, 7, 10,
+		13, 14, 11, 15
+	},
+	{
+		0, 1, 4, 2,
+		3, 5, 6, 7,
+		8, 9, 10, 11,
+		12, 13, 14, 15
+	}
+};
+#endif
 
 static const int8_t inverse_zigzag2x2[2][4] = {
 	{0, 1, 2, 3},
@@ -2031,7 +2056,7 @@ static const int8_t inverse_zigzag8x8[2][64] = {
 };
 
 static const int8_t * const inverse_zigzag[6] = {
-	inverse_zigzag4x4[0],
+	inverse_zigzag4x4dc[0],
 	inverse_zigzag4x4[0],
 	inverse_zigzag4x4[0],
 	inverse_zigzag2x2[0],
@@ -2174,36 +2199,207 @@ static void ac4x4transform_dconly_chroma(uint8_t *dst, int dc, int stride)
 	} while (--y);
 }
 
-static inline void transform4x4_vert_loop(int *dst, const int *src)
-{
-	int i = 4;
-	int d0 = *src++ + 32;
-	do {
-		int d1 = *src++;
-		int d2 = *src++;
-		int d3 = *src++;
-		int t0 = d0 + d2;
-		int t1 = d0 - d2;
-		int t2 = (d1 >> 1) - d3;
-		int t3 = d1 + (d3 >> 1);
-		dst[0] = t0 + t3;
-		dst[4] = t1 + t2;
-		dst[8] = t1 - t2;
-		dst[12] = t0 - t3;
-		d0 = *src++;
-		dst += 1;
-	} while (--i);
+#ifdef X86ASM
+#define TRANSPOSE4x4(a, b, c, d) {\
+	__m128i t0 = _mm_unpackhi_epi32(a, c);\
+	a = _mm_unpacklo_epi32(a, c);\
+	__m128i t1 = _mm_unpackhi_epi32(b, d);\
+	b = _mm_unpacklo_epi32(b, d);\
+	c = _mm_unpacklo_epi32(t0, t1);\
+	d = _mm_unpackhi_epi32(t0, t1);\
+	t0 = _mm_unpackhi_epi32(a, b);\
+	a = _mm_unpacklo_epi32(a, b);\
+	b = t0;\
 }
 
-template <int N>
-static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int stride)
+static void ac4x4transform_acdc_luma(uint8_t *dst, const int *coeff, int stride)
+{
+	__m128i d0 = _mm_load_si128((__m128i const *)coeff);
+	__m128i rnd = _mm_cvtsi32_si128(32);
+	__m128i d1 = _mm_load_si128((__m128i const *)(coeff + 4));
+	__m128i d2 = _mm_load_si128((__m128i const *)(coeff + 8));
+	__m128i d3 = _mm_load_si128((__m128i const *)(coeff + 12));
+	d0 = _mm_add_epi32(d0, rnd);
+	__m128i t0 = _mm_add_epi32(d0, d2);
+	__m128i t1 = _mm_sub_epi32(d0, d2);
+	__m128i t2 = _mm_srai_epi32(d1, 1);
+	__m128i t3 = _mm_srai_epi32(d3, 1);
+	t2 = _mm_sub_epi32(t2, d3);
+	t3 = _mm_add_epi32(t3, d1);
+	d0 = _mm_add_epi32(t0, t3);
+	d1 = _mm_add_epi32(t1, t2);
+	d2 = _mm_sub_epi32(t1, t2);
+	d3 = _mm_sub_epi32(t0, t3);
+	TRANSPOSE4x4(d0, d1, d2, d3);
+	t0 = _mm_add_epi32(d0, d2);
+	t1 = _mm_sub_epi32(d0, d2);
+	t2 = _mm_srai_epi32(d1, 1);
+	t3 = _mm_srai_epi32(d3, 1);
+	t2 = _mm_sub_epi32(t2, d3);
+	t3 = _mm_add_epi32(t3, d1);
+	d0 = _mm_add_epi32(t0, t3);
+	d1 = _mm_add_epi32(t1, t2);
+	d2 = _mm_sub_epi32(t1, t2);
+	d3 = _mm_sub_epi32(t0, t3);
+	t1 = _mm_set_epi32(*(int *)(dst + stride * 3), *(int *)(dst + stride * 2), *(int *)(dst + stride), *(int *)dst);
+	d0 = _mm_srai_epi32(d0, 6);
+	d1 = _mm_srai_epi32(d1, 6);
+	d2 = _mm_srai_epi32(d2, 6);
+	d3 = _mm_srai_epi32(d3, 6);
+	t0 = _mm_setzero_si128();
+	d2 = _mm_packs_epi32(d2, d3);
+	d0 = _mm_packs_epi32(d0, d1);
+	t2 = _mm_unpackhi_epi8(t1, t0);
+	t1 = _mm_unpacklo_epi8(t1, t0);
+	d2 = _mm_adds_epi16(d2, t2);
+	d0 = _mm_adds_epi16(d0, t1);
+	d0 = _mm_packus_epi16(d0, d2);
+	_mm_store_ss((float *)dst, _mm_castsi128_ps(d0));
+	dst += stride;
+	d0 = _mm_shuffle_epi32(d0, 0x39);
+	_mm_store_ss((float *)dst, _mm_castsi128_ps(d0));
+	dst += stride;
+	d0 = _mm_shuffle_epi32(d0, 0x39);
+	_mm_store_ss((float *)dst, _mm_castsi128_ps(d0));
+	dst += stride;
+	d0 = _mm_shuffle_epi32(d0, 0x39);
+	_mm_store_ss((float *)dst, _mm_castsi128_ps(d0));
+}
+
+static void ac4x4transform_acdc_chroma(uint8_t *dst, const int *coeff, int stride)
+{
+	__m128i d0 = _mm_load_si128((__m128i const *)coeff);
+	__m128i rnd = _mm_cvtsi32_si128(32);
+	__m128i d1 = _mm_load_si128((__m128i const *)(coeff + 4));
+	__m128i d2 = _mm_load_si128((__m128i const *)(coeff + 8));
+	__m128i d3 = _mm_load_si128((__m128i const *)(coeff + 12));
+	d0 = _mm_add_epi32(d0, rnd);
+	__m128i t0 = _mm_add_epi32(d0, d2);
+	__m128i t1 = _mm_sub_epi32(d0, d2);
+	__m128i t2 = _mm_srai_epi32(d1, 1);
+	__m128i t3 = _mm_srai_epi32(d3, 1);
+	t2 = _mm_sub_epi32(t2, d3);
+	t3 = _mm_add_epi32(t3, d1);
+	d0 = _mm_add_epi32(t0, t3);
+	d1 = _mm_add_epi32(t1, t2);
+	d2 = _mm_sub_epi32(t1, t2);
+	d3 = _mm_sub_epi32(t0, t3);
+	TRANSPOSE4x4(d0, d1, d2, d3);
+	t0 = _mm_add_epi32(d0, d2);
+	t1 = _mm_sub_epi32(d0, d2);
+	t2 = _mm_srai_epi32(d1, 1);
+	t3 = _mm_srai_epi32(d3, 1);
+	t2 = _mm_sub_epi32(t2, d3);
+	t3 = _mm_add_epi32(t3, d1);
+	d0 = _mm_add_epi32(t0, t3);
+	d1 = _mm_add_epi32(t1, t2);
+	d2 = _mm_sub_epi32(t1, t2);
+	d3 = _mm_sub_epi32(t0, t3);
+	d0 = _mm_srai_epi32(d0, 6);
+	d1 = _mm_srai_epi32(d1, 6);
+	d2 = _mm_srai_epi32(d2, 6);
+	d3 = _mm_srai_epi32(d3, 6);
+	d2 = _mm_packs_epi32(d2, d3);
+	d0 = _mm_packs_epi32(d0, d1);
+	__m128i mask = _mm_cvtsi32_si128(0x0000ffff << (((uintptr_t)dst & 1) * 16));
+	dst = (uint8_t *)((uintptr_t)dst & ~1);
+	t0 = _mm_castpd_si128(_mm_load_sd((double const *)dst));
+	t2 = _mm_castpd_si128(_mm_load_sd((double const *)(dst + stride * 2)));
+	t0 = _mm_castpd_si128(_mm_loadh_pd(_mm_castsi128_pd(t0), (double const *)(dst + stride)));
+	t2 = _mm_castpd_si128(_mm_loadh_pd(_mm_castsi128_pd(t2), (double const *)(dst + stride * 3)));
+	mask = _mm_shuffle_epi32(mask, 0);
+	d3 = _mm_unpackhi_epi16(d2, d2);
+	d2 = _mm_unpacklo_epi16(d2, d2);
+	d1 = _mm_unpackhi_epi16(d0, d0);
+	d0 = _mm_unpacklo_epi16(d0, d0);
+	d3 = _mm_and_si128(d3, mask);
+	d2 = _mm_and_si128(d2, mask);
+	d1 = _mm_and_si128(d1, mask);
+	d0 = _mm_and_si128(d0, mask);
+	mask = _mm_setzero_si128();
+	t1 = _mm_unpackhi_epi8(t0, mask);
+	t0 = _mm_unpacklo_epi8(t0, mask);
+	t3 = _mm_unpackhi_epi8(t2, mask);
+	t2 = _mm_unpacklo_epi8(t2, mask);
+	d1 = _mm_adds_epi16(d1, t1);
+	d0 = _mm_adds_epi16(d0, t0);
+	d3 = _mm_adds_epi16(d3, t3);
+	d2 = _mm_adds_epi16(d2, t2);
+	d0 = _mm_packus_epi16(d0, d1);
+	d2 = _mm_packus_epi16(d2, d3);
+	_mm_storel_epi64((__m128i *)dst, d0);
+	dst += stride;
+	d0 = _mm_shuffle_epi32(d0, 0x4e);
+	_mm_storel_epi64((__m128i *)dst, d0);
+	dst += stride;
+	_mm_storel_epi64((__m128i *)dst, d2);
+	dst += stride;
+	d2 = _mm_shuffle_epi32(d2, 0x4e);
+	_mm_storel_epi64((__m128i *)dst, d2);
+}
+
+#else
+static inline void transform4x4_vert_loop(int *dst, const int *src)
+{
+	int t0, t1, t2, t3;
+	int d0 = src[0] + 32;
+	int d1 = src[4];
+	int d2 = src[8];
+	int d3 = src[12];
+	t0 = d0 + d2;
+	t1 = d0 - d2;
+	t2 = (d1 >> 1) - d3;
+	t3 = d1 + (d3 >> 1);
+	dst[0] = t0 + t3;
+	dst[1] = t1 + t2;
+	dst[2] = t1 - t2;
+	dst[3] = t0 - t3;
+	d0 = src[1];
+	d1 = src[5];
+	d2 = src[9];
+	d3 = src[13];
+	t0 = d0 + d2;
+	t1 = d0 - d2;
+	t2 = (d1 >> 1) - d3;
+	t3 = d1 + (d3 >> 1);
+	dst[4] = t0 + t3;
+	dst[5] = t1 + t2;
+	dst[6] = t1 - t2;
+	dst[7] = t0 - t3;
+	d0 = src[2];
+	d1 = src[6];
+	d2 = src[10];
+	d3 = src[14];
+	t0 = d0 + d2;
+	t1 = d0 - d2;
+	t2 = (d1 >> 1) - d3;
+	t3 = d1 + (d3 >> 1);
+	dst[8] = t0 + t3;
+	dst[9] = t1 + t2;
+	dst[10] = t1 - t2;
+	dst[11] = t0 - t3;
+	d0 = src[3];
+	d1 = src[7];
+	d2 = src[11];
+	d3 = src[15];
+	t0 = d0 + d2;
+	t1 = d0 - d2;
+	t2 = (d1 >> 1) - d3;
+	t3 = d1 + (d3 >> 1);
+	dst[12] = t0 + t3;
+	dst[13] = t1 + t2;
+	dst[14] = t1 - t2;
+	dst[15] = t0 - t3;
+}
+
+static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int stride, int gap)
 {
 	int x = 4;
 	do {
+		int e1 = src[4];
+		int e2 = src[8];
+		int e3 = src[12];
 		int e0 = *src++;
-		int e1 = *src++;
-		int e2 = *src++;
-		int e3 = *src++;
 		uint8_t *d = dst;
 		int f0 = e0 + e2;
 		int f1 = e0 - e2;
@@ -2220,24 +2416,34 @@ static inline void transform4x4_horiz_loop(uint8_t *dst, const int *src, int str
 		d += stride;
 		t0 = *d + ((f0 - f3) >> 6);
 		*d = CLIP255C(t0);
-		dst += N;
+		dst += gap;
 	} while (--x);
 }
 
 /** Reconstruct 4x4 coefficients.
  */
-template <int N>
-static void ac4x4transform_acdc(uint8_t *dst, const int *coeff, int stride)
+static void ac4x4transform_acdc_base(uint8_t *dst, const int *coeff, int stride, int gap)
 {
 	int tmp[16];
 	transform4x4_vert_loop(tmp, coeff);
-	transform4x4_horiz_loop<N>(dst, tmp, stride);
+	transform4x4_horiz_loop(dst, tmp, stride, gap);
 }
+
+static inline void ac4x4transform_acdc_luma(uint8_t *dst, const int *coeff, int stride)
+{
+	ac4x4transform_acdc_base(dst, coeff, stride, 1);
+}
+
+static inline void ac4x4transform_acdc_chroma(uint8_t *dst, const int *coeff, int stride)
+{
+	ac4x4transform_acdc_base(dst, coeff, stride, 2);
+}
+#endif
 
 template <typename F0>
 static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail, F0 ResidualBlock)
 {
-	int coeff[16];
+	int ALIGN16VC coeff[16] __attribute__((aligned(16)));
 	int dc[2][4];
 	uint8_t *chroma;
 	int stride;
@@ -2280,25 +2486,25 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 			}
 			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, 15, mb->qmatc_p[i], avail, 18 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc<2>(chroma, coeff, stride);
+				ac4x4transform_acdc_chroma(chroma, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma, *dcp++, stride);
 			}
 			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, 15, mb->qmatc_p[i], avail, 19 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc<2>(chroma + 8, coeff, stride);
+				ac4x4transform_acdc_chroma(chroma + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + 8, *dcp++, stride);
 			}
 			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, 15, mb->qmatc_p[i], avail, 20 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc<2>(chroma + stride * 4, coeff, stride);
+				ac4x4transform_acdc_chroma(chroma + stride * 4, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4, *dcp++, stride);
 			}
 			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, mb->qmatc_p[i], avail, 21 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
-				ac4x4transform_acdc<2>(chroma + stride * 4 + 8, coeff, stride);
+				ac4x4transform_acdc_chroma(chroma + stride * 4 + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4 + 8, *dcp++, stride);
 			}
@@ -2985,7 +3191,7 @@ template <typename F>
 static inline void luma_intra4x4_with_residual(h264d_mb_current *mb, dec_bits *st, uint32_t cbp, int avail, int avail_intra, const int8_t *pr, int stride,
 						    F ResidualBlock)
 {
-	int coeff[16];
+	int ALIGN16VC coeff[16] __attribute__((aligned(16)));
 	uint32_t top, left;
 	int c0, c1, c2, c3, c4, c5;
 	uint8_t *luma = mb->luma;
@@ -3834,59 +4040,59 @@ static void acNxNtransform_dconly(uint8_t *dst, int dc, int stride)
 	}
 }
 
+// t0 = src[0] + src[4];
+// t1 = src[5] - src[3] - src[7] - (src[7] >> 1);
+// t2 = src[0] - src[4];
+// t3 = src[1] + src[7] - src[3] - (src[3] >> 1);
+// t4 = (src[2] >> 1) - src[6];
+// t5 = src[5] + (src[5] >> 1) + src[7] - src[1];
+// t6 = src[2] + (src[6] >> 1);
+// t7 = src[3] + src[5] + src[1] + (src[1] >> 1);
+
 /** Assumes that parameter t2 has initial value src[0] already. Other t0, t1, t3,... don't have initial value.
  */
-static inline void ac8x8transform_interim(const int *src, int& t0, int& t1, int& t2, int& t3, int& t4, int& t5, int& t6, int& t7)
-{
-//		t0 = src[0] + src[4];
-//		t1 = src[5] - src[3] - src[7] - (src[7] >> 1);
-//		t2 = src[0] - src[4];
-//		t3 = src[1] + src[7] - src[3] - (src[3] >> 1);
-//		t4 = (src[2] >> 1) - src[6];
-//		t5 = src[5] + (src[5] >> 1) + src[7] - src[1];
-//		t6 = src[2] + (src[6] >> 1);
-//		t7 = src[3] + src[5] + src[1] + (src[1] >> 1);
-	{
-		int s = src[4];
-		t0 = t2 + s;
-		t2 = t2 - s;
-	}
-	{
-		int s = src[6];
-		t6 = src[2];
-		t4 = (t6 >> 1) - s;
-		t6 = t6 + (s >> 1);
-	}
-	{
-		int s1 = src[1];
-		int s7 = src[7];
-		t3 = src[3];
-		t5 = src[5];
-		t1 = t5 - t3 - s7 - (s7 >> 1);
-		t7 = t3 + t5 + s1 + (s1 >> 1);
-		t3 = s1 + s7 - t3 - (t3 >> 1);
-		t5 = t5 + (t5 >> 1) + s7 - s1;
-	}
-	{
-		int s = t0;
-		t0 = t0 + t6;
-		t6 = s - t6;
-	}
-	{
-		int s = t2;
-		t2 = t2 + t4;
-		t4 = s - t4;
-	}
-	{
-		int s = t1;
-		t1 = t1 + (t7 >> 2);
-		t7 = t7 - (s >> 2);
-	}
-	{
-		int s = t3;
-		t3 = t3 + (t5 >> 2);
-		t5 = (s >> 2) - t5;
-	}
+#define ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7) {\
+	{\
+		int s = src[4];\
+		t0 = t2 + s;\
+		t2 = t2 - s;\
+	}\
+	{\
+		int s = src[6];\
+		t6 = src[2];\
+		t4 = (t6 >> 1) - s;\
+		t6 = t6 + (s >> 1);\
+	}\
+	{\
+		int s1 = src[1];\
+		int s7 = src[7];\
+		t3 = src[3];\
+		t5 = src[5];\
+		t1 = t5 - t3 - s7 - (s7 >> 1);\
+		t7 = t3 + t5 + s1 + (s1 >> 1);\
+		t3 = s1 + s7 - t3 - (t3 >> 1);\
+		t5 = t5 + (t5 >> 1) + s7 - s1;\
+	}\
+	{\
+		int s = t0;\
+		t0 = t0 + t6;\
+		t6 = s - t6;\
+	}\
+	{\
+		int s = t2;\
+		t2 = t2 + t4;\
+		t4 = s - t4;\
+	}\
+	{\
+		int s = t1;\
+		t1 = t1 + (t7 >> 2);\
+		t7 = t7 - (s >> 2);\
+	}\
+	{\
+		int s = t3;\
+		t3 = t3 + (t5 >> 2);\
+		t5 = (s >> 2) - t5;\
+	}\
 }
 
 static inline void ac8x8transform_horiz(int *dst, const int *src)
@@ -3896,6 +4102,21 @@ static inline void ac8x8transform_horiz(int *dst, const int *src)
 	do {
 		int t0, t1, t3, t4, t5, t6, t7;
 		ac8x8transform_interim(src, t0, t1, t2, t3, t4, t5, t6, t7);
+#if 1
+		dst[0] = t0 + t7;
+		dst[8] = t2 + t5;
+		dst += 16;
+		dst[0] = t4 + t3;
+		dst[8] = t6 + t1;
+		dst += 16;
+		dst[0] = t6 - t1;
+		dst[8] = t4 - t3;
+		dst += 16;
+		dst[0] = t2 - t5;
+		dst[8] = t0 - t7;
+		src += 8;
+		dst = dst - 16 * 3 + 1;
+#else
 		dst[0] = t0 + t7;
 		dst[8] = t2 + t5;
 		dst[16] = t4 + t3;
@@ -3906,6 +4127,7 @@ static inline void ac8x8transform_horiz(int *dst, const int *src)
 		dst[56] = t0 - t7;
 		src += 8;
 		dst += 1;
+#endif
 		t2 = src[0];
 	} while (--i);
 }
@@ -4178,14 +4400,13 @@ static int mb_intra16x16pred_planer(uint8_t *dst, int stride, int avail)
 	dst += 16 + (stride * 15);
 	p0 = p0 + ((h + v) * 8) + 16;
 	y = 16;
+	stride -= 16;
 	do {
-		uint8_t *d = dst;
 		int x = 16;
 		t0 = p0;
-		d = dst;
 		do {
 			int s = t0 >> 5;
-			*--d = CLIP255C(s);
+			*--dst = CLIP255C(s);
 			t0 -= h;
 		} while (--x);
 		p0 -= v;
@@ -4258,7 +4479,7 @@ static void intra16x16_dc_transform(const int *src, int *dst)
 static inline void ac4x4transform_maybe(uint8_t *dst, const int *coeff, int stride, int num_coeff)
 {
 	if (num_coeff) {
-		ac4x4transform_acdc<1>(dst, coeff, stride);
+		ac4x4transform_acdc_luma(dst, coeff, stride);
 	}
 }
 
@@ -4266,7 +4487,7 @@ static inline void ac4x4transform(uint8_t *dst, int *coeff, int stride, int num_
 {
 	if (num_coeff) {
 		coeff[0] = dc;
-		ac4x4transform_acdc<1>(dst, coeff, stride);
+		ac4x4transform_acdc_luma(dst, coeff, stride);
 	} else {
 		acNxNtransform_dconly<4>(dst, dc, stride);
 	}
@@ -4351,7 +4572,7 @@ static int mb_intra16x16_acdc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 				F2 ResidualBlock)
 {
 	int dc[16];
-	int coeff[16];
+	int ALIGN16VC coeff[16] __attribute__((aligned(16)));
 	uint8_t *luma;
 	int stride;
 	int avail_intra;
@@ -4651,21 +4872,38 @@ static int mb_intrapcm(h264d_mb_current *mb, const mb_code *mbc, dec_bits *st, i
 	return 0;
 }
 
+static void copy_inter16x_align8(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	do {
+		((uint64_t *)dst)[0] = ((uint64_t *)src)[0];
+		((uint64_t *)dst)[1] = ((uint64_t *)src)[1];
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
 
-static void copy_inter16x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+static void copy_inter8x_align8(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	do {
+		((uint64_t *)dst)[0] = ((uint64_t *)src)[0];
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
+
+static void copy_inter16x_align4(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
 {
 	do {
 		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
 		((uint32_t *)dst)[1] = ((uint32_t *)src)[1];
 		((uint32_t *)dst)[2] = ((uint32_t *)src)[2];
 		((uint32_t *)dst)[3] = ((uint32_t *)src)[3];
-		VC_CHECK;
 		dst += stride;
 		src += src_stride;
 	} while (--height);
 }
 
-static void copy_inter8x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+static void copy_inter8x_align4(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
 {
 	do {
 		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
@@ -4675,7 +4913,7 @@ static void copy_inter8x_align(const uint8_t *src, uint8_t *dst, int height, int
 	} while (--height);
 }
 
-static void copy_inter4x_align(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+static void copy_inter4x_align4(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
 {
 	do {
 		((uint32_t *)dst)[0] = ((uint32_t *)src)[0];
@@ -4684,33 +4922,45 @@ static void copy_inter4x_align(const uint8_t *src, uint8_t *dst, int height, int
 	} while (--height);
 }
 
-static void (* const copy_inter_align[3])(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride) = {
-	copy_inter4x_align,
-	copy_inter8x_align,
-	copy_inter16x_align
-};
+template<int WIDTH>
+static void copy_inter_align2(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	do {
+		const int16_t *s = (const int16_t *)src;
+		for (int i = 0; i < WIDTH / 2; ++i) {
+			((uint16_t *)dst)[i] = *s++;
+		}
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
+
+template<int WIDTH>
+static void copy_inter_align1(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride)
+{
+	src_stride -= WIDTH;
+	do {
+		for (int i = 0; i < WIDTH; ++i) {
+			dst[i] = *src++;
+		}
+		dst += stride;
+		src += src_stride;
+	} while (--height);
+}
 
 static inline void copy_inter(const uint8_t *src, uint8_t *dst, int width, int height, int src_stride, int stride)
 {
-	if (((intptr_t)src & 3) == 0) {
-		copy_inter_align[(unsigned)width >> 3](src, dst, height, src_stride, stride);
-	} else {
-		width = (unsigned)width >> 2;
-		do {
-			const uint8_t *s = src;
-			uint8_t *d = dst;
-			int x = width;
-			do {
-				d[0] = *s++;
-				d[1] = *s++;
-				d[2] = *s++;
-				d[3] = *s++;
-				d += 4;
-			} while (--x);
-			dst += stride;
-			src += src_stride;
-		} while (--height);
-	}
+	static void (* const copy_func[8][3])(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride) = {
+		{copy_inter4x_align4, copy_inter8x_align8, copy_inter16x_align8},
+		{copy_inter_align1<4>, copy_inter_align1<8>, copy_inter_align1<16>},
+		{copy_inter_align2<4>, copy_inter_align2<8>, copy_inter_align2<16>},
+		{copy_inter_align1<4>, copy_inter_align1<8>, copy_inter_align1<16>},
+		{copy_inter4x_align4, copy_inter8x_align4, copy_inter16x_align4},
+		{copy_inter_align1<4>, copy_inter_align1<8>, copy_inter_align1<16>},
+		{copy_inter_align2<4>, copy_inter_align2<8>, copy_inter_align2<16>},
+		{copy_inter_align1<4>, copy_inter_align1<8>, copy_inter_align1<16>},
+	};
+	copy_func[(intptr_t)src & 3][(unsigned)width >> 3](src, dst, height, src_stride, stride);
 }
 
 static inline int inter_pred_mvoffset_luma(int mvint_x, int mvint_y, int stride)
@@ -4720,24 +4970,25 @@ static inline int inter_pred_mvoffset_luma(int mvint_x, int mvint_y, int stride)
 
 static inline void filter_chroma_horiz(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int frac, int src_stride, int dst_stride)
 {
-	int c0 = (8 - frac) * 8;
 	int c1 = frac * 8;
-	int width = size.v[0] >> 1;
+	int c0 = 64 - c1;
+	int width = size.v[0];
 	int height = size.v[1] >> 1;
+	src_stride = src_stride - width - 2;
+	dst_stride = dst_stride - width;
+	width >>= 1;
 	do {
 		int x = width;
-		const uint8_t *s = src;
-		uint8_t *d = dst;
-		int s0 = *s++;
-		int s1 = *s++;
+		int s0 = *src++;
+		int s1 = *src++;
 		do {
-			int s2 = *s++;
-			int s3 = *s++;
-			d[0] = (s2 * c1 + s0 * c0 + 32) >> 6;
-			d[1] = (s3 * c1 + s1 * c0 + 32) >> 6;
+			int s2 = *src++;
+			int s3 = *src++;
+			dst[0] = (s2 * c1 + s0 * c0 + 32) >> 6;
+			dst[1] = (s3 * c1 + s1 * c0 + 32) >> 6;
 			s0 = s2;
 			s1 = s3;
-			d += 2;
+			dst += 2;
 		} while (--x);
 		src += src_stride;
 		dst += dst_stride;
@@ -4746,63 +4997,175 @@ static inline void filter_chroma_horiz(const uint8_t *src, uint8_t *dst, const h
 
 static inline void filter_chroma_vert(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int frac, int src_stride, int dst_stride)
 {
-	int c0 = (8 - frac) * 8;
 	int c1 = frac * 8;
-	int width = size.v[0];
+	int c0 = 64 - c1;
+	int width = size.v[0] >> 1;
 	int height = size.v[1] >> 1;
-
 	do {
-		const uint8_t *s = src++;
-		uint8_t *d = dst++;
-		int t0 = *s;
+		const uint8_t *s = src;
+		uint8_t *d = dst;
+		int t0 = (s[0] << 16) | s[1];
 		s += src_stride;
 		int y = height;
 		do {
-			int t1 = *s;
-			*d = (t0 * c0 + t1 * c1 + 32) >> 6;
+			int t1 = (s[0] << 16) | s[1];
+			t0 = (t0 * c0 + t1 * c1 + 0x00200020) >> 6;
+			d[0] = t0 >> 16;
+			d[1] = t0;
 			t0 = t1;
 			s += src_stride;
 			d += dst_stride;
 		} while (--y);
+		src += 2;
+		dst += 2;
 	} while (--width);
 }
 
 static inline void filter_chroma_vert_horiz(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int fracx, int fracy, int src_stride, int stride)
 {
-	int c0, c1, c2, c3;
-
-	c0 = (8 - fracx) * (8 - fracy);
-	c3 = fracx * fracy;
-	c1 = fracx * (8 - fracy);
-	c2 = (8 - fracx) * fracy;
-	int width = size.v[0] >> 1;
+	int c1 = fracx * 8;
+	int c2 = fracy * 8;
+	int c3 = fracx * fracy;
+	int width = size.v[0];
 	int height = size.v[1] >> 1;
+#ifdef X86ASM
+	__m128i m0 = _mm_cvtsi32_si128(64 - c1 - c2 + c3);
+	__m128i m1 = _mm_cvtsi32_si128(c1 - c3);
+	__m128i m2 = _mm_cvtsi32_si128(c2 - c3);
+	__m128i m3 = _mm_cvtsi32_si128(c3);
+	__m128i rnd = _mm_cvtsi32_si128(0x00200020);
+	__m128i zero = _mm_setzero_si128();
+	m0 = _mm_shufflelo_epi16(m0, 0);
+	m1 = _mm_shufflelo_epi16(m1, 0);
+	m2 = _mm_shufflelo_epi16(m2, 0);
+	m3 = _mm_shufflelo_epi16(m3, 0);
+	rnd = _mm_shuffle_epi32(rnd, 0);
+	m0 = _mm_shuffle_epi32(m0, 0);
+	m1 = _mm_shuffle_epi32(m1, 0);
+	m2 = _mm_shuffle_epi32(m2, 0);
+	m3 = _mm_shuffle_epi32(m3, 0);
+	__m128i d0 = _mm_loadu_si128((__m128i const *)&src[0]);
+	__m128i d1 = _mm_loadu_si128((__m128i const *)&src[2]);
+	if (width == 16) {
+		__m128i d0h = _mm_unpackhi_epi8(d0, zero);
+		__m128i d1h = _mm_unpackhi_epi8(d1, zero);
+		d0 = _mm_unpacklo_epi8(d0, zero);
+		d1 = _mm_unpacklo_epi8(d1, zero);
+		do {
+			src += src_stride;
+			__m128i d2 = _mm_loadu_si128((__m128i const *)&src[0]);
+			__m128i d3 = _mm_loadu_si128((__m128i const *)&src[2]);
+			d0 = _mm_mullo_epi16(d0, m0);
+			d1 = _mm_mullo_epi16(d1, m1);
+			d0h = _mm_mullo_epi16(d0h, m0);
+			d1h = _mm_mullo_epi16(d1h, m1);
+			__m128i d2h = _mm_unpackhi_epi8(d2, zero);
+			__m128i d3h = _mm_unpackhi_epi8(d3, zero);
+			d2 = _mm_unpacklo_epi8(d2, zero);
+			d3 = _mm_unpacklo_epi8(d3, zero);
+			d0 = _mm_add_epi16(d0, d1);
+			d0h = _mm_add_epi16(d0h, d1h);
+			__m128i t2 = _mm_mullo_epi16(d2, m2);
+			__m128i t3 = _mm_mullo_epi16(d3, m3);
+			__m128i t2h = _mm_mullo_epi16(d2h, m2);
+			__m128i t3h = _mm_mullo_epi16(d3h, m3);
+			d0 = _mm_add_epi16(d0, rnd);
+			d0h = _mm_add_epi16(d0h, rnd);
+			d0 = _mm_add_epi16(d0, t2);
+			d0h = _mm_add_epi16(d0h, t2h);
+			d0 = _mm_add_epi16(d0, t3);
+			d0h = _mm_add_epi16(d0h, t3h);
+			d0 = _mm_srai_epi16(d0, 6);
+			d0h = _mm_srai_epi16(d0h, 6);
+			d0 = _mm_packus_epi16(d0, d0h);
+			_mm_store_si128((__m128i *)&dst[0], d0);
+			d0 = d2;
+			d0h = d2h;
+			d1 = d3;
+			d1h = d3h;
+			dst += stride;
+		} while (--height);
+	} else if (width == 8) {
+		d0 = _mm_unpacklo_epi8(d0, zero);
+		d1 = _mm_unpacklo_epi8(d1, zero);
+		do {
+			src += src_stride;
+			__m128i d2 = _mm_loadu_si128((__m128i const *)&src[0]);
+			__m128i d3 = _mm_loadu_si128((__m128i const *)&src[2]);
+			d0 = _mm_mullo_epi16(d0, m0);
+			d1 = _mm_mullo_epi16(d1, m1);
+			d2 = _mm_unpacklo_epi8(d2, zero);
+			d3 = _mm_unpacklo_epi8(d3, zero);
+			d0 = _mm_add_epi16(d0, d1);
+			__m128i t2 = _mm_mullo_epi16(d2, m2);
+			__m128i t3 = _mm_mullo_epi16(d3, m3);
+			d0 = _mm_add_epi16(d0, rnd);
+			d0 = _mm_add_epi16(d0, t2);
+			d0 = _mm_add_epi16(d0, t3);
+			d0 = _mm_srai_epi16(d0, 6);
+			d0 = _mm_packus_epi16(d0, zero);
+			_mm_storel_epi64((__m128i *)&dst[0], d0);
+			d0 = d2;
+			d1 = d3;
+			dst += stride;
+		} while (--height);
+	} else {
+		d0 = _mm_unpacklo_epi8(d0, zero);
+		d1 = _mm_unpacklo_epi8(d1, zero);
+		do {
+			src += src_stride;
+			__m128i d2 = _mm_loadu_si128((__m128i const *)&src[0]);
+			__m128i d3 = _mm_loadu_si128((__m128i const *)&src[2]);
+			d0 = _mm_mullo_epi16(d0, m0);
+			d1 = _mm_mullo_epi16(d1, m1);
+			d2 = _mm_unpacklo_epi8(d2, zero);
+			d3 = _mm_unpacklo_epi8(d3, zero);
+			d0 = _mm_add_epi16(d0, d1);
+			__m128i t2 = _mm_mullo_epi16(d2, m2);
+			__m128i t3 = _mm_mullo_epi16(d3, m3);
+			d0 = _mm_add_epi16(d0, rnd);
+			d0 = _mm_add_epi16(d0, t2);
+			d0 = _mm_add_epi16(d0, t3);
+			d0 = _mm_srai_epi16(d0, 6);
+			d0 = _mm_packus_epi16(d0, zero);
+			*(uint32_t *)dst = _mm_cvtsi128_si32(d0);
+			d0 = d2;
+			d1 = d3;
+			dst += stride;
+		} while (--height);
+	}
+#else
+	int c0 = 64 - c1 - c2 + c3;
+	const uint8_t *src1 = src + src_stride;
+	c1 = c1 - c3;
+	c2 = c2 - c3;
+	stride -= width;
+	src_stride = src_stride - width - 2;
+	width >>= 1;
 	do {
-		uint32_t t0, t2;
-		const uint8_t *src0, *src1;
-		uint8_t *d = dst;
 		int x = width;
-		src0 = src;
-		src += src_stride;
-		src1 = src;
-		t0 = *src0++;
-		t2 = *src1++;
-		t0 = (t0 << 16) | *src0++;
+		uint32_t t0 = *src++;
+		uint32_t t2 = *src1++;
+		t0 = (t0 << 16) | *src++;
 		t2 = (t2 << 16) | *src1++;
 		do {
-			uint32_t t1 = *src0++;
+			uint32_t t1 = *src++;
 			uint32_t t3 = *src1++;
-			t1 = (t1 << 16) | *src0++;
+			t1 = (t1 << 16) | *src++;
 			t3 = (t3 << 16) | *src1++;
-			t0 = (t0 * c0 + t2 * c2 + t1 * c1 + t3 * c3 + 0x00200020) >> 6;
-			d[0] = t0 >> 16;
-			d[1] = t0;
+			t0 = (t0 * c0 + t2 * c2 + t1 * c1 + t3 * c3 + 0x00200020);
+			t0 = t0 >> 6;
+			dst[0] = t0 >> 16;
+			dst[1] = t0;
 			t0 = t1;
 			t2 = t3;
-			d += 2;
+			dst += 2;
 		} while (--x);
+		src += src_stride;
+		src1 += src_stride;
 		dst += stride;
 	} while (--height);
+#endif
 }
 
 static inline void extend_left_chroma(uint8_t *dst, int left, int width, int height)
@@ -4977,6 +5340,11 @@ static inline void fill_rect_umv_chroma(const uint8_t *src, uint8_t *buf, const 
 
 static inline void chroma_inter_umv(const uint8_t *src, uint8_t *dst, int posx, int posy, const h264d_vector_t& size, int src_stride, int vert_size, int dst_stride, const h264d_vector_t* mv)
 {
+	static void (* const copy_inter_align[3])(const uint8_t *src, uint8_t *dst, int height, int src_stride, int stride) = {
+		copy_inter4x_align4,
+		copy_inter8x_align8,
+		copy_inter16x_align8
+	};
 	uint32_t buf[18 * 9 / sizeof(uint32_t) + 1];
 	int width = size.v[0];
 	int height = (unsigned)size.v[1] >> 1;
@@ -5112,18 +5480,94 @@ static inline void inter_pred_luma_filter02_core_base(const uint8_t *src, DSTTYP
 	} while (--height);
 }
 
+#ifndef X86ASM
 struct clip_store8dual {
 	void operator()(uint32_t t, uint8_t *dst) const {
-		dst[0] = CLIP255H(t >> 21);
-		dst[1] = CLIP255H(t >> 5);
+		t >>= 5;
+		dst[0] = CLIP255H(t >> 16);
+		dst[1] = CLIP255H(t);
 	}
 };
+#endif
 
 static inline void inter_pred_luma_filter02_core(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int stride)
 {
+#ifdef X86ASM
+	__m128i c5 = _mm_cvtsi32_si128(0xfffbfffb);
+	__m128i c20 = _mm_cvtsi32_si128(0x00140014);
+	__m128i rnd = _mm_cvtsi32_si128(0x00100010);
+	__m128i zero = _mm_setzero_si128();
+	int width = size.v[0];
+	int height = size.v[1];
+	c5 = _mm_shuffle_epi32(c5, 0);
+	c20 = _mm_shuffle_epi32(c20, 0);
+	rnd = _mm_shuffle_epi32(rnd, 0);
+	if (width != 4) {
+		width = (unsigned)width >> 3;
+		do {
+			for (int x = 0; x < width; ++x) {
+				__m128i r0 = _mm_loadu_si128((__m128i const *)&src[x * 8]);
+				__m128i r4 = _mm_loadu_si128((__m128i const *)&src[x * 8 + 5]);
+				__m128i r1 = _mm_loadu_si128((__m128i const *)&src[x * 8 + 1]);
+				__m128i r2 = _mm_loadu_si128((__m128i const *)&src[x * 8 + 2]);
+				__m128i r3 = _mm_loadu_si128((__m128i const *)&src[x * 8 + 3]);
+				r0 = _mm_unpacklo_epi8(r0, zero);
+				r4 = _mm_unpacklo_epi8(r4, zero);
+				r0 = _mm_add_epi16(r0, r4);
+				r4 = _mm_loadu_si128((__m128i const *)&src[x * 8 + 4]);
+				r1 = _mm_unpacklo_epi8(r1, zero);
+				r2 = _mm_unpacklo_epi8(r2, zero);
+				r3 = _mm_unpacklo_epi8(r3, zero);
+				r4 = _mm_unpacklo_epi8(r4, zero);
+				r2 = _mm_add_epi16(r2, r3);
+				r1 = _mm_add_epi16(r1, r4);
+				r2 = _mm_mullo_epi16(r2, c20);
+				r1 = _mm_mullo_epi16(r1, c5);
+				r2 = _mm_add_epi16(r2, r0);
+				r2 = _mm_add_epi16(r2, rnd);
+				r2 = _mm_add_epi16(r2, r1);
+				r2 = _mm_srai_epi16(r2, 5);
+				r2 = _mm_packus_epi16(r2, zero);
+				_mm_storel_epi64((__m128i *)&dst[x * 8], r2);
+			}
+			src += src_stride;
+			dst += stride;
+		} while (--height);
+	} else {
+		do {
+			__m128i r0 = _mm_loadu_si128((__m128i const *)&src[0]);
+			__m128i r4 = _mm_loadu_si128((__m128i const *)&src[5]);
+			__m128i r1 = _mm_loadu_si128((__m128i const *)&src[1]);
+			__m128i r2 = _mm_loadu_si128((__m128i const *)&src[2]);
+			__m128i r3 = _mm_loadu_si128((__m128i const *)&src[3]);
+			r0 = _mm_unpacklo_epi8(r0, zero);
+			r4 = _mm_unpacklo_epi8(r4, zero);
+			r0 = _mm_add_epi16(r0, r4);
+			r4 = _mm_loadu_si128((__m128i const *)&src[4]);
+			r1 = _mm_unpacklo_epi8(r1, zero);
+			r2 = _mm_unpacklo_epi8(r2, zero);
+			r3 = _mm_unpacklo_epi8(r3, zero);
+			r4 = _mm_unpacklo_epi8(r4, zero);
+			r2 = _mm_add_epi16(r2, r3);
+			r1 = _mm_add_epi16(r1, r4);
+			r2 = _mm_mullo_epi16(r2, c20);
+			r1 = _mm_mullo_epi16(r1, c5);
+			r2 = _mm_add_epi16(r2, r0);
+			r2 = _mm_add_epi16(r2, rnd);
+			r2 = _mm_add_epi16(r2, r1);
+			r2 = _mm_srai_epi16(r2, 5);
+			r2 = _mm_packus_epi16(r2, zero);
+			*(uint32_t *)dst = _mm_cvtsi128_si32(r2);
+			src += src_stride;
+			dst += stride;
+		} while (--height);
+	}
+#else
 	inter_pred_luma_filter02_core_base<0x00100010>(src, dst, size, src_stride, stride, clip_store8dual());
+#endif
 }
 
+#ifndef X86ASM
 template <int RND, typename DSTTYPE, typename F>
 static inline void inter_pred_luma_filter20_core_base(const uint8_t *src, DSTTYPE *dst, const h264d_vector_t& size, int src_stride, int stride, F Store)
 {
@@ -5146,36 +5590,135 @@ static inline void inter_pred_luma_filter20_core_base(const uint8_t *src, DSTTYP
 		c4 = (s[0] << 16) | s[1];
 		s += src_stride;
 		do {
-			uint32_t t, c5, c6;
+			uint32_t t, c5;
 			c5 = (s[0] << 16) | s[1];
 			t = FILTER6TAP_DUAL(c0, c1, c2, c3, c4, c5, RND);
 			s += src_stride;
 			Store(t, d);
-			c6 = (s[0] << 16) | s[1];
+			c0 = (s[0] << 16) | s[1];
 			d += stride;
-			t = FILTER6TAP_DUAL(c1, c2, c3, c4, c5, c6, RND);
+			t = FILTER6TAP_DUAL(c1, c2, c3, c4, c5, c0, RND);
 			s += src_stride;
 			Store(t, d);
+			t = c0;
 			c0 = c2;
 			c1 = c3;
 			c2 = c4;
 			c3 = c5;
-			c4 = c6;
+			c4 = t;
 			d += stride;
 		} while (--y);
 		src += 2;
 		dst += 2;
 	} while (--width);
 }
+#endif
 
 static inline void inter_pred_luma_filter20_core(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int stride)
 {
+#ifdef X86ASM
+	__m128i c5 = _mm_cvtsi32_si128(0xfffbfffb);
+	__m128i c20 = _mm_cvtsi32_si128(0x00140014);
+	__m128i rnd = _mm_cvtsi32_si128(0x00100010);
+	__m128i zero = _mm_setzero_si128();
+	int width = size.v[0];
+	int height = size.v[1];
+	c5 = _mm_shuffle_epi32(c5, 0);
+	c20 = _mm_shuffle_epi32(c20, 0);
+	rnd = _mm_shuffle_epi32(rnd, 0);
+	if (width != 4) {
+		width = (unsigned)width >> 3;
+		do {
+			const uint8_t *s = src;
+			uint8_t *d = dst;
+			__m128i r0 = _mm_loadu_si128((__m128i const *)s);
+			s += src_stride;
+			__m128i r1 = _mm_loadu_si128((__m128i const *)s);
+			s += src_stride;
+			__m128i r2 = _mm_loadu_si128((__m128i const *)s);
+			s += src_stride;
+			__m128i r3 = _mm_loadu_si128((__m128i const *)s);
+			s += src_stride;
+			__m128i r4 = _mm_loadu_si128((__m128i const *)s);
+			s += src_stride;
+			int y = height;
+			r0 = _mm_unpacklo_epi8(r0, zero);
+			r1 = _mm_unpacklo_epi8(r1, zero);
+			r2 = _mm_unpacklo_epi8(r2, zero);
+			r3 = _mm_unpacklo_epi8(r3, zero);
+			r4 = _mm_unpacklo_epi8(r4, zero);
+			do {
+				__m128i r5 = _mm_loadu_si128((__m128i const *)s);
+				__m128i t0 = _mm_add_epi16(r2, r3);
+				__m128i t1 = _mm_add_epi16(r1, r4);
+				s += src_stride;
+				r5 = _mm_unpacklo_epi8(r5, zero);
+				t0 = _mm_mullo_epi16(t0, c20);
+				t1 = _mm_mullo_epi16(t1, c5);
+				t0 = _mm_add_epi16(t0, r0);
+				t0 = _mm_add_epi16(t0, r5);
+				t0 = _mm_add_epi16(t0, rnd);
+				t0 = _mm_add_epi16(t0, t1);
+				t0 = _mm_srai_epi16(t0, 5);
+				t0 = _mm_packus_epi16(t0, zero);
+				_mm_storel_epi64((__m128i *)d, t0);
+				r0 = r1;
+				r1 = r2;
+				r2 = r3;
+				r3 = r4;
+				r4 = r5;
+				d += stride;
+			} while (--y);
+			src += 8;
+			dst += 8;
+		} while (--width);
+	} else {
+		__m128i r0 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+		src += src_stride;
+		__m128i r1 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+		src += src_stride;
+		__m128i r2 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+		src += src_stride;
+		__m128i r3 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+		src += src_stride;
+		__m128i r4 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+		src += src_stride;
+		r0 = _mm_unpacklo_epi8(r0, zero);
+		r1 = _mm_unpacklo_epi8(r1, zero);
+		r2 = _mm_unpacklo_epi8(r2, zero);
+		r3 = _mm_unpacklo_epi8(r3, zero);
+		r4 = _mm_unpacklo_epi8(r4, zero);
+		do {
+			__m128i r5 = _mm_cvtsi32_si128(*(uint32_t const *)src);
+			__m128i t0 = _mm_add_epi16(r2, r3);
+			__m128i t1 = _mm_add_epi16(r1, r4);
+			src += src_stride;
+			r5 = _mm_unpacklo_epi8(r5, zero);
+			t0 = _mm_mullo_epi16(t0, c20);
+			t1 = _mm_mullo_epi16(t1, c5);
+			t0 = _mm_add_epi16(t0, r0);
+			t0 = _mm_add_epi16(t0, r5);
+			t0 = _mm_add_epi16(t0, rnd);
+			t0 = _mm_add_epi16(t0, t1);
+			t0 = _mm_srai_epi16(t0, 5);
+			t0 = _mm_packus_epi16(t0, zero);
+			*(uint32_t *)dst = _mm_cvtsi128_si32(t0);
+			r0 = r1;
+			r1 = r2;
+			r2 = r3;
+			r3 = r4;
+			r4 = r5;
+			dst += stride;
+		} while (--height);
+	}
+#else
 	inter_pred_luma_filter20_core_base<0x00100010>(src, dst, size, src_stride, stride, clip_store8dual());
+#endif
 }
 
 static inline void filter_1_3_v_post(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int stride)
 {
-	uint32_t buf[16 * 22 / sizeof(uint32_t)];
+	uint32_t buf[16 * 22 / sizeof(uint32_t)] __attribute__((aligned(8)));
 	inter_pred_luma_filter20_core(src, (uint8_t *)buf, size, src_stride, size.v[0]);
 	add_bidir((uint8_t *)buf, dst, size.v[0], size.v[1], stride);
 }
@@ -5189,6 +5732,8 @@ struct store32dual {
 		t = sign_extend15bit(t);
 #ifdef WORDS_BIGENDIAN
 		*(uint32_t *)dst = t;
+#elif defined(__RENESAS_VERSION__)
+		*(uint32_t *)dst = swapw(t);
 #else
 		dst[0] = (int16_t)(t >> 16);
 		dst[1] = (int16_t)t;
@@ -5243,16 +5788,90 @@ static inline void inter_pred_luma_filter22_horiz(const uint8_t *src, uint8_t *d
 	} while (--y);
 }
 
+#ifdef X86ASM
+static inline void inter_pred_luma_filter20_interim(const uint8_t *src, int16_t *dst, const h264d_vector_t& size, int src_stride)
+{
+	__m128i c5 = _mm_cvtsi32_si128(0xfffbfffb);
+	__m128i c20 = _mm_cvtsi32_si128(0x00140014);
+	__m128i zero = _mm_setzero_si128();
+	int stride = (((unsigned)size.v[0] >> 1) & 8) + 16;
+	int height = size.v[1] >> 1;
+	int width = (unsigned)stride >> 3;
+	c5 = _mm_shuffle_epi32(c5, 0);
+	c20 = _mm_shuffle_epi32(c20, 0);
+	do {
+		const uint8_t *s = src;
+		int16_t *d = dst;
+		__m128i r0 = _mm_loadu_si128((__m128i const *)s);
+		s += src_stride;
+		__m128i r1 = _mm_loadu_si128((__m128i const *)s);
+		s += src_stride;
+		__m128i r2 = _mm_loadu_si128((__m128i const *)s);
+		s += src_stride;
+		__m128i r3 = _mm_loadu_si128((__m128i const *)s);
+		s += src_stride;
+		__m128i r4 = _mm_loadu_si128((__m128i const *)s);
+		s += src_stride;
+		int y = height;
+		r0 = _mm_unpacklo_epi8(r0, zero);
+		r1 = _mm_unpacklo_epi8(r1, zero);
+		r2 = _mm_unpacklo_epi8(r2, zero);
+		r3 = _mm_unpacklo_epi8(r3, zero);
+		r4 = _mm_unpacklo_epi8(r4, zero);
+		do {
+			__m128i r5 = _mm_loadu_si128((__m128i const *)s);
+			__m128i t0 = _mm_add_epi16(r2, r3);
+			__m128i t1 = _mm_add_epi16(r1, r4);
+			s += src_stride;
+			r5 = _mm_unpacklo_epi8(r5, zero);
+			t0 = _mm_mullo_epi16(t0, c20);
+			t1 = _mm_mullo_epi16(t1, c5);
+			t0 = _mm_add_epi16(t0, r0);
+			t0 = _mm_add_epi16(t0, r5);
+			t0 = _mm_add_epi16(t0, t1);
+			_mm_store_si128((__m128i *)d, t0);
+			r0 = _mm_loadu_si128((__m128i const *)s);
+			d += stride;
+			t0 = _mm_add_epi16(r3, r4);
+			t1 = _mm_add_epi16(r2, r5);
+			s += src_stride;
+			r0 = _mm_unpacklo_epi8(r0, zero);
+			t0 = _mm_mullo_epi16(t0, c20);
+			t1 = _mm_mullo_epi16(t1, c5);
+			t0 = _mm_add_epi16(t0, r1);
+			t0 = _mm_add_epi16(t0, r0);
+			t0 = _mm_add_epi16(t0, t1);
+			_mm_store_si128((__m128i *)d, t0);
+			t0 = r0;
+			r0 = r2;
+			r1 = r3;
+			r2 = r4;
+			r3 = r5;
+			r4 = t0;
+			d += stride;
+		} while (--y);
+		src += 8;
+		dst += 8;
+	} while (--width);
+}
+#endif
+
 template <typename F>
 static inline void inter_pred_luma_filter22_vert(const uint8_t *src, uint8_t *dst, const h264d_vector_t& size, int src_stride, int stride, F Pred)
 {
-	int16_t buf[22 * 16] __attribute__((aligned(8)));
-	h264d_vector_t size_f = {{size.v[0] + 6, size.v[1]}};
-	inter_pred_luma_filter20_core_base<0>(src, buf, size_f, src_stride, size.v[0] + 6, store32dual());
-
-	const int16_t *dd = buf;
 	int width = size.v[0];
 	int height = size.v[1];
+#ifdef X86ASM
+	int16_t ALIGN16VC buf[32 * 16] __attribute__((aligned(16)));
+	inter_pred_luma_filter20_interim(src, buf, size, src_stride);
+	int tmp_stride = (width & 4) + 3;
+#else
+	int16_t buf[22 * 16];
+	int tmp_stride = width + 6;
+	h264d_vector_t size_f = {{tmp_stride, size.v[1]}};
+	inter_pred_luma_filter20_core_base<0>(src, buf, size_f, src_stride, tmp_stride, store32dual());
+#endif
+	const int16_t *dd = buf;
 	stride -= width;
 	width = (unsigned)width >> 1;
 	do {
@@ -5278,8 +5897,13 @@ static inline void inter_pred_luma_filter22_vert(const uint8_t *src, uint8_t *ds
 			dst += 2;
 		} while (--x);
 		dst += stride;
+#ifdef X86ASM
+		dd += tmp_stride;
+#else
 		dd++;
+#endif
 	} while (--height);
+	VC_CHECK;
 }
 
 struct PPred22 {
@@ -5909,7 +6533,7 @@ template <typename F0>
 static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, dec_bits *st, int avail,
 				    F0 ResidualBlock)
 {
-	int coeff[16];
+	int ALIGN16VC coeff[16] __attribute__((aligned(16)));
 	const int16_t *qmat;
 	const int *offset;
 	uint32_t top, left;
@@ -5925,19 +6549,19 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 	str_map = 0;
 	if (cbp & 1) {
 		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, qmat, avail, 0, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[0], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[0], coeff, stride);
 			str_map = 0x2;
 		}
 		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, 16, qmat, avail, 1, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[1], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[1], coeff, stride);
 			str_map |= 0x8;
 		}
 		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, 16, qmat, avail, 2, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[2], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[2], coeff, stride);
 			str_map |= 0x200;
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 3, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[3], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[3], coeff, stride);
 			str_map |= 0x800;
 		}
 	} else {
@@ -5948,24 +6572,24 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 	}
 	if (cbp & 2) {
 		if ((c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 16, qmat, avail, 4, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[4], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[4], coeff, stride);
 			str_map |= 0x20;
 		}
 		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, 16, qmat, avail, 5, 2, 0xf)) != 0) {
 			left = PACK(0, c1, 0);
 			str_map |= 0x80;
-			ac4x4transform_acdc<1>(luma + offset[5], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[5], coeff, stride);
 		} else {
 			left = 0;
 		}
 		if ((c4 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 6, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[6], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[6], coeff, stride);
 			str_map |= 0x2000;
 		}
 		if ((c5 = ResidualBlock(mb, c4, c1, st, coeff, 16, qmat, avail, 7, 2, 0xf)) != 0) {
 			left = PACK(left, c5, 1);
 			str_map |= 0x8000;
-			ac4x4transform_acdc<1>(luma + offset[7], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[7], coeff, stride);
 		}
 	} else {
 		c0 = 0;
@@ -5976,24 +6600,24 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 	}
 	if (cbp & 4) {
 		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, 16, qmat, avail, 8, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[8], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[8], coeff, stride);
 			str_map |= 0x20000;
 		}
 		if ((c1 = ResidualBlock(mb, c0, c3, st, coeff, 16, qmat, avail, 9, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[9], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[9], coeff, stride);
 			str_map |= 0x80000;
 		}
 		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, 16, qmat, avail, 10, 2, 0xf)) != 0) {
 			top = PACK(0, c2, 0);
 			str_map |= 0x2000000;
-			ac4x4transform_acdc<1>(luma + offset[10], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[10], coeff, stride);
 		} else {
 			top = 0;
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 11, 2, 0xf)) != 0) {
 			top = PACK(top, c3, 1);
 			str_map |= 0x8000000;
-			ac4x4transform_acdc<1>(luma + offset[11], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[11], coeff, stride);
 		}
 	} else {
 		c0 = 0;
@@ -6004,22 +6628,22 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 	}
 	if (cbp & 8) {
 		if ((c0 = ResidualBlock(mb, c1, c4, st, coeff, 16, qmat, avail, 12, 2, 0xf)) != 0) {
-			ac4x4transform_acdc<1>(luma + offset[12], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[12], coeff, stride);
 			str_map |= 0x200000;
 		}
 		if ((c1 = ResidualBlock(mb, c0, c5, st, coeff, 16, qmat, avail, 13, 2, 0xf)) != 0) {
 			left = PACK(left, c1, 2);
 			str_map |= 0x800000;
-			ac4x4transform_acdc<1>(luma + offset[13], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[13], coeff, stride);
 		}
 		if ((c2 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 14, 2, 0xf)) != 0) {
 			top = PACK(top, c2, 2);
 			str_map |= 0x20000000;
-			ac4x4transform_acdc<1>(luma + offset[14], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[14], coeff, stride);
 		}
 		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 15, 2, 0xf)) != 0) {
 			str_map |= 0x80000000;
-			ac4x4transform_acdc<1>(luma + offset[15], coeff, stride);
+			ac4x4transform_acdc_luma(luma + offset[15], coeff, stride);
 		}
 	} else {
 		c3 = 0; 
@@ -6236,84 +6860,68 @@ static inline void inter_pred_basic(const h264d_mb_current *mb, const int8_t ref
 	}
 }
 
-#if defined(__GNUC__) && defined(__i386__)
-static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
+#ifdef X86ASM
 
-static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
+static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
+#endif
+
+static void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, uint8_t *dst, int width, int height, int stride)
 {
-	asm volatile ("\n\t"
-		"push	%%ebp\n\t"
-		"push	%%esi\n\t"
-		"push	%%edi\n\t"
-		"movl	%1, %%ecx\n\t"
-		"movl	$1, %%edx\n\t"
-		"movl	%%ecx, %%eax\n\t"
-		"shl	%%cl, %%edx\n\t"
-		"shr	$1, %%edx\n\t"
-		"and	$15, %%ecx\n\t"
-		"movd	%%ecx, %%mm3\n\t"
-		"cmp	%%eax, %%ecx\n\t"
-		"movd	%%edx, %%mm5\n\t"
-		"movl	%0, %%esi\n\t"
-		"movsxb	(%%esi), %%eax\n\t"
-		"movsxb	1(%%esi), %%ecx\n\t"
-		"jne	2f\n\t"
-
-		"movd	%%eax, %%mm1\n\t"
-		"movd	%%ecx, %%mm2\n\t"
-		"pshufw	$0, %%mm1, %%mm1\n\t"
-		"pshufw	$0, %%mm2, %%mm2\n\t"
-		"jmp	3f\n\t"
-	"2:\n\t"
-		"shl	$16, %%eax\n\t"
-		"shl	$16, %%ecx\n\t"
-		"movsxb	2(%%esi), %%edx\n\t"
-		"movsxb	3(%%esi), %%edi\n\t"
-		"movw	%%dx, %%ax\n\t"
-		"movw	%%di, %%cx\n\t"
-		"movd	%%eax, %%mm1\n\t"
-		"movd	%%ecx, %%mm2\n\t"
-		"pshufw	$17, %%mm1, %%mm1\n\t"
-		"pshufw	$17, %%mm2, %%mm2\n\t"
-	"3:\n\t"
-		"pshufw	$0, %%mm5, %%mm5\n\t"
-		"movl	%2, %%eax\n\t"
-		"movl	%3, %%ecx\n\t"
-		"movl	%4, %%edx\n\t"
-		"movl	%5, %%esi\n\t"
-		"movl	%6, %%edi\n\t"
-		"sub	%%edx, %%edi\n\t"
-		"shr	$2, %%edx\n\t"
-		"pxor	%%mm0, %%mm0\n\t"
-	"0:\n\t"
-		"movl	%%edx, %%ebp\n\t"
-	"1:\n\t"
-		"movd	(%%eax), %%mm4\n\t"
-		"add	$4, %%eax\n\t"
-		"punpcklbw	%%mm0, %%mm4\n\t"
-		"pmullw	%%mm1, %%mm4\n\t"
-		"paddsw	%%mm5, %%mm4\n\t"
-		"psraw	%%mm3, %%mm4\n\t"
-		"paddsw	%%mm2, %%mm4\n\t"
-		"packuswb	%%mm0, %%mm4\n\t"
-		"movd	%%mm4, (%%ecx)\n\t"
-		"add	$4, %%ecx\n\t"
-		"add	$-1, %%ebp\n\t"
-		"jnz	1b\n\t"
-		"add	%%edi, %%ecx\n\t"
-		"add	$-1, %%esi\n\t"
-		"jnz	0b\n\t"
-		"pop	%%edi\n\t"
-		"pop	%%esi\n\t"
-		"pop	%%ebp\n\t"
-		"emms"
-		:
-		: "m"(elem), "m"(shift), "m"(src0), "m"(dst), "m"(width), "m"(height), "m"(stride));
+	__m128i w0, ofs, rnd, zero;
+	int shift_org = shift;
+	shift &= 15;
+	rnd = _mm_cvtsi32_si128((1 << shift) >> 1);
+	if (shift == shift_org) {
+		w0 = _mm_cvtsi32_si128(elem[0].weight);
+		ofs = _mm_cvtsi32_si128(elem[0].offset);
+		w0 = _mm_shufflelo_epi16(w0, 0);
+		ofs = _mm_shufflelo_epi16(ofs, 0);
+	} else {
+		w0 = _mm_cvtsi32_si128((elem[1].weight << 16) | (uint16_t)elem[0].weight);
+		ofs = _mm_cvtsi32_si128((elem[1].offset << 16) | (uint16_t)elem[0].offset);
+	}
+	zero = w0;
+	rnd = _mm_shufflelo_epi16(rnd, 0);
+	w0 = _mm_shuffle_epi32(w0, 0);
+	ofs = _mm_shuffle_epi32(ofs, 0);
+	rnd = _mm_shuffle_epi32(rnd, 0);
+	zero = _mm_xor_si128(zero, zero);
+	if (width == 4) {
+		do {
+			__m128i r0 = _mm_cvtsi32_si128(*(uint32_t const *)dst);
+			r0 = _mm_unpacklo_epi8(r0, zero);
+			r0 = _mm_mullo_epi16(r0, w0);
+			r0 = _mm_adds_epi16(r0, rnd);
+			r0 = _mm_srai_epi16(r0, shift);
+			r0 = _mm_adds_epi16(r0, ofs);
+			r0 = _mm_packus_epi16(r0, zero);
+			*(uint32_t *)dst = _mm_cvtsi128_si32(r0);
+			dst += stride;
+		} while (--height);
+	} else {
+		stride -= width;
+		width = (unsigned)width >> 3;
+		do {
+			int x = width;
+			do {
+				__m128i r0 = _mm_loadl_epi64((__m128i const *)dst);
+				r0 = _mm_unpacklo_epi8(r0, zero);
+				r0 = _mm_mullo_epi16(r0, w0);
+				r0 = _mm_adds_epi16(r0, rnd);
+				r0 = _mm_srai_epi16(r0, shift);
+				r0 = _mm_adds_epi16(r0, ofs);
+				r0 = _mm_packus_epi16(r0, zero);
+				_mm_storel_epi64((__m128i *)dst, r0);
+				dst += 8;
+			} while (--x);
+			dst += stride;
+		} while (--height);
+	}
 }
 #else
-
 template <int N>
-static inline void weighted_copy_base(const h264d_weighted_table_elem_t& elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+static inline void weighted_copy_base(const h264d_weighted_table_elem_t& elem, int shift, uint8_t *dst, int width, int height, int stride)
 {
 	int w0 = elem.weight;
 	int ofs = elem.offset;
@@ -6323,23 +6931,22 @@ static inline void weighted_copy_base(const h264d_weighted_table_elem_t& elem, i
 	do {
 		int x = width;
 		do {
-			dst[0] = CLIP255C(((src0[0] * w0 + rnd) >> shift) + ofs);
-			dst[N] = CLIP255C(((src0[N] * w0 + rnd) >> shift) + ofs);
-			src0 += N * 2;
+			dst[0] = CLIP255C(((dst[0] * w0 + rnd) >> shift) + ofs);
+			dst[N] = CLIP255C(((dst[N] * w0 + rnd) >> shift) + ofs);
 			dst += N * 2;
 		} while (--x);
 		dst += stride;
 	} while (--height);
 }
 
-static inline void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, const uint8_t *src0, uint8_t *dst, int width, int height, int stride)
+static inline void weighted_copy(const h264d_weighted_table_elem_t* elem, int shift, uint8_t *dst, int width, int height, int stride)
 {
 	if ((shift & 256) == 0) {
-		weighted_copy_base<1>(elem[0], shift, src0, dst, width, height, stride);
+		weighted_copy_base<1>(elem[0], shift, dst, width, height, stride);
 	} else {
 		shift &= 15;
-		weighted_copy_base<2>(elem[0], shift, src0, dst, width, height, stride);
-		weighted_copy_base<2>(elem[1], shift, src0 + 1, dst + 1, width, height, stride);
+		weighted_copy_base<2>(elem[0], shift, dst, width, height, stride);
+		weighted_copy_base<2>(elem[1], shift, dst + 1, width, height, stride);
 	}
 }
 #endif
@@ -6347,7 +6954,6 @@ static inline void weighted_copy(const h264d_weighted_table_elem_t* elem, int sh
 static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int frame_idx, const h264d_vector_t& mv, const h264d_vector_t& size, int offsetx, int offsety, const h264d_weighted_pred_t& pred)
 {
 	const m2d_frame_t& frms = mb->frame->frames[frame_idx];
-	uint8_t buf[16 * 16];
 	int stride = mb->max_x * 16;
 	int vert_size = mb->max_y * 16;
 	int ofsx = mb->x * 16 + offsetx;
@@ -6356,10 +6962,12 @@ static inline void inter_pred_weighted_onedir(const h264d_mb_current *mb, int fr
 	int mvy = mv.v[1];
 	int posx = (mvx >> 2) + ofsx;
 	int posy = (mvy >> 2) + ofsy;
-	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, buf, size.v[0]);
-	weighted_copy(&pred.weight_offset.e[0], pred.shift[0], buf, mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
-	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, buf, size.v[0]);
-	weighted_copy(&pred.weight_offset.e[1], pred.shift[1] | 256, buf, mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
+	uint8_t *dst = mb->luma + offsety * stride + offsetx;
+	inter_pred_luma[0][mvy & 3][mvx & 3](frms.luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, dst, stride);
+	weighted_copy(&pred.weight_offset.e[0], pred.shift[0], dst, size.v[0], size.v[1], stride);
+	dst = mb->chroma + (offsety >> 1) * stride + offsetx;
+	inter_pred_chroma[0](frms.chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv, size, stride, vert_size >> 1, dst, stride);
+	weighted_copy(&pred.weight_offset.e[1], pred.shift[1] | 256, dst, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <typename F0, typename F1>
@@ -6367,28 +6975,92 @@ static inline void inter_pred_weighted_bidir(const h264d_mb_current *mb, const i
 						F0 AddBidirWeightedLuma,
 						F1 AddBidirWeightedChroma)
 {
-	uint8_t luma_buf[2][16 * 16];
-	uint8_t chroma_buf[2][16 * 8];
+	uint8_t ALIGN16VC luma_buf[16 * 16] __attribute__((aligned(16)));
+	uint8_t ALIGN16VC chroma_buf[16 * 8] __attribute__((aligned(16)));
 	int stride = mb->max_x * 16;
 	int vert_size = mb->max_y * 16;
 	int ofsx = mb->x * 16 + offsetx;
 	int ofsy = mb->y * 16 + offsety;
-	for (int lx = 0; lx < 2; ++lx) {
-		int mvx = mv[lx].v[0];
-		int mvy = mv[lx].v[1];
-		int posx = (mvx >> 2) + ofsx;
-		int posy = (mvy >> 2) + ofsy;
-		const m2d_frame_t *frms = &mb->frame->frames[mb->frame->refs[lx][ref_idx[lx]].frame_idx];
-		inter_pred_luma[0][mvy & 3][mvx & 3](frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf[lx], size.v[0]);
-		inter_pred_chroma[0](frms->chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv[lx], size, stride, vert_size >> 1, chroma_buf[lx], size.v[0]);
-	}
-	AddBidirWeightedLuma(pred, luma_buf[0], luma_buf[1], mb->luma + offsety * stride + offsetx, size.v[0], size.v[1], stride);
-	AddBidirWeightedChroma(pred, chroma_buf[0], chroma_buf[1], mb->chroma + (offsety >> 1) * stride + offsetx, size.v[0], size.v[1] >> 1, stride);
+	int mvx = mv[0].v[0];
+	int mvy = mv[0].v[1];
+	int posx = (mvx >> 2) + ofsx;
+	int posy = (mvy >> 2) + ofsy;
+	const m2d_frame_t *frms = &mb->frame->frames[mb->frame->refs[0][ref_idx[0]].frame_idx];
+	uint8_t *dst_luma = mb->luma + offsety * stride + offsetx;
+	inter_pred_luma[0][mvy & 3][mvx & 3](frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, dst_luma, stride);
+	uint8_t *dst_chroma = mb->chroma + (offsety >> 1) * stride + offsetx;
+	inter_pred_chroma[0](frms->chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv[0], size, stride, vert_size >> 1, dst_chroma, stride);
+	mvx = mv[1].v[0];
+	mvy = mv[1].v[1];
+	posx = (mvx >> 2) + ofsx;
+	posy = (mvy >> 2) + ofsy;
+	frms = &mb->frame->frames[mb->frame->refs[1][ref_idx[1]].frame_idx];
+	inter_pred_luma[0][mvy & 3][mvx & 3](frms->luma + inter_pred_mvoffset_luma(posx - 2, posy - 2, stride), posx, posy, size, stride, vert_size, luma_buf, size.v[0]);
+	inter_pred_chroma[0](frms->chroma, (mvx >> 3) * 2 + ofsx, (mvy >> 3) + (ofsy >> 1), mv[1], size, stride, vert_size >> 1, chroma_buf, size.v[0]);
+	AddBidirWeightedLuma(pred, luma_buf, dst_luma, size.v[0], size.v[1], stride);
+	AddBidirWeightedChroma(pred, chroma_buf, dst_chroma, size.v[0], size.v[1] >> 1, stride);
 }
 
 template <int N>
 struct add_bidir_weighted_type1 {
-	void operator()(const h264d_weighted_pred_t pred[], const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride) const {
+	void operator()(const h264d_weighted_pred_t pred[], const uint8_t *src1, uint8_t *dst, int width, int height, int stride) const {
+#ifdef X86ASM
+		const h264d_weighted_table_elem_t* e0 = &pred[0].weight_offset.e[N - 1];
+		const h264d_weighted_table_elem_t* e1 = &pred[1].weight_offset.e[N - 1];
+		int shift = pred[0].shift[N - 1];
+		__m128i w0 = _mm_cvtsi32_si128((e0[N / 2].weight << 16) | (uint16_t)e0[0].weight);
+		__m128i w1 = _mm_cvtsi32_si128((e1[N / 2].weight << 16) | (uint16_t)e1[0].weight);
+		__m128i rnd = _mm_cvtsi32_si128(1 << shift++);
+		__m128i ofs = _mm_cvtsi32_si128((((e0[N / 2].offset + e1[N / 2].offset + 1) >> 1) << 16) | (uint16_t)((e0[0].offset + e1[0].offset + 1) >> 1));
+		__m128i zero = w0;
+		rnd = _mm_shufflelo_epi16(rnd, 0);
+		w0 = _mm_shuffle_epi32(w0, 0);
+		w1 = _mm_shuffle_epi32(w1, 0);
+		ofs = _mm_shuffle_epi32(ofs, 0);
+		zero = _mm_xor_si128(zero, zero);
+		if (width == 4) {
+			do {
+				__m128i r0 = _mm_cvtsi32_si128(*(uint32_t const *)dst);
+				__m128i r1 = _mm_cvtsi32_si128(*(uint32_t const *)src1);
+				src1 += 4;
+				r0 = _mm_unpacklo_epi8(r0, zero);
+				r1 = _mm_unpacklo_epi8(r1, zero);
+				r0 = _mm_mullo_epi16(r0, w0);
+				r1 = _mm_mullo_epi16(r1, w1);
+				r0 = _mm_adds_epi16(r0, rnd);
+				r0 = _mm_adds_epi16(r0, r1);
+				r0 = _mm_srai_epi16(r0, shift);
+				r0 = _mm_adds_epi16(r0, ofs);
+				r0 = _mm_packus_epi16(r0, zero);
+				*(uint32_t *)dst = _mm_cvtsi128_si32(r0);
+				dst += stride;
+			} while (--height);
+		} else {
+			rnd = _mm_shuffle_epi32(rnd, 0);
+			stride -= width;
+			width = (unsigned)width >> 3;
+			do {
+				int x = width;
+				do {
+					__m128i r0 = _mm_loadl_epi64((__m128i const *)dst);
+					__m128i r1 = _mm_loadl_epi64((__m128i const *)src1);
+					src1 += 8;
+					r0 = _mm_unpacklo_epi8(r0, zero);
+					r1 = _mm_unpacklo_epi8(r1, zero);
+					r0 = _mm_mullo_epi16(r0, w0);
+					r1 = _mm_mullo_epi16(r1, w1);
+					r0 = _mm_adds_epi16(r0, rnd);
+					r0 = _mm_adds_epi16(r0, r1);
+					r0 = _mm_srai_epi16(r0, shift);
+					r0 = _mm_adds_epi16(r0, ofs);
+					r0 = _mm_packus_epi16(r0, zero);
+					_mm_storel_epi64((__m128i *)dst, r0);
+					dst += 8;
+				} while (--x);
+				dst += stride;
+			} while (--height);
+		}
+#else
 		const h264d_weighted_table_elem_t* e0 = &pred[0].weight_offset.e[N - 1];
 		const h264d_weighted_table_elem_t* e1 = &pred[1].weight_offset.e[N - 1];
 		int shift = pred[0].shift[N - 1];
@@ -6404,14 +7076,15 @@ struct add_bidir_weighted_type1 {
 		do {
 			int x = width;
 			do {
-				dst[0] = CLIP255C(((*src1++ * wa1 + *src0++ * wa0 + rnd) >> shift) + ofsa);
-				dst[1] = CLIP255C(((*src1++ * wb1 + *src0++ * wb0 + rnd) >> shift) + ofsb);
-				dst[2] = CLIP255C(((*src1++ * wa1 + *src0++ * wa0 + rnd) >> shift) + ofsa);
-				dst[3] = CLIP255C(((*src1++ * wb1 + *src0++ * wb0 + rnd) >> shift) + ofsb);
+				dst[0] = CLIP255C(((*src1++ * wa1 + dst[0] * wa0 + rnd) >> shift) + ofsa);
+				dst[1] = CLIP255C(((*src1++ * wb1 + dst[1] * wb0 + rnd) >> shift) + ofsb);
+				dst[2] = CLIP255C(((*src1++ * wa1 + dst[2] * wa0 + rnd) >> shift) + ofsa);
+				dst[3] = CLIP255C(((*src1++ * wb1 + dst[3] * wb0 + rnd) >> shift) + ofsb);
 				dst += 4;
 			} while (--x);
 			dst += stride;
 		} while (--height);
+#endif
 	}
 };
 
@@ -6463,92 +7136,77 @@ static inline void pred_weight_type2(h264d_weighted_cache_t *weighted, const h26
 	weighted->weight[1] = w1;
 }
 
-#if defined(__GNUC__) && defined(__i386__)
-static void add_bidir_weighted_type2_calc(const int8_t weight[], const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride) __attribute__((noinline));
-#endif
-
-static void add_bidir_weighted_type2_calc(const int8_t weight[], const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride)
-{
-#if defined(__GNUC__) && defined(__i386__)
-	asm volatile ("\n\t"
-		"push	%%ebp\n\t"
-		"push	%%esi\n\t"
-		"push	%%ebx\n\t"
-		"push	%%edi\n\t"
-		"movl	%0, %%esi\n\t"
-		"movsxb	(%%esi), %%eax\n\t"
-		"movl	$32, %%ebx\n\t"
-		"movsxb	1(%%esi), %%ecx\n\t"
-		"movd	%%eax, %%mm1\n\t"
-		"movd	%%ebx, %%mm5\n\t"
-		"movd	%%ecx, %%mm2\n\t"
-		"movl	%1, %%eax\n\t"
-		"movl	%2, %%ebx\n\t"
-		"movl	%3, %%ecx\n\t"
-		"movl	%4, %%edx\n\t"
-		"movl	%5, %%esi\n\t"
-		"movl	%6, %%edi\n\t"
-		"pshufw	$0, %%mm1, %%mm1\n\t"
-		"pshufw	$0, %%mm5, %%mm5\n\t"
-		"pshufw	$0, %%mm2, %%mm2\n\t"
-		"sub	%%edx, %%edi\n\t"
-		"shr	$2, %%edx\n\t"
-		"pxor	%%mm0, %%mm0\n\t"
-	"0:\n\t"
-		"movl	%%edx, %%ebp\n\t"
-	"1:\n\t"
-		"movd	(%%eax), %%mm3\n\t"
-		"movd	(%%ebx), %%mm4\n\t"
-		"add	$4, %%eax\n\t"
-		"add	$4, %%ebx\n\t"
-		"punpcklbw	%%mm0, %%mm3\n\t"
-		"punpcklbw	%%mm0, %%mm4\n\t"
-		"pmullw	%%mm1, %%mm3\n\t"
-		"pmullw	%%mm2, %%mm4\n\t"
-		"paddsw	%%mm5, %%mm3\n\t"
-		"paddsw	%%mm4, %%mm3\n\t"
-		"psraw	$6, %%mm3\n\t"
-		"packuswb	%%mm0, %%mm3\n\t"
-		"movd	%%mm3, (%%ecx)\n\t"
-		"add	$4, %%ecx\n\t"
-		"add	$-1, %%ebp\n\t"
-		"jnz	1b\n\t"
-		"add	%%edi, %%ecx\n\t"
-		"add	$-1, %%esi\n\t"
-		"jnz	0b\n\t"
-		"pop	%%edi\n\t"
-		"pop	%%ebx\n\t"
-		"pop	%%esi\n\t"
-		"pop	%%ebp\n\t"
-		"emms"
-		:
-		: "m"(weight), "m"(src0), "m"(src1), "m"(dst), "m"(width), "m"(height), "m"(stride));
-#else
-	int w0 = *weight++;
-	int w1 = *weight;
-	stride -= width;
-	width = (unsigned)width >> 2;
-	do {
-		int x = width;
-		do {
-			dst[0] = CLIP255C((*src1++ * w1 + *src0++ * w0 + (1 << 5)) >> 6);
-			dst[1] = CLIP255C((*src1++ * w1 + *src0++ * w0 + (1 << 5)) >> 6);
-			dst[2] = CLIP255C((*src1++ * w1 + *src0++ * w0 + (1 << 5)) >> 6);
-			dst[3] = CLIP255C((*src1++ * w1 + *src0++ * w0 + (1 << 5)) >> 6);
-			dst += 4;
-		} while (--x);
-		dst += stride;
-	} while (--height);
-#endif
-}
-
 struct add_bidir_weighted_type2 {
-	void operator()(const h264d_weighted_pred_t pred[], const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int width, int height, int stride) const {
-		int8_t weight[2] = {
-			pred[0].weight_offset.e[0].weight,
-			pred[1].weight_offset.e[0].weight
-		};
-		add_bidir_weighted_type2_calc(weight, src0, src1, dst, width, height, stride);
+	void operator()(const h264d_weighted_pred_t pred[], const uint8_t *src1, uint8_t *dst, int width, int height, int stride) const {
+#ifdef X86ASM
+		__m128i w0, w1, rnd, r0, r1, zero;
+		w0 = _mm_cvtsi32_si128(pred[0].weight_offset.e[0].weight);
+		w1 = _mm_cvtsi32_si128(pred[1].weight_offset.e[0].weight);
+		rnd = _mm_cvtsi32_si128(32);
+		w0 = _mm_shufflelo_epi16(w0, 0);
+		w1 = _mm_shufflelo_epi16(w1, 0);
+		rnd = _mm_shufflelo_epi16(rnd, 0);
+		zero = w0;
+		zero = _mm_xor_si128(zero, zero);
+		if (width == 4) {
+			do {
+				r0 = _mm_cvtsi32_si128(*(uint32_t const *)dst);
+				r1 = _mm_cvtsi32_si128(*(uint32_t const *)src1);
+				src1 += 4;
+				r0 = _mm_unpacklo_epi8(r0, zero);
+				r1 = _mm_unpacklo_epi8(r1, zero);
+				r0 = _mm_mullo_epi16(r0, w0);
+				r1 = _mm_mullo_epi16(r1, w1);
+				r0 = _mm_adds_epi16(r0, rnd);
+				r0 = _mm_adds_epi16(r0, r1);
+				r0 = _mm_srai_epi16(r0, 6);
+				r0 = _mm_packus_epi16(r0, zero);
+				*(uint32_t *)dst = _mm_cvtsi128_si32(r0);
+				dst += stride;
+			} while (--height);
+		} else {
+			w0 = _mm_shuffle_epi32(w0, 0);
+			w1 = _mm_shuffle_epi32(w1, 0);
+			rnd = _mm_shuffle_epi32(rnd, 0);
+			stride -= width;
+			width = (unsigned)width >> 3;
+			do {
+				int x = width;
+				do {
+					r0 = _mm_loadl_epi64((__m128i const *)dst);
+					r1 = _mm_loadl_epi64((__m128i const *)src1);
+					src1 += 8;
+					r0 = _mm_unpacklo_epi8(r0, zero);
+					r1 = _mm_unpacklo_epi8(r1, zero);
+					r0 = _mm_mullo_epi16(r0, w0);
+					r1 = _mm_mullo_epi16(r1, w1);
+					r0 = _mm_adds_epi16(r0, rnd);
+					r0 = _mm_adds_epi16(r0, r1);
+					r0 = _mm_srai_epi16(r0, 6);
+					r0 = _mm_packus_epi16(r0, zero);
+					_mm_storel_epi64((__m128i *)dst, r0);
+					dst += 8;
+				} while (--x);
+				dst += stride;
+			} while (--height);
+		}
+#else
+		int w0 = pred[0].weight_offset.e[0].weight;
+		int w1 = pred[1].weight_offset.e[0].weight;
+		stride -= width;
+		width = (unsigned)width >> 2;
+		do {
+			int x = width;
+			do {
+				dst[0] = CLIP255C((*src1++ * w1 + dst[0] * w0 + (1 << 5)) >> 6);
+				dst[1] = CLIP255C((*src1++ * w1 + dst[1] * w0 + (1 << 5)) >> 6);
+				dst[2] = CLIP255C((*src1++ * w1 + dst[2] * w0 + (1 << 5)) >> 6);
+				dst[3] = CLIP255C((*src1++ * w1 + dst[3] * w0 + (1 << 5)) >> 6);
+				dst += 4;
+			} while (--x);
+			dst += stride;
+		} while (--height);
+#endif
 	}
 };
 
@@ -7569,7 +8227,7 @@ static inline void calc_mv8x8_sub4x8(h264d_mb_current *mb, int16_t *pmv, const i
 		} else {
 			avail &= ~4;
 			if (x == 0 && (avail & 8)) {
-				idx_map |= (ref_idx == mb->lefttop_ref[lx]) * 4;
+ 				idx_map |= (ref_idx == mb->lefttop_ref[lx]) * 4;
 				mvc = mb->lefttop_mv[lx].v;
 			} else {
 				mvc = zero_mv;
@@ -9705,58 +10363,35 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 	return post_process(h2d, mb);
 }
 
-#define CLIP(a, x) ((unsigned)(x) <= (a) ? (x) : (a))
-
-static inline int AlphaBetaTc0(int &beta2, const int8_t **tc0, int q, int alpha_offset, int beta_offset)
-{
-	struct {
-		int8_t tc0[3];
-		uint8_t alpha;
-		int16_t beta;
-	} static const tbl[52 - 16] = {
-		{{0, 0, 0}, 4, 4}, {{0, 0, 1}, 4, 4}, {{0, 0, 1}, 5, 4}, {{0, 0, 1}, 6, 9},
-		{{0, 0, 1}, 7, 9}, {{0, 1, 1}, 8, 9}, {{0, 1, 1}, 9, 9}, {{1, 1, 1}, 10, 16},
-		{{1, 1, 1}, 12, 16}, {{1, 1, 1}, 13, 16}, {{1, 1, 1}, 15, 36}, {{1, 1, 2}, 17, 36},
-		{{1, 1, 2}, 20, 49}, {{1, 1, 2}, 22, 49}, {{1, 1, 2}, 25, 64}, {{1, 2, 3}, 28, 64},
-		{{1, 2, 3}, 32, 81}, {{2, 2, 3}, 36, 81}, {{2, 2, 4}, 40, 100}, {{2, 3, 4}, 45, 100},
-		{{2, 3, 4}, 50, 121}, {{3, 3, 5}, 56, 121}, {{3, 4, 6}, 63, 144}, {{3, 4, 6}, 71, 144},
-		{{4, 5, 7}, 80, 169}, {{4, 5, 8}, 90, 169}, {{4, 6, 9}, 101, 196}, {{5, 7, 10}, 113, 196},
-		{{6, 8, 11}, 127, 225}, {{6, 8, 13}, 144, 225}, {{7, 10, 14}, 162, 256}, {{8, 11, 16}, 182, 256},
-		{{9, 12, 18}, 203, 289}, {{10, 13, 20}, 226, 289}, {{11, 15, 23}, 255, 324}, {{13, 17, 25}, 255, 324}
-	};
-	int a = q + alpha_offset;
-	int b = q + beta_offset;
-	if (a < 16 || b < 16) {
-		return 0;
-	} else {
-		a = a <= 51 ? a : 51;
-		b = b <= 51 ? b : 51;
-		beta2 = tbl[b - 16].beta;
-		*tc0 = tbl[a - 16].tc0;
-		return tbl[a - 16].alpha;
-	}
+#define AlphaBeta(a, b, q, alpha_offset, beta_offset) {\
+	a = q + alpha_offset;\
+	b = q + beta_offset;\
+	a = (a <= 51 ? a : 51) - 16;\
+	b = (b <= 51 ? b : 51) - 16;\
 }
 
+#define SMALLER_THAN(x, tbl) *(tbl + x)
+
 template<int N>
-static inline void strength4h(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2) {
-	if ((N == 1) && (SQUARE(p0 - q0) < a2r)) {
-		int p2 = dst[4 * N];
-		if (SQUARE(p0 - p2) < b2) {
-			int t = p0 + p1 + q0 + 2;
-			dst[2 * N] = (t * 2 + q1 + p2) >> 3;
-			dst[3 * N] = (t + p2) >> 2;
-			dst[4 * N] = (dst[5 * N] * 2 + p2 * 3 + t + 2) >> 3;
-		} else {
-			dst[2 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
-		}
+static inline void strength4h(uint8_t *dst, int q0, int q1, int p0, int p1, const int8_t *alpha_r, const int8_t *beta) {
+	if ((N == 1) && (SMALLER_THAN(q0 - p0, alpha_r))) {
 		int q2 = dst[-N];
-		if (SQUARE(q0 - q2) < b2) {
+		if (SMALLER_THAN(q0 - q2, beta)) {
 			int t = q0 + q1 + p0 + 2;
 			dst[1 * N] = (t * 2 + p1 + q2) >> 3;
 			dst[0] = (t + q2) >> 2;
 			dst[-N] = (dst[-N * 2] * 2 + q2 * 3 + t + 2) >> 3;
 		} else {
 			dst[1 * N] = (q1 * 2 + q0 + p1 + 2) >> 2;
+		}
+		int p2 = dst[4 * N];
+		if (SMALLER_THAN(p0 - p2, beta)) {
+			int t = p0 + p1 + q0 + 2;
+			dst[2 * N] = (t * 2 + q1 + p2) >> 3;
+			dst[3 * N] = (t + p2) >> 2;
+			dst[4 * N] = (dst[5 * N] * 2 + p2 * 3 + t + 2) >> 3;
+		} else {
+			dst[2 * N] = (p1 * 2 + p0 + q1 + 2) >> 2;
 		}
 	} else {
 		int t = q1 + p1 + 2;
@@ -9765,45 +10400,45 @@ static inline void strength4h(uint8_t *dst, int q0, int q1, int p0, int p1, int 
 	}
 }
 
-#define CLIP3(x, c) (*(deblock_clip3[c] + (x)))
+#define CLIP3(x, tbl) ((tbl)[x])
 
 template<int N>
-static inline void strength1_3h(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2) {
+static inline void strength1_3h(uint8_t *dst, int q0, int q1, int p0, int p1, const int8_t *tc0p, const int8_t *beta) {
 	if (N == 1) {
 		int q2 = dst[-N];
 		int p2 = dst[4 * N];
-		int aq_smaller = SQUARE(q2 - q0) < b2;
-		int ap_smaller = SQUARE(p2 - p0) < b2;
-		if (tc0) {
+		int aq_smaller = SMALLER_THAN(q2 - q0, beta);
+		int ap_smaller = SMALLER_THAN(p2 - p0, beta);
+		if (tc0p[1]) {
 			if (aq_smaller || ap_smaller) {
 				int t0 = (p0 + q0 + 1) >> 1;
 				if (aq_smaller) {
 					int t = (q2 + t0 - (q1 * 2)) >> 1;
 					if (t) {
-						dst[0] = CLIP3(t, tc0) + q1;
+						dst[0] = CLIP3(t, tc0p) + q1;
 					}
 				}
 				if (ap_smaller) {
 					int t = (p2 + t0 - (p1 * 2)) >> 1;
 					if (t) {
-						dst[3 * N] = CLIP3(t, tc0) + p1;
+						dst[3 * N] = CLIP3(t, tc0p) + p1;
 					}
-					tc0 = tc0 + 1;
+					tc0p += 511;
 				}
-				tc0 = tc0 + aq_smaller;
+				tc0p = aq_smaller ? tc0p + 511 : tc0p;
 			}
 		} else {
-			tc0 = tc0 + aq_smaller + ap_smaller;
-			if (!tc0) {
+			tc0p += 511 * (aq_smaller + ap_smaller);
+			if (!tc0p[1]) {
 				return;
 			}
 		}
 	} else {
-		tc0 += 1;
+		tc0p += 511;
 	}
 	int delta = (((p0 - q0) * 4) + q1 - p1 + 4) >> 3;
 	if (delta) {
-		delta = CLIP3(delta, tc0);
+		delta = CLIP3(delta, tc0p);
 		q0 = q0 + delta;
 		p0 = p0 - delta;
 		dst[1 * N] = CLIP255C(q0);
@@ -9812,42 +10447,48 @@ static inline void strength1_3h(uint8_t *dst, int q0, int q1, int p0, int p1, in
 }
 
 template <int STR, int N>
-static inline void deblock_horiz_base(int a, int b2, uint8_t *luma, int tc0, int len, int stride)
+static inline void deblock_horiz_base(int a, const int8_t *beta, uint8_t *dst, int str, int len, int stride)
 {
-	uint8_t *dst = luma - 2 * N;
-	int a2 = SQUARE(a);
-	if (STR == 4) {
-		tc0 = SQUARE((a >> 2) + 2);
+	const int8_t *alpha = alpha_offset_base[a];
+	const int8_t *tc0;
+	dst = dst - 2 * N;
+	if ((STR == 4) && (N == 1)) {
+		tc0 = alpha_r_offset_base[a];
+	} else if (STR == 4) {
+		tc0 = 0;
+	} else {
+		tc0 = deblock_clip3[tc0_tbl[a][str]];
 	}
-	for (int y = 0; y < len; ++y) {
+	do {
 		int q0 = dst[1 * N];
 		int q1 = dst[0];
-		if (SQUARE(q1 - q0) < b2) {
+		if (SMALLER_THAN(q1 - q0, beta)) {
 			int p0 = dst[2 * N];
-			if (SQUARE(q0 - p0) < a2) {
+			if (SMALLER_THAN(q0 - p0, alpha)) {
 				int p1 = dst[3 * N];
-				if (SQUARE(p0 - p1) < b2) {
+				if (SMALLER_THAN(p0 - p1, beta)) {
 					if (STR == 4) {
-						strength4h<N>(dst, q0, q1, p0, p1, tc0, b2);
+						strength4h<N>(dst, q0, q1, p0, p1, tc0, beta);
 					} else {
-						strength1_3h<N>(dst, q0, q1, p0, p1, tc0, b2);
+						strength1_3h<N>(dst, q0, q1, p0, p1, tc0, beta);
 					}
 				}
 			}
 		}
 		dst += stride;
-	}
+	} while (--len);
 }
 
 template <int INC>
-static inline void deblock_horiz_str4(int a, int b2, uint8_t *dst, int stride) {
-	deblock_horiz_base<4, 4 / INC>(a, b2, dst, 0, INC * 4, stride);
+static inline void deblock_horiz_str4(int a, int b, uint8_t *dst, int stride) {
+	deblock_horiz_base<4, 4 / INC>(a, beta_offset_base[b], dst, 0, INC * 4, stride);
 }
 
 template <int INC>
-static inline void deblock_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_t *dst, int str, int stride)
+static inline void deblock_horiz_str1_3(int a, int b, uint8_t *dst, int str, int stride)
 {
 	str &= 255;
+	const int8_t *beta = beta_offset_base[b];
 	while (str) {
 		int len = 0;
 		int str1 = str & 3;
@@ -9856,32 +10497,32 @@ static inline void deblock_horiz_str1_3(int a, int b2, const int8_t *tc0, uint8_
 			len += INC;
 		} while (str1 == (str & 3));
 		if (str1) {
-			deblock_horiz_base<1, 4 / INC>(a, b2, dst, tc0[str1 - 1], len, stride);
+			deblock_horiz_base<1, 4 / INC>(a, beta, dst, str1 - 1, len, stride);
 		}
 		dst += stride * len;
 	}
 }
 
 template <int N>
-static inline void strength4v(uint8_t *dst, int q0, int q1, int p0, int p1, int a2r, int b2, int stride) {
-	if ((N == 1) && (SQUARE(p0 - q0) < a2r)) {
-		int p2 = dst[stride * 4];
-		if (SQUARE(p0 - p2) < b2) {
-			int t = p0 + p1 + q0 + 2;
-			dst[stride * 2] = (t * 2 + q1 + p2) >> 3;
-			dst[stride * 3] = (t + p2) >> 2;
-			dst[stride * 4] = (dst[stride * 5] * 2 + p2 * 3 + t + 2) >> 3;
-		} else {
-			dst[stride * 2] = (p1 * 2 + p0 + q1 + 2) >> 2;
-		}
+static inline void strength4v(uint8_t *dst, int q0, int q1, int p0, int p1, const int8_t *alpha_r, const int8_t *beta, int stride) {
+	if ((N == 1) && (SMALLER_THAN(q0 - p0, alpha_r))) {
 		int q2 = dst[-stride];
-		if (SQUARE(q0 - q2) < b2) {
+		if (SMALLER_THAN(q0 - q2, beta)) {
 			int t = q0 + q1 + p0 + 2;
 			dst[stride * 1] = (t * 2 + p1 + q2) >> 3;
 			dst[0] = (t + q2) >> 2;
 			dst[-stride] = (dst[-stride * 2] * 2 + q2 * 3 + t + 2) >> 3;
 		} else {
 			dst[stride * 1] = (q1 * 2 + q0 + p1 + 2) >> 2;
+		}
+		int p2 = dst[stride * 4];
+		if (SMALLER_THAN(p0 - p2, beta)) {
+			int t = p0 + p1 + q0 + 2;
+			dst[stride * 2] = (t * 2 + q1 + p2) >> 3;
+			dst[stride * 3] = (t + p2) >> 2;
+			dst[stride * 4] = (dst[stride * 5] * 2 + p2 * 3 + t + 2) >> 3;
+		} else {
+			dst[stride * 2] = (p1 * 2 + p0 + q1 + 2) >> 2;
 		}
 	} else {
 		int t = q1 + p1 + 2;
@@ -9891,42 +10532,42 @@ static inline void strength4v(uint8_t *dst, int q0, int q1, int p0, int p1, int 
 }
 
 template <int N>
-static inline void strength1_3v(uint8_t *dst, int q0, int q1, int p0, int p1, int tc0, int b2, int stride) {
+static inline void strength1_3v(uint8_t *dst, int q0, int q1, int p0, int p1, const int8_t *tc0p, const int8_t *beta, int stride) {
 	if (N == 1) {
 		int q2 = dst[-stride];
 		int p2 = dst[stride * 4];
-		int aq_smaller = SQUARE(q2 - q0) < b2;
-		int ap_smaller = SQUARE(p2 - p0) < b2;
-		if (tc0) {
+		int aq_smaller = SMALLER_THAN(q2 - q0, beta);
+		int ap_smaller = SMALLER_THAN(p2 - p0, beta);
+		if (tc0p[1]) {
 			if (aq_smaller || ap_smaller) {
 				int t0 = (p0 + q0 + 1) >> 1;
 				if (aq_smaller) {
 					int t = (q2 + t0 - (q1 * 2)) >> 1;
 					if (t) {
-						dst[0] = CLIP3(t, tc0) + q1;
+						dst[0] = CLIP3(t, tc0p) + q1;
 					}
 				}
 				if (ap_smaller) {
 					int t = (p2 + t0 - (p1 * 2)) >> 1;
 					if (t) {
-						dst[stride * 3] = CLIP3(t, tc0) + p1;
+						dst[stride * 3] = CLIP3(t, tc0p) + p1;
 					}
-					tc0 = tc0 + 1;
+					tc0p += 511;
 				}
-				tc0 = tc0 + aq_smaller;
+				tc0p = aq_smaller ? tc0p + 511 : tc0p;
 			}
 		} else {
-			tc0 = tc0 + aq_smaller + ap_smaller;
-			if (!tc0) {
+			tc0p += 511 * (aq_smaller + ap_smaller);
+			if (!tc0p[1]) {
 				return;
 			}
 		}
 	} else {
-		tc0 = tc0 + 1;
+		tc0p += 511;
 	}
 	int delta = (((p0 - q0) * 4) + q1 - p1 + 4) >> 3;
 	if (delta) {
-		delta = CLIP3(delta, tc0);
+		delta = CLIP3(delta, tc0p);
 		q0 = q0 + delta;
 		p0 = p0 - delta;
 		dst[stride * 1] = CLIP255C(q0);
@@ -9935,42 +10576,48 @@ static inline void strength1_3v(uint8_t *dst, int q0, int q1, int p0, int p1, in
 }
 
 template <int STR, int GAP>
-static inline void deblock_vert_base(int a, int b2, uint8_t *dst, int tc0, int len, int stride)
+static inline void deblock_vert_base(int a, const int8_t *beta, uint8_t *dst, int str, int len, int stride)
 {
+	const int8_t *alpha = alpha_offset_base[a];
+	const int8_t *tc0;
 	dst = dst - stride * 2;
-	int a2 = SQUARE(a);
-	if (STR == 4) {
-		tc0 = SQUARE((a >> 2) + 2);
+	if ((STR == 4) && (GAP == 1)) {
+		tc0 = alpha_r_offset_base[a];
+	} else if (STR == 4) {
+		tc0 = 0;
+	} else {
+		tc0 = deblock_clip3[tc0_tbl[a][str]];
 	}
-	for (int x = 0; x < len; ++x) {
+	do {
 		int q1 = dst[0];
 		int q0 = dst[stride];
-		if (SQUARE(q1 - q0) < b2) {
+		if (SMALLER_THAN(q1 - q0, beta)) {
 			int p0 = dst[stride * 2];
-			if (SQUARE(q0 - p0) < a2) {
+			if (SMALLER_THAN(q0 - p0, alpha)) {
 				int p1 = dst[stride * 3];
-				if (SQUARE(p0 - p1) < b2) {
+				if (SMALLER_THAN(p0 - p1, beta)) {
 					if (STR == 4) {
-						strength4v<GAP>(dst, q0, q1, p0, p1, tc0, b2, stride);
+						strength4v<GAP>(dst, q0, q1, p0, p1, tc0, beta, stride);
 					} else {
-						strength1_3v<GAP>(dst, q0, q1, p0, p1, tc0, b2, stride);
+						strength1_3v<GAP>(dst, q0, q1, p0, p1, tc0, beta, stride);
 					}
 				}
 			}
 		}
 		dst += GAP;
-	}
+	} while (--len);
 }
 
 template <int INC>
-static inline void deblock_vert_str4(int a, int b2, uint8_t *dst, int stride) {
-	deblock_vert_base<4, 4 / INC>(a, b2, dst, 0, INC * 4, stride);
+static inline void deblock_vert_str4(int a, int b, uint8_t *dst, int stride) {
+	deblock_vert_base<4, 4 / INC>(a, beta_offset_base[b], dst, 0, INC * 4, stride);
 }
 
 template <int INC>
-static inline void deblock_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t *dst, int str, int stride)
+static inline void deblock_vert_str1_3(int a, int b, uint8_t *dst, int str, int stride)
 {
 	str &= 255;
+	const int8_t *beta = beta_offset_base[b];
 	while (str) {
 		int len = 0;
 		int str1 = str & 3;
@@ -9979,35 +10626,34 @@ static inline void deblock_vert_str1_3(int a, int b2, const int8_t *tc0, uint8_t
 			len += INC;
 		} while (str1 == (str & 3));
 		if (str1) {
-			deblock_vert_base<1, 4 / INC>(a, b2, dst, tc0[str1 - 1], len, stride);
+			deblock_vert_base<1, 4 / INC>(a, beta, dst, str1 - 1, len, stride);
 		}
 		dst += len * (4 / INC);
 	}
 }
 
-static inline void deblock_luma_inner_horiz(int a, int b2, const int8_t *tc0, uint8_t *luma, uint32_t str, int stride)
+static inline void deblock_luma_inner_horiz(int a, int b, uint8_t *luma, uint32_t str, int stride)
 {
 	for (int i = 0; i < 3; ++i) {
 		str >>= 8;
 		luma += 4;
-		deblock_horiz_str1_3<4>(a, b2, tc0, luma, str, stride);
+		deblock_horiz_str1_3<4>(a, b, luma, str, stride);
 	}
 }
 
-static inline void deblock_luma_inner_vert(int a, int b2, const int8_t *tc0, uint8_t *luma, uint32_t str, int stride)
+static inline void deblock_luma_inner_vert(int a, int b, uint8_t *luma, uint32_t str, int stride)
 {
 	for (int i = 0; i < 3; ++i) {
 		str >>= 8;
 		luma += stride * 4;
-		deblock_vert_str1_3<4>(a, b2, tc0, luma, str, stride);
+		deblock_vert_str1_3<4>(a, b, luma, str, stride);
 	}
 }
 
 static inline void deblock_pb(h264d_mb_current *mb)
 {
 	int qp;
-	int a, b2;
-	const int8_t *tc0;
+	int a, b;
 	int alpha_offset, beta_offset;
 	int max_x = mb->max_x;
 	int max_y = mb->max_y;
@@ -10034,44 +10680,44 @@ static inline void deblock_pb(h264d_mb_current *mb)
 			if ((x != 0) && (!idc || mb->firstline != max_x) && (str & 255)) {
 				/* alpha, beta of MB left edge */
 				qp = (curr->qpy + (curr - 1)->qpy + 1) >> 1;
-				a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
-				if (a) {
+				AlphaBeta(a, b, qp, alpha_offset, beta_offset);
+				if (0 <= a) {
 					if (curr->str4_horiz) {
-						deblock_horiz_str4<4>(a, b2, luma, stride);
+						deblock_horiz_str4<4>(a, b, luma, stride);
 					} else {
-						deblock_horiz_str1_3<4>(a, b2, tc0, luma, str, stride);
+						deblock_horiz_str1_3<4>(a, b, luma, str, stride);
 					}
 				}
 				for (int c = 0; c < 2; ++c) {
 					qp = (curr->qpc[c] + (curr - 1)->qpc[c] + 1) >> 1;
-					a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
-					if (a) {
+					AlphaBeta(a, b, qp, alpha_offset, beta_offset);
+					if (0 <= a) {
 						if (curr->str4_horiz) {
-							deblock_horiz_str4<2>(a, b2, chroma + c, stride);
+							deblock_horiz_str4<2>(a, b, chroma + c, stride);
 						} else {
-							deblock_horiz_str1_3<2>(a, b2, tc0, chroma + c, str, stride);
+							deblock_horiz_str1_3<2>(a, b, chroma + c, str, stride);
 						}
 					}
 				}
 			}
 			if (str & ~255) {
-				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
-				if (a) {
-					deblock_luma_inner_horiz(a, b2, tc0, luma, str, stride);
+				AlphaBeta(a, b, curr->qpy, alpha_offset, beta_offset);
+				if (0 <= a) {
+					deblock_luma_inner_horiz(a, b, luma, str, stride);
 				}
 				str >>= 16;
 				if (str & 0xff) {
 					if (curr->qpy != curr->qpc[0]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[0], alpha_offset, beta_offset);
+						AlphaBeta(a, b, curr->qpc[0], alpha_offset, beta_offset);
 					}
-					if (a) {
-						deblock_horiz_str1_3<2>(a, b2, tc0, chroma + 8, str, stride);
+					if (0 <= a) {
+						deblock_horiz_str1_3<2>(a, b, chroma + 8, str, stride);
 					}
 					if (curr->qpc[0] != curr->qpc[1]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[1], alpha_offset, beta_offset);
+						AlphaBeta(a, b, curr->qpc[1], alpha_offset, beta_offset);
 					}
-					if (a) {
-						deblock_horiz_str1_3<2>(a, b2, tc0, chroma + 8 + 1, str, stride);
+					if (0 <= a) {
+						deblock_horiz_str1_3<2>(a, b, chroma + 8 + 1, str, stride);
 					}
 				}
 			}
@@ -10079,44 +10725,44 @@ static inline void deblock_pb(h264d_mb_current *mb)
 			if ((y != 0) && (!idc || mb->firstline < 0) && (str & 255)) {
 				/* top edge of MB */
 				qp = (curr->qpy + (curr - max_x)->qpy + 1) >> 1;
-				a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
-				if (a) {
+				AlphaBeta(a, b, qp, alpha_offset, beta_offset);
+				if (0 <= a) {
 					if (curr->str4_vert) {
-						deblock_vert_str4<4>(a, b2, luma, stride);
+						deblock_vert_str4<4>(a, b, luma, stride);
 					} else {
-						deblock_vert_str1_3<4>(a, b2, tc0, luma, str, stride);
+						deblock_vert_str1_3<4>(a, b, luma, str, stride);
 					}
 				}
 				for (int c = 0; c < 2; ++c) {
 					qp = (curr->qpc[c] + (curr - max_x)->qpc[c] + 1) >> 1;
-					a = AlphaBetaTc0(b2, &tc0, qp, alpha_offset, beta_offset);
-					if (a) {
+					AlphaBeta(a, b, qp, alpha_offset, beta_offset);
+					if (0 <= a) {
 						if (curr->str4_vert) {
-							deblock_vert_str4<2>(a, b2, chroma + c, stride);
+							deblock_vert_str4<2>(a, b, chroma + c, stride);
 						} else {
-							deblock_vert_str1_3<2>(a, b2, tc0, chroma + c, str, stride);
+							deblock_vert_str1_3<2>(a, b, chroma + c, str, stride);
 						}
 					}
 				}
 			}
 			if (str & ~255) {
-				a = AlphaBetaTc0(b2, &tc0, curr->qpy, alpha_offset, beta_offset);
-				if (a) {
-					deblock_luma_inner_vert(a, b2, tc0, luma, str, stride);
+				AlphaBeta(a, b, curr->qpy, alpha_offset, beta_offset);
+				if (0 <= a) {
+					deblock_luma_inner_vert(a, b, luma, str, stride);
 				}
 				str >>= 16;
 				if (str & 0xff) {
 					if (curr->qpy != curr->qpc[0]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[0], alpha_offset, beta_offset);
+						AlphaBeta(a, b, curr->qpc[0], alpha_offset, beta_offset);
 					}
-					if (a) {
-						deblock_vert_str1_3<2>(a, b2, tc0, chroma + stride * 4, str, stride);
+					if (0 <= a) {
+						deblock_vert_str1_3<2>(a, b, chroma + stride * 4, str, stride);
 					}
 					if (curr->qpc[0] != curr->qpc[1]) {
-						a = AlphaBetaTc0(b2, &tc0, curr->qpc[1], alpha_offset, beta_offset);
+						AlphaBeta(a, b, curr->qpc[1], alpha_offset, beta_offset);
 					}
-					if (a) {
-						deblock_vert_str1_3<2>(a, b2, tc0, chroma + stride * 4 + 1, str, stride);
+					if (0 <= a) {
+						deblock_vert_str1_3<2>(a, b, chroma + stride * 4 + 1, str, stride);
 					}
 				}
 			}
@@ -11004,7 +11650,7 @@ static inline void cabac_renorm(h264d_cabac_t *cb, dec_bits *st, int range, int 
 	cb->offset = offset;
 }
 
-static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctxIdx)
+static inline int cabac_decode_decision_raw(h264d_cabac_t *cb, dec_bits *st, int8_t *ctx)
 {
 	static const uint8_t rangeTabLPS[64][4] = {
 		{128, 176, 208, 240}, {128, 167, 197, 227},
@@ -11040,41 +11686,26 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 		{6, 8, 9, 11}, {6, 7, 9, 10},
 		{6, 7, 8, 9}, {2, 2, 2, 2}
 	};
-	static const int8_t state_trans[2][64] = {
-		{
-			2, 4, 6, 8, 10, 12, 14, 16,
-			18, 20, 22, 24, 26, 28, 30, 32,
-			34, 36, 38, 40, 42, 44, 46, 48,
-			50, 52, 54, 56, 58, 60, 62, 64,
-			66, 68, 70, 72, 74, 76, 78, 80,
-			82, 84, 86, 88, 90, 92, 94, 96,
-			98, 100, 102, 104, 106, 108, 110, 112,
-			114, 116, 118, 120, 122, 124, 124, 126
-		},
-		{
-			1, 0, 2, 4, 4, 8, 8, 10,
-			12, 14, 16, 18, 18, 22, 22, 24,
-			26, 26, 30, 30, 32, 32, 36, 36,
-			38, 38, 42, 42, 44, 44, 46, 48,
-			48, 50, 52, 52, 54, 54, 56, 58,
-			58, 60, 60, 60, 62, 64, 64, 66,
-			66, 66, 68, 68, 70, 70, 70, 72,
-			72, 72, 74, 74, 74, 76, 76, 126
-		}
+	static const int8_t state_trans[64] = {
+		1, 0, 2, 4, 4, 8, 8, 10,
+		12, 14, 16, 18, 18, 22, 22, 24,
+		26, 26, 30, 30, 32, 32, 36, 36,
+		38, 38, 42, 42, 44, 44, 46, 48,
+		48, 50, 52, 52, 54, 54, 56, 58,
+		58, 60, 60, 60, 62, 64, 64, 66,
+		66, 66, 68, 68, 70, 70, 70, 72,
+		72, 72, 74, 74, 74, 76, 76, 126
 	};
-	int pStateIdx;
-	uint32_t valMPS;
+	int pStateIdx = *ctx;
+	uint32_t valMPS = pStateIdx & 1;
 	uint32_t range, offset, lps;
-
-	pStateIdx = cb->context[ctxIdx];
-	valMPS = pStateIdx & 1;
 	pStateIdx >>= 1;
 	range = cb->range;
 	offset = cb->offset;
 	lps = rangeTabLPS[pStateIdx][(range >> 6) & 3];
 	range = range - lps;
 	if (offset < range) {
-		cb->context[ctxIdx] = state_trans[0][pStateIdx] | valMPS;
+		*ctx = ((pStateIdx + (pStateIdx < 62)) * 2) | valMPS;
 		if (256 <= range) {
 			cb->range = range;
 			return valMPS;
@@ -11082,11 +11713,16 @@ static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctx
 	} else {
 		offset = offset - range;
 		range = lps;
-		cb->context[ctxIdx] = state_trans[1][pStateIdx] ^ valMPS;
+		*ctx = state_trans[pStateIdx] ^ valMPS;
 		valMPS ^= 1;
 	}
 	cabac_renorm(cb, st, range, offset);
 	return valMPS;
+}
+
+static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctxIdx)
+{
+	return cabac_decode_decision_raw(cb, st, &cb->context[ctxIdx]);
 }
 
 static inline int cabac_decode_bypass(h264d_cabac_t *cb, dec_bits *st)
@@ -11163,23 +11799,26 @@ static int mb_type_cabac_P(h264d_mb_current *mb, dec_bits *st, int avail, int ct
 static int mb_type_cabac_B(h264d_mb_current *mb, dec_bits *st, int avail, int ctx_idx, int slice_type)
 {
 	h264d_cabac_t *cb = mb->cabac;
-	int add = ((avail & 1) && (mb->left4x4inter->type != MB_BDIRECT16x16)) + ((avail & 2) && (mb->top4x4inter->type != MB_BDIRECT16x16));
+	int8_t *ctx = &cb->context[27 + ((avail & 1) && (mb->left4x4inter->type != MB_BDIRECT16x16)) + ((avail & 2) && (mb->top4x4inter->type != MB_BDIRECT16x16))];
 	int mode;
 
-	if (!cabac_decode_decision(cb, st, 27 + add)) {
+	if (!cabac_decode_decision_raw(cb, st, ctx)) {
 		return 0;
 	}
-	if (!cabac_decode_decision(cb, st, 27 + 3)) {
+	ctx = &cb->context[27 + 3];
+	if (!cabac_decode_decision_raw(cb, st, ctx)) {
 		return 1 + cabac_decode_decision(cb, st, 27 + 5);
 	}
-	mode = cabac_decode_decision(cb, st, 27 + 4) * 8;
-	mode += cabac_decode_decision(cb, st, 27 + 5) * 4;
-	mode += cabac_decode_decision(cb, st, 27 + 5) * 2;
-	mode += cabac_decode_decision(cb, st, 27 + 5);
+	ctx++;
+	mode = cabac_decode_decision_raw(cb, st, ctx) * 8;
+	ctx++;
+	mode += cabac_decode_decision_raw(cb, st, ctx) * 4;
+	mode += cabac_decode_decision_raw(cb, st, ctx) * 2;
+	mode += cabac_decode_decision_raw(cb, st, ctx);
 	if (mode < 8) {
 		return mode + 3;
 	} else if (mode < 13) {
-		return mode * 2 + cabac_decode_decision(cb, st, 27 + 5) - 4;
+		return mode * 2 + cabac_decode_decision_raw(cb, st, ctx) - 4;
 	} else if (mode == 13) {
 		return 23 + mb_type_cabac_I(mb, st, avail, 32, 0);
 	} else if (mode == 14) {
@@ -11213,11 +11852,13 @@ struct transform_size_8x8_flag_cabac {
 struct intra4x4pred_mode_cabac {
 	int operator()(int a, int b, dec_bits *st, h264d_cabac_t *cb) const {
 		int pred = MIN(a, b);
-		if (!cabac_decode_decision(cb, st, 68)) {
+		int8_t *ctx = &cb->context[68];
+		if (!cabac_decode_decision_raw(cb, st, ctx)) {
 			int rem;
-			rem = cabac_decode_decision(cb, st, 69);
-			rem += cabac_decode_decision(cb, st, 69) * 2;
-			rem += cabac_decode_decision(cb, st, 69) * 4;
+			ctx++;
+			rem = cabac_decode_decision_raw(cb, st, ctx);
+			rem += cabac_decode_decision_raw(cb, st, ctx) * 2;
+			rem += cabac_decode_decision_raw(cb, st, ctx) * 4;
 			pred = (rem < pred) ? rem : rem + 1;
 		}
 		return pred;
@@ -11537,18 +12178,17 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 		{105, 166}, {105 + 15, 166 + 15}, {105 + 29, 166 + 29},
 		{105 + 44, 166 + 44}, {105 + 47, 166 + 47}, {402, 417}
 	};
-	int sigc_offset = significant_coeff_flag_offset[cat][0];
-	int last_offset = significant_coeff_flag_offset[cat][1];
+	int8_t *sigc_offset = &cb->context[significant_coeff_flag_offset[cat][0]];
+	int8_t *last_offset = &cb->context[significant_coeff_flag_offset[cat][1]];
 	const int8_t (*latter)[3] = (cat == 5) ? significant_coeff_flag_offset64 : significant_coeff_flag_offset16;
 	int map_cnt = 0;
 	int i;
 
 	for (i = 0; i < num_coeff - 1; ++i) {
-		if (cabac_decode_decision(cb, st, sigc_offset + latter[i][1])) {
+		if (cabac_decode_decision_raw(cb, st, sigc_offset + latter[i][1])) {
 			coeff_map[map_cnt++] = i;
-			if (cabac_decode_decision(cb, st, last_offset + latter[i][0])) {
-				i = 0;
-				break;
+			if (cabac_decode_decision_raw(cb, st, last_offset + latter[i][0])) {
+				return map_cnt;
 			}
 		}
 	}
@@ -11597,23 +12237,23 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 	};
 	int coeff_offset = coeff_ofs[cat].coeff_offset;
 	memset(coeff + coeff_offset, 0, sizeof(*coeff) * coeff_ofs[cat].num_coeff);
-	int abs_offset = coeff_ofs[cat].cabac_coeff_abs_level_offset + 227;
+	int8_t *abs_offset = &cb->context[coeff_ofs[cat].cabac_coeff_abs_level_offset + 227];
 	uint32_t dc_mask = coeff_ofs[cat].coeff_dc_mask;
 	int node_ctx = 0;
 	int mp = map_cnt;
 	const int8_t *zigzag = inverse_zigzag[cat];
 	do {
-		int ctx = abs_offset + coeff_abs_level_ctx[0][node_ctx];
+		int8_t *ctx = abs_offset + coeff_abs_level_ctx[0][node_ctx];
 		int abs_level;
 		int idx;
-		if (!cabac_decode_decision(cb, st, ctx)) {
+		if (!cabac_decode_decision_raw(cb, st, ctx)) {
 			abs_level = 1;
 			node_ctx = coeff_abs_level_transition[0][node_ctx];
 		} else {
 			abs_level = 2;
 			ctx = abs_offset + coeff_abs_level_ctx[1][node_ctx];
 			node_ctx = coeff_abs_level_transition[1][node_ctx];
-			while (abs_level < 15 && cabac_decode_decision(cb, st, ctx)) {
+			while (abs_level < 15 && cabac_decode_decision_raw(cb, st, ctx)) {
 				abs_level++;
 			}
 			if (abs_level == 15) {
@@ -11670,13 +12310,14 @@ static int mb_intra16x16_acdc_cabac(h264d_mb_current *mb, const mb_code *mbc, de
 struct sub_mb_type_p_cabac {
 	int operator()(h264d_mb_current *mb, dec_bits *st, int8_t *sub_mb_type, prev8x8_t *curr_blk, int avail) const {
 		h264d_cabac_t *cb = mb->cabac;
+		int8_t *ctx = &cb->context[21];
 		for (int i = 0; i < 4; ++i) {
 			int t;
-			if (cabac_decode_decision(cb, st, 21)) {
+			if (cabac_decode_decision_raw(cb, st, ctx)) {
 				t = 0;
-			} else if (!cabac_decode_decision(cb, st, 22)) {
+			} else if (!cabac_decode_decision_raw(cb, st, ctx + 1)) {
 				t = 1;
-			} else if (cabac_decode_decision(cb, st, 23)) {
+			} else if (cabac_decode_decision_raw(cb, st, ctx + 2)) {
 				t = 2;
 			} else {
 				t = 3;
@@ -11687,7 +12328,6 @@ struct sub_mb_type_p_cabac {
 	}
 };
 
-
 static inline int sub_mb_type_b_one_cabac(h264d_cabac_t *cb, dec_bits *st)
 {
 	int t;
@@ -11695,7 +12335,7 @@ static inline int sub_mb_type_b_one_cabac(h264d_cabac_t *cb, dec_bits *st)
 		return 0;
 	} else if (!cabac_decode_decision(cb, st, 37)) {
 		return 1 + cabac_decode_decision(cb, st, 39);
-	} else 	if (cabac_decode_decision(cb, st, 38)) {
+	} else if (cabac_decode_decision(cb, st, 38)) {
 		if (cabac_decode_decision(cb, st, 39)) {
 			return 11 + cabac_decode_decision(cb, st, 39);
 		} else {
@@ -11720,7 +12360,7 @@ struct sub_mb_types_b_cabac {
 	}
 };
 
-static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *cb, int ctx, int mva, int mvb)
+static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *cb, int8_t *ctx, int mva, int mvb)
 {
 	int mvd;
 	int sum;
@@ -11734,12 +12374,12 @@ static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *c
 	} else {
 		inc = 2;
 	}
-	if (!cabac_decode_decision(cb, st, ctx + inc)) {
+	if (!cabac_decode_decision_raw(cb, st, ctx + inc)) {
 		return 0;
 	}
 	mvd = 1;
 	ctx += 3;
-	while (cabac_decode_decision(cb, st, ctx)) {
+	while (cabac_decode_decision_raw(cb, st, ctx)) {
 		ctx += (mvd < 4) ? 1 : 0;
 		mvd += 1;
 		if (9 <= mvd) {
@@ -11760,8 +12400,8 @@ static inline int mvd_cabac(h264d_mb_current *mb, dec_bits *st, h264d_cabac_t *c
 struct mvd_xy_cabac {
 	void operator()(h264d_mb_current *mb, dec_bits *st, int16_t mv[], const int16_t mva[], const int16_t mvb[]) const {
 		h264d_cabac_t *cb = mb->cabac;
-		mv[0] = mvd_cabac(mb, st, cb, 40, mva[0], mvb[0]);
-		mv[1] = mvd_cabac(mb, st, cb, 47, mva[1], mvb[1]);
+		mv[0] = mvd_cabac(mb, st, cb, &cb->context[40], mva[0], mvb[0]);
+		mv[1] = mvd_cabac(mb, st, cb, &cb->context[47], mva[1], mvb[1]);
 	}
 };
 
