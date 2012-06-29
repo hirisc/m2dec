@@ -17,9 +17,6 @@
 # LIBM2DECCONFIG: Can be used to specify the configurations you wish to have built for the 
 #              libm2dec project. If it is set to "ALL" then all configurations will be built.
 #
-# M2DECCONFIG: Can be used to specify the configurations you wish to have built for the 
-#              m2dec project. If it is set to "ALL" then all configurations will be built.
-#
 # H264DECCONFIG: Can be used to specify the configurations you wish to have built for the 
 #              h264dec project. If it is set to "ALL" then all configurations will be built.
 #
@@ -29,7 +26,7 @@ PROJECT = ALL
 !MESSAGE No project given. Will build all projects.
 !ENDIF
 
-!IF "$(CONFIG)" == "" && "$(H264DECCONFIG)" == "" && "$(M2DECCONFIG)" == "" && "$(LIBM2DECCONFIG)" == ""
+!IF "$(CONFIG)" == "" && "$(H264DECCONFIG)" == "" && "$(LIBM2DECCONFIG)" == ""
 CONFIG = ALL
 !MESSAGE No project given. Will build all projects.
 !ENDIF
@@ -41,6 +38,447 @@ TC_INSTALL_DIR = c:\program files (x86)\renesas\hew\tools\renesas\sh\9_3_2
 
 # libm2dec project
 !IF "$(PROJECT)" == "ALL" || "$(PROJECT)" == "libm2dec"
+
+# Release configuration
+!IF  "$(CONFIG)" == "ALL" || "$(CONFIG)" == "Release" || "$(LIBM2DECCONFIG)" == "ALL" || "$(LIBM2DECCONFIG)" == "Release"
+
+#####################################################
+#
+# Details:
+#   Project: libm2dec
+#   Configuration: Release
+#   Toolchain: Renesas SuperH RISC engine Standard Toolchain
+#
+#####################################################
+
+################
+# Main Defines
+
+# Renesas SH C/C++ Library Generator01 phase
+
+LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXE=lbgsh.exe
+LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR=$(TC_INSTALL_DIR)\bin
+
+# Renesas SH C/C++ Compiler02 phase
+
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE=shc.exe
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0="..\libm2dec\Release\bitio.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\stlport\string.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\libm2dec\Release\h264.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stlport\assert.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\libm2dec\Release\idct.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\m2types.h" "..\..\..\src\lib\m2d_macro.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
+	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\idct.h"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\libm2dec\Release\m2d.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4="..\libm2dec\Release\motioncomp.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\m2d_macro.h" "..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
+	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\motioncomp.h"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5="..\libm2dec\Release\mpeg2.src"
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6="..\libm2dec\Release\mpeg_demux.src"
+
+# Renesas SH Assembler03 phase
+
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE=asmsh.exe
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0="..\libm2dec\Release\idct_asm.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1="..\libm2dec\Release\motioncomp_asm.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2="..\libm2dec\Release\bitio.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3="..\libm2dec\Release\h264.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4="..\libm2dec\Release\idct.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5="..\libm2dec\Release\m2d.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6="..\libm2dec\Release\motioncomp.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7="..\libm2dec\Release\mpeg2.obj"
+LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8="..\libm2dec\Release\mpeg_demux.obj"
+
+# Renesas OptLinker04 phase
+
+LIBM2DEC_RELEASE_OPTLINKER04_EXE=LnkSpawn.exe
+LIBM2DEC_RELEASE_OPTLINKER04_INFILESC0="..\libm2dec\Release\bitio.obj" "..\libm2dec\Release\h264.obj" "..\libm2dec\Release\idct.obj" \
+	"..\libm2dec\Release\idct_asm.obj" "..\libm2dec\Release\m2d.obj" "..\libm2dec\Release\motioncomp.obj" \
+	"..\libm2dec\Release\motioncomp_asm.obj" "..\libm2dec\Release\mpeg2.obj" "..\libm2dec\Release\mpeg_demux.obj"
+LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0="..\libm2dec\Release\libm2dec.lib"
+
+#######################
+# nmake "all" statement
+
+ALL:	LIBM2DEC_RELEASE_SH_CC_COMPILER02_ENVC0 \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) \
+	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7) \
+	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8) \
+	$(LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0)
+
+####################
+# Description blocks
+
+!MESSAGE
+!MESSAGE Executing Renesas SH C/C++ Compiler02 phase
+!MESSAGE
+
+LIBM2DEC_RELEASE_SH_CC_COMPILER02_ENVC0 : 
+	set SHC_INC=$(TC_INSTALL_DIR)\include
+	set PATH=$(TC_INSTALL_DIR)\bin
+	set SHC_LIB=$(TC_INSTALL_DIR)\bin
+	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) : "..\..\..\src\lib\bitio.c" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\bitio.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\bitio.c"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=c
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) : "..\..\..\src\lib\h264.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\h264.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\h264.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\idct.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\idct.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\lib\m2d.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\m2d.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\m2d.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\lib\motioncomp.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\motioncomp.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\motioncomp.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\lib\mpeg2.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\mpeg2.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\mpeg2.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\lib\mpeg_demux.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
+-cpu=sh4aldsp
+-endian=little
+-bit_order=right
+-include="$(TC_INSTALL_DIR)\include\stlport"
+-define=NDEBUG
+-code=asmcode
+-object="..\libm2dec\Release\mpeg_demux.src"
+-section=program=PM2D,const=CM2D
+-speed
+-inline=800
+-gbr=auto
+-macsave=0
+-save_cont_reg=0
+-loop
+"..\..\..\src\lib\mpeg_demux.cpp"
+-global_volatile=0
+-opt_range=all
+-infinite_loop=0
+-del_vacant_loop=0
+-struct_alloc=1
+-lang=cpp
+-nologo
+<<
+
+!MESSAGE
+!MESSAGE Executing Renesas SH Assembler03 phase
+!MESSAGE
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0) : "..\..\..\src\lib\idct_asm.src"
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\..\..\src\lib\idct_asm.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\idct_asm.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1) : "..\..\..\src\lib\motioncomp_asm.src"
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\..\..\src\lib\motioncomp_asm.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\motioncomp_asm.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\bitio.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\bitio.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\h264.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\h264.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\idct.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\idct.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\m2d.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\m2d.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\motioncomp.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\motioncomp.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\mpeg2.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\mpeg2.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
+"..\libm2dec\Release\mpeg_demux.src"
+-cpu=sh4aldsp
+-endian=little
+-round=zero
+-denormalize=off
+-nodebug
+-object="..\libm2dec\Release\mpeg_demux.obj"
+-literal=pool,branch,jump,return
+-nolist
+-nologo
+-chgincpath
+<<
+
+!MESSAGE
+!MESSAGE Executing Renesas OptLinker04 phase
+!MESSAGE
+
+$(LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0) : $(LIBM2DEC_RELEASE_OPTLINKER04_INFILESC0)
+	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_OPTLINKER04_EXE)" -subcommand=<<
+noprelink
+form library
+nomessage 
+list "..\libm2dec\Release\libm2dec.lbp"
+nologo
+-input="..\libm2dec\Release\bitio.obj"
+-input="..\libm2dec\Release\h264.obj"
+-input="..\libm2dec\Release\idct.obj"
+-input="..\libm2dec\Release\idct_asm.obj"
+-input="..\libm2dec\Release\m2d.obj"
+-input="..\libm2dec\Release\motioncomp.obj"
+-input="..\libm2dec\Release\motioncomp_asm.obj"
+-input="..\libm2dec\Release\mpeg2.obj"
+-input="..\libm2dec\Release\mpeg_demux.obj"
+output "..\libm2dec\Release\libm2dec.lib"
+-exit
+<<
+
+
+!ENDIF
 
 # Debug configuration
 !IF  "$(CONFIG)" == "ALL" || "$(CONFIG)" == "Debug" || "$(LIBM2DECCONFIG)" == "ALL" || "$(LIBM2DECCONFIG)" == "Debug"
@@ -66,29 +504,20 @@ LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR=$(TC_INSTALL_DIR)\bin
 
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE=shc.exe
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0="..\libm2dec\Debug\bitio.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h"
+LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\stlport\string.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1="..\libm2dec\Debug\h264.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\lib\bitio.h"
+LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stlport\assert.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2="..\libm2dec\Debug\idct.src"
+LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\m2types.h" "..\..\..\src\lib\m2d_macro.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
+	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\idct.h" "$(TC_INSTALL_DIR)\include\stlport\string.h" \
+	"$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\libm2dec\Debug\m2d.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4="..\libm2dec\Debug\motioncomp.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h"
+LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\m2d_macro.h" "..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
+	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\motioncomp.h" "$(TC_INSTALL_DIR)\include\stlport\string.h" \
+	"$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5="..\libm2dec\Debug\mpeg2.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\bitio.h"
 LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6="..\libm2dec\Debug\mpeg_demux.src"
-LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\mpeg_demux.h" \
-	"..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h"
 
 # Renesas SH Assembler03 phase
 
@@ -145,7 +574,7 @@ LIBM2DEC_DEBUG_SH_CC_COMPILER02_ENVC0 :
 	set PATH=$(TC_INSTALL_DIR)\bin
 	set SHC_LIB=$(TC_INSTALL_DIR)\bin
 	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
-	echo "$(TC_INSTALL_DIR)\include\stlport"
+
 $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0) : "..\..\..\src\lib\bitio.c" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
@@ -204,7 +633,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1) : "..\..\..\src\lib\h264.cpp" $(LI
 -nologo
 <<
 
-$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp"
+$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
 -endian=little
@@ -233,7 +662,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp"
 -nologo
 <<
 
-$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\lib\m2d.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3)
+$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\lib\m2d.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
 -endian=little
@@ -272,7 +701,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\lib\motioncomp.cpp
 -code=asmcode
 -object="..\libm2dec\Debug\motioncomp.src"
 -debug
--section=program=PM2D_FAST,const=CM2D,data=DM2D,bss=BM2D
+-section=program=PM2D,const=CM2D,data=DM2D,bss=BM2D
 -listfile="..\libm2dec\Debug\motioncomp.lst"
 -show=source
 -speed
@@ -291,7 +720,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\lib\motioncomp.cpp
 -nologo
 <<
 
-$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\lib\mpeg2.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5)
+$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\lib\mpeg2.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
 -endian=little
@@ -320,7 +749,7 @@ $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\lib\mpeg2.cpp" $(L
 -nologo
 <<
 
-$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\lib\mpeg_demux.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC6)
+$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\lib\mpeg_demux.cpp" $(LIBM2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1)
 	"$(LIBM2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
 -cpu=sh4aldsp
 -endian=little
@@ -514,1045 +943,6 @@ output "..\libm2dec\Debug\libm2dec.lib"
 
 !ENDIF
 
-# Release configuration
-!IF  "$(CONFIG)" == "ALL" || "$(CONFIG)" == "Release" || "$(LIBM2DECCONFIG)" == "ALL" || "$(LIBM2DECCONFIG)" == "Release"
-
-#####################################################
-#
-# Details:
-#   Project: libm2dec
-#   Configuration: Release
-#   Toolchain: Renesas SuperH RISC engine Standard Toolchain
-#
-#####################################################
-
-################
-# Main Defines
-
-# Renesas SH C/C++ Library Generator01 phase
-
-LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXE=lbgsh.exe
-LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR=$(TC_INSTALL_DIR)\bin
-
-# Renesas SH C/C++ Compiler02 phase
-
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE=shc.exe
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0="..\libm2dec\Release\bitio.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h"
-	"..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\libm2dec\Release\h264.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\h264.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\h264vld.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\libm2dec\Release\idct.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"..\..\..\src\lib\idct.h" "$(TC_INSTALL_DIR)\include\string.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\libm2dec\Release\m2d.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4="..\libm2dec\Release\motioncomp.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\umachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"..\..\..\src\lib\motioncomp.h" "$(TC_INSTALL_DIR)\include\string.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5="..\libm2dec\Release\mpeg2.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\m2types.h" "$(TC_INSTALL_DIR)\include\umachine.h" \
-	"..\..\..\src\lib\mpeg2.h" "..\..\..\src\lib\m2d.h" \
-	"..\..\..\src\lib\vld.h" "..\..\..\src\lib\motioncomp.h" \
-	"..\..\..\src\lib\idct.h" "..\..\..\src\lib\txt2bin.h"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6="..\libm2dec\Release\mpeg_demux.src"
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\lib\mpeg_demux.h" \
-	"..\..\..\src\lib\bitio.h" "$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\mpeg2.h" \
-	"..\..\..\src\lib\m2d.h"
-
-# Renesas SH Assembler03 phase
-
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE=asmsh.exe
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0="..\libm2dec\Release\idct_asm.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1="..\libm2dec\Release\motioncomp_asm.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2="..\libm2dec\Release\bitio.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3="..\libm2dec\Release\h264.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4="..\libm2dec\Release\idct.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5="..\libm2dec\Release\m2d.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6="..\libm2dec\Release\motioncomp.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7="..\libm2dec\Release\mpeg2.obj"
-LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8="..\libm2dec\Release\mpeg_demux.obj"
-
-# Renesas OptLinker04 phase
-
-LIBM2DEC_RELEASE_OPTLINKER04_EXE=LnkSpawn.exe
-LIBM2DEC_RELEASE_OPTLINKER04_INFILESC0="..\libm2dec\Release\bitio.obj" "..\libm2dec\Release\h264.obj" "..\libm2dec\Release\idct.obj" \
-	"..\libm2dec\Release\idct_asm.obj" "..\libm2dec\Release\m2d.obj" "..\libm2dec\Release\motioncomp.obj" \
-	"..\libm2dec\Release\motioncomp_asm.obj" "..\libm2dec\Release\mpeg2.obj" "..\libm2dec\Release\mpeg_demux.obj"
-LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0="..\libm2dec\Release\libm2dec.lib"
-
-#######################
-# nmake "all" statement
-
-ALL:	LIBM2DEC_RELEASE_SH_CC_COMPILER02_ENVC0 \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) \
-	$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7) \
-	$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8) \
-	$(LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0)
-
-####################
-# Description blocks
-
-!MESSAGE
-!MESSAGE Executing Renesas SH C/C++ Compiler02 phase
-!MESSAGE
-
-LIBM2DEC_RELEASE_SH_CC_COMPILER02_ENVC0 : 
-	set SHC_INC=$(TC_INSTALL_DIR)\include
-	set PATH=$(TC_INSTALL_DIR)\bin
-	set SHC_LIB=$(TC_INSTALL_DIR)\bin
-	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) : "..\..\..\src\lib\bitio.c" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\bitio.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\bitio.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) : "..\..\..\src\lib\h264.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\h264.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\h264.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\lib\idct.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\idct.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\idct.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\lib\m2d.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\m2d.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\m2d.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\lib\motioncomp.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\motioncomp.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\motioncomp.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\lib\mpeg2.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\mpeg2.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\mpeg2.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\lib\mpeg_demux.cpp" $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC6)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="$(TC_INSTALL_DIR)\include\stlport"
--define=NDEBUG
--code=asmcode
--object="..\libm2dec\Release\mpeg_demux.src"
--speed
--inline=20
--gbr=auto
-"..\..\..\src\lib\mpeg_demux.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas SH Assembler03 phase
-!MESSAGE
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC0) : "..\..\..\src\lib\idct_asm.src"
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\..\..\src\lib\idct_asm.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\idct_asm.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC1) : "..\..\..\src\lib\motioncomp_asm.src"
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\..\..\src\lib\motioncomp_asm.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\motioncomp_asm.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC2) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\bitio.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\bitio.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC3) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\h264.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\h264.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC4) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\idct.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\idct.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC5) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\m2d.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\m2d.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC6) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\motioncomp.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\motioncomp.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC7) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\mpeg2.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\mpeg2.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_OUTFILESC8) : $(LIBM2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_SH_ASSEMBLER03_EXE)" -subcommand=<<
-"..\libm2dec\Release\mpeg_demux.src"
--cpu=sh4aldsp
--endian=little
--round=zero
--denormalize=off
--nodebug
--object="..\libm2dec\Release\mpeg_demux.obj"
--literal=pool,branch,jump,return
--nolist
--nologo
--chgincpath
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas OptLinker04 phase
-!MESSAGE
-
-$(LIBM2DEC_RELEASE_OPTLINKER04_OUTFILESC0) : $(LIBM2DEC_RELEASE_OPTLINKER04_INFILESC0)
-	"$(LIBM2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(LIBM2DEC_RELEASE_OPTLINKER04_EXE)" -subcommand=<<
-noprelink
-form library
-nomessage 
-list "..\libm2dec\Release\libm2dec.lbp"
-nologo
--input="..\libm2dec\Release\bitio.obj"
--input="..\libm2dec\Release\h264.obj"
--input="..\libm2dec\Release\idct.obj"
--input="..\libm2dec\Release\idct_asm.obj"
--input="..\libm2dec\Release\m2d.obj"
--input="..\libm2dec\Release\motioncomp.obj"
--input="..\libm2dec\Release\motioncomp_asm.obj"
--input="..\libm2dec\Release\mpeg2.obj"
--input="..\libm2dec\Release\mpeg_demux.obj"
-output "..\libm2dec\Release\libm2dec.lib"
--exit
-<<
-
-
-!ENDIF
-
-!ENDIF
-
-# m2dec project
-!IF "$(PROJECT)" == "ALL" || "$(PROJECT)" == "m2dec"
-
-# Debug configuration
-!IF  "$(CONFIG)" == "ALL" || "$(CONFIG)" == "Debug" || "$(M2DECCONFIG)" == "ALL" || "$(M2DECCONFIG)" == "Debug"
-
-#####################################################
-#
-# Details:
-#   Project: m2dec
-#   Configuration: Debug
-#   Toolchain: Renesas SuperH RISC engine Standard Toolchain
-#
-#####################################################
-
-################
-# Main Defines
-
-# Renesas SH C/C++ Library Generator01 phase
-
-M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXE=lbgsh.exe
-M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR=$(TC_INSTALL_DIR)\bin
-M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0="..\m2dec\Debug\m2dec.lib"
-M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0="$(TC_INSTALL_DIR)\bin\libinc.pak"
-
-# Renesas SH C/C++ Compiler02 phase
-
-M2DEC_DEBUG_SH_CC_COMPILER02_EXE=shc.exe
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0="..\m2dec\Debug\resetprg.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1="..\m2dec\Debug\sbrk.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2="..\m2dec\Debug\display.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdlib.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\display.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\m2dec\Debug\m2dec.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\bitio.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4="..\m2dec\Debug\md5.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5="..\m2dec\Debug\my_getopt.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\my_getopt.h"
-M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6="..\m2dec\Debug\lowlevel.obj"
-M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\machine.h" "$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h"
-
-# Renesas SH Assembler03 phase
-
-M2DEC_DEBUG_SH_ASSEMBLER03_EXE=asmsh.exe
-
-# Renesas OptLinker04 phase
-
-M2DEC_DEBUG_OPTLINKER04_EXE=LnkSpawn.exe
-M2DEC_DEBUG_OPTLINKER04_INFILESC0="..\m2dec\Debug\display.obj" "..\m2dec\Debug\lowlevel.obj" "..\m2dec\Debug\m2dec.lib" \
-	"..\m2dec\Debug\m2dec.obj" "..\m2dec\Debug\md5.obj" "..\m2dec\Debug\my_getopt.obj" \
-	"..\m2dec\Debug\resetprg.obj" "..\m2dec\Debug\sbrk.obj"
-M2DEC_DEBUG_OPTLINKER04_OUTFILESC0="..\m2dec\Debug\m2dec.mot" "..\m2dec\Debug\m2dec.abs"
-M2DEC_DEBUG_OPTLINKER04_DEPFILESC0="..\libm2dec\Debug\libm2dec.lib"
-
-#######################
-# nmake "all" statement
-
-ALL:	M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_ENVC0 \
-	$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) \
-	$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6) \
-	$(M2DEC_DEBUG_OPTLINKER04_OUTFILESC0)
-
-####################
-# Description blocks
-
-!MESSAGE
-!MESSAGE Executing Renesas SH C/C++ Library Generator01 phase
-!MESSAGE
-
-M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_ENVC0 : 
-	set SHC_INC=$(TC_INSTALL_DIR)\include
-	set PATH=$(TC_INSTALL_DIR)\bin
-	set SHC_LIB=$(TC_INSTALL_DIR)\bin
-	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
-
-$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0) : $(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--output="..\m2dec\Debug\m2dec.lib"
--speed
--gbr=auto
--loop
--enable_register
--head=runtime,new,ctype,stdio,stdlib,string
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas SH C/C++ Compiler02 phase
-!MESSAGE
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0) : "..\resetprg.c" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\resetprg.obj"
--debug
--listfile="..\m2dec\Debug\resetprg.lst"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\resetprg.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=c
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1) : "..\sbrk.c" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\sbrk.obj"
--debug
--listfile="..\m2dec\Debug\sbrk.lst"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\sbrk.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=c
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\app\display.cpp" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\display.obj"
--debug
--listfile="..\m2dec\Debug\display.lpp"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\..\..\src\app\display.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=cpp
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\app\m2dec.cpp" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\m2dec.obj"
--debug
--listfile="..\m2dec\Debug\m2dec.lpp"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\..\..\src\app\m2dec.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=cpp
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\app\md5.c" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\md5.obj"
--debug
--listfile="..\m2dec\Debug\md5.lst"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\..\..\src\app\md5.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=c
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\app\my_getopt.c" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\my_getopt.obj"
--debug
--listfile="..\m2dec\Debug\my_getopt.lst"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\..\..\src\app\my_getopt.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=c
--nologo
-<<
-
-$(M2DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\app\lowlevel.c" $(M2DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC6)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Debug\lowlevel.obj"
--debug
--listfile="..\m2dec\Debug\lowlevel.lst"
--show=source
--speed
--goptimize
--gbr=auto
--macsave=0
--save_cont_reg=0
--loop
-"..\..\..\src\app\lowlevel.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--max_unroll=2
--lang=c
--nologo
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas OptLinker04 phase
-!MESSAGE
-
-$(M2DEC_DEBUG_OPTLINKER04_OUTFILESC0) : $(M2DEC_DEBUG_OPTLINKER04_INFILESC0) $(M2DEC_DEBUG_OPTLINKER04_DEPFILESC0)
-	"$(M2DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_DEBUG_OPTLINKER04_EXE)" -subcommand=<<
-nomessage 
-list "..\m2dec\Debug\m2dec.map"
-show symbol
--start=PBOOT,CBOOT/00,C,C$VTBL,D,P,B,BM2D,CM2D,PM2D,PM2D_FAST/0C000000,BHEAP/0C011000,BFILES/0D800000
-nologo
--input="..\m2dec\Debug\display.obj"
--input="..\m2dec\Debug\lowlevel.obj"
--input="..\m2dec\Debug\m2dec.obj"
--input="..\m2dec\Debug\md5.obj"
--input="..\m2dec\Debug\my_getopt.obj"
--input="..\m2dec\Debug\resetprg.obj"
--input="..\m2dec\Debug\sbrk.obj"
--library="..\libm2dec\Debug\libm2dec.lib"
--library="..\m2dec\Debug\m2dec.lib"
--output="..\m2dec\Debug\m2dec.abs"
-end
--input="..\m2dec\Debug\m2dec.abs"
-form stype
-output "..\m2dec\Debug\m2dec.mot"
--exit
-<<
-
-
-!ENDIF
-
-# Release configuration
-!IF  "$(CONFIG)" == "ALL" || "$(CONFIG)" == "Release" || "$(M2DECCONFIG)" == "ALL" || "$(M2DECCONFIG)" == "Release"
-
-#####################################################
-#
-# Details:
-#   Project: m2dec
-#   Configuration: Release
-#   Toolchain: Renesas SuperH RISC engine Standard Toolchain
-#
-#####################################################
-
-################
-# Main Defines
-
-# Renesas SH C/C++ Library Generator01 phase
-
-M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXE=lbgsh.exe
-M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR=$(TC_INSTALL_DIR)\bin
-M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0="..\m2dec\Release\m2dec.lib"
-M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0="$(TC_INSTALL_DIR)\bin\libinc.pak"
-
-# Renesas SH C/C++ Compiler02 phase
-
-M2DEC_RELEASE_SH_CC_COMPILER02_EXE=shc.exe
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0="..\m2dec\Release\resetprg.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\m2dec\Release\sbrk.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\m2dec\Release\display.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\display.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\m2dec\Release\m2dec.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" "..\..\..\src\lib\bitio.h" \
-	"..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\mpeg2.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\app\frames.h" \
-	"..\..\..\src\lib\mpeg_demux.h" "..\..\..\src\lib\txt2bin.h" \
-	"..\..\..\src\app\display.h" "..\..\..\src\app\aadisp.h" \
-	"..\..\..\src\app\optparser.h" "$(TC_INSTALL_DIR)\include\limits.h" \
-	"..\..\..\src\app\getopt.h" "..\..\..\src\app\my_getopt.h" \
-	"..\..\..\src\app\md5.h" "..\..\..\src\lib\vld.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4="..\m2dec\Release\md5.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5="..\m2dec\Release\my_getopt.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\my_getopt.h"
-M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6="..\m2dec\Release\lowlevel.obj"
-M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC6="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\machine.h" "$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h"
-
-# Renesas SH Assembler03 phase
-
-M2DEC_RELEASE_SH_ASSEMBLER03_EXE=asmsh.exe
-
-# Renesas OptLinker04 phase
-
-M2DEC_RELEASE_OPTLINKER04_EXE=LnkSpawn.exe
-M2DEC_RELEASE_OPTLINKER04_INFILESC0="..\m2dec\Release\display.obj" "..\m2dec\Release\lowlevel.obj" "..\m2dec\Release\m2dec.lib" \
-	"..\m2dec\Release\m2dec.obj" "..\m2dec\Release\md5.obj" "..\m2dec\Release\my_getopt.obj" \
-	"..\m2dec\Release\resetprg.obj" "..\m2dec\Release\sbrk.obj"
-M2DEC_RELEASE_OPTLINKER04_OUTFILESC0="..\m2dec\Release\m2dec.mot" "..\m2dec\Release\m2dec.abs"
-M2DEC_RELEASE_OPTLINKER04_DEPFILESC0="..\libm2dec\Release\libm2dec.lib"
-
-#######################
-# nmake "all" statement
-
-ALL:	M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_ENVC0 \
-	$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) \
-	$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) \
-	$(M2DEC_RELEASE_OPTLINKER04_OUTFILESC0)
-
-####################
-# Description blocks
-
-!MESSAGE
-!MESSAGE Executing Renesas SH C/C++ Library Generator01 phase
-!MESSAGE
-
-M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_ENVC0 : 
-	set SHC_INC=$(TC_INSTALL_DIR)\include
-	set PATH=$(TC_INSTALL_DIR)\bin
-	set SHC_LIB=$(TC_INSTALL_DIR)\bin
-	set SHC_TMP=C:\Users\minegisi\AppData\Local\Temp
-
-$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_OUTFILESC0) : $(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--output="..\m2dec\Release\m2dec.lib"
--gbr=auto
--head=runtime,new,ctype,stdio,stdlib,string
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas SH C/C++ Compiler02 phase
-!MESSAGE
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) : "..\resetprg.c" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\resetprg.obj"
--gbr=auto
-"..\resetprg.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) : "..\sbrk.c" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\sbrk.obj"
--gbr=auto
-"..\sbrk.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\app\display.cpp" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\display.obj"
--gbr=auto
-"..\..\..\src\app\display.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\app\m2dec.cpp" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\m2dec.obj"
--gbr=auto
-"..\..\..\src\app\m2dec.cpp"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=cpp
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\app\md5.c" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\md5.obj"
--gbr=auto
-"..\..\..\src\app\md5.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\app\my_getopt.c" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\my_getopt.obj"
--gbr=auto
-"..\..\..\src\app\my_getopt.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-$(M2DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC6) : "..\..\..\src\app\lowlevel.c" $(M2DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC6)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_SH_CC_COMPILER02_EXE)" -subcommand=<<
--cpu=sh4aldsp
--endian=little
--bit_order=right
--include="..\..\..\src\app\..\lib","$(TC_INSTALL_DIR)\include\stlport"
--object="..\m2dec\Release\lowlevel.obj"
--gbr=auto
-"..\..\..\src\app\lowlevel.c"
--global_volatile=0
--opt_range=all
--infinite_loop=0
--del_vacant_loop=0
--struct_alloc=1
--lang=c
--nologo
-<<
-
-!MESSAGE
-!MESSAGE Executing Renesas OptLinker04 phase
-!MESSAGE
-
-$(M2DEC_RELEASE_OPTLINKER04_OUTFILESC0) : $(M2DEC_RELEASE_OPTLINKER04_INFILESC0) $(M2DEC_RELEASE_OPTLINKER04_DEPFILESC0)
-	"$(M2DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(M2DEC_RELEASE_OPTLINKER04_EXE)" -subcommand=<<
-nodebug
-nomessage 
-list "..\m2dec\Release\m2dec.map"
-nooptimize
-nologo
--input="..\m2dec\Release\display.obj"
--input="..\m2dec\Release\lowlevel.obj"
--input="..\m2dec\Release\m2dec.obj"
--input="..\m2dec\Release\md5.obj"
--input="..\m2dec\Release\my_getopt.obj"
--input="..\m2dec\Release\resetprg.obj"
--input="..\m2dec\Release\sbrk.obj"
--library="..\libm2dec\Release\libm2dec.lib"
--library="..\m2dec\Release\m2dec.lib"
--output="..\m2dec\Release\m2dec.abs"
-end
--input="..\m2dec\Release\m2dec.abs"
-form stype
-output "..\m2dec\Release\m2dec.mot"
--exit
-<<
-
-
-!ENDIF
-
 !ENDIF
 
 # h264dec project
@@ -1584,24 +974,18 @@ H264DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0="$(TC_INSTALL_DIR)\bin\libinc
 
 H264DEC_DEBUG_SH_CC_COMPILER02_EXE=shc.exe
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC0="..\h264dec\Debug\resetprg.obj"
-H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
+H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\stlport\string.h" \
+	"$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC1="..\h264dec\Debug\sbrk.obj"
-H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
+H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stlport\stddef.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC2="..\h264dec\Debug\h264dec.obj"
-H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\app\frames.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h"
+H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stlport\assert.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC3="..\h264dec\Debug\lowlevel.obj"
 H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
 	"$(TC_INSTALL_DIR)\include\machine.h" "$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC4="..\h264dec\Debug\md5.obj"
-H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h"
+H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\stlport\string.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5="..\h264dec\Debug\my_getopt.obj"
 H264DEC_DEBUG_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
 	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\my_getopt.h"
@@ -1779,12 +1163,11 @@ $(H264DEC_DEBUG_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\app\my_getopt.c" $(
 
 $(H264DEC_DEBUG_OPTLINKER04_OUTFILESC0) : $(H264DEC_DEBUG_OPTLINKER04_INFILESC0) $(H264DEC_DEBUG_OPTLINKER04_DEPFILESC0)
 	"$(H264DEC_DEBUG_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(H264DEC_DEBUG_OPTLINKER04_EXE)" -subcommand=<<
-noprelink
 nomessage 
 list "..\h264dec\Debug\h264dec.map"
 show symbol,reference
 nooptimize
--start=PBOOT,CBOOT/00,P,C,D,B,PM2D,CM2D/0C000000,BHEAP/0C040000,BFILES/0D000000
+-start=PBOOT,CBOOT/00,P,D,C,C$VTBL,CM2D,PM2D,PM2D_FAST,BM2D,B/0C000000,BHEAP/0C080000,BFILES/0D880000
 nologo
 -stack
 -input="..\h264dec\Debug\h264dec.obj"
@@ -1832,31 +1215,21 @@ H264DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_DEPFILESC0="$(TC_INSTALL_DIR)\bin\libi
 
 H264DEC_RELEASE_SH_CC_COMPILER02_EXE=shc.exe
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0="..\h264dec\Release\resetprg.obj"
-H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
+H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC0="$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" "$(TC_INSTALL_DIR)\include\stlport\string.h" \
+	"$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1="..\h264dec\Release\sbrk.obj"
-H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stddef.h" "..\sbrk.h"
+H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC1="$(TC_INSTALL_DIR)\include\stlport\stddef.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2="..\h264dec\Release\h264dec.obj"
-H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\assert.h" "$(TC_INSTALL_DIR)\include\stdio.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
-	"$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
-	"$(TC_INSTALL_DIR)\include\limits.h" "..\..\..\src\app\frames.h" \
-	"..\..\..\src\lib\m2d.h" "..\..\..\src\lib\m2types.h" \
-	"$(TC_INSTALL_DIR)\include\umachine.h" "..\..\..\src\lib\bitio.h" \
-	"$(TC_INSTALL_DIR)\include\setjmp.h" \
-	"..\..\..\src\app\filewrite.h" "..\..\..\src\app\md5.h" \
-	"..\..\..\src\app\m2decoder.h" "..\..\..\src\lib\mpeg2.h" \
-	"..\..\..\src\lib\h264.h" "..\..\..\src\lib\mpeg_demux.h" \
-	"..\..\..\src\app\getopt.h" "..\..\..\src\app\my_getopt.h"
+H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC2="$(TC_INSTALL_DIR)\include\stlport\assert.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3="..\h264dec\Release\lowlevel.obj"
 H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC3="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
 	"$(TC_INSTALL_DIR)\include\machine.h" "$(TC_INSTALL_DIR)\include\smachine.h" "$(TC_INSTALL_DIR)\include\builtin.h" \
 	"$(TC_INSTALL_DIR)\include\umachine.h"
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4="..\h264dec\Release\md5.obj"
-H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" \
-	"$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\builtin.h"
+H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC4="..\..\..\src\app\md5.h" "$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\stddef.h" \
+	"$(TC_INSTALL_DIR)\include\builtin.h"
 H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5="..\h264dec\Release\my_getopt.obj"
-H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\stdlib.h" "$(TC_INSTALL_DIR)\include\stddef.h" "$(TC_INSTALL_DIR)\include\stdio.h" \
-	"$(TC_INSTALL_DIR)\include\string.h" "$(TC_INSTALL_DIR)\include\builtin.h" "..\..\..\src\app\my_getopt.h"
+H264DEC_RELEASE_SH_CC_COMPILER02_DEPFILESC5="$(TC_INSTALL_DIR)\include\stlport\stdlib.h" "$(TC_INSTALL_DIR)\include\stlport\stl\_cprolog.h"
 
 # Renesas SH Assembler03 phase
 
@@ -1918,7 +1291,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC0) : "..\resetprg.c" $(H264DEC_RELEA
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\lib"
 -object="..\h264dec\Release\resetprg.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\resetprg.c"
 -global_volatile=0
 -opt_range=all
@@ -1936,7 +1311,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC1) : "..\sbrk.c" $(H264DEC_RELEASE_S
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\lib"
 -object="..\h264dec\Release\sbrk.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\sbrk.c"
 -global_volatile=0
 -opt_range=all
@@ -1954,7 +1331,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC2) : "..\..\..\src\app\h264dec.cpp" 
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\..\src\app\..\lib"
 -object="..\h264dec\Release\h264dec.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\..\..\src\app\h264dec.cpp"
 -global_volatile=0
 -opt_range=all
@@ -1972,7 +1351,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC3) : "..\..\..\src\app\lowlevel.c" $
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\..\src\app\..\lib"
 -object="..\h264dec\Release\lowlevel.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\..\..\src\app\lowlevel.c"
 -global_volatile=0
 -opt_range=all
@@ -1990,7 +1371,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC4) : "..\..\..\src\app\md5.c" $(H264
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\..\src\app\..\lib"
 -object="..\h264dec\Release\md5.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\..\..\src\app\md5.c"
 -global_volatile=0
 -opt_range=all
@@ -2008,7 +1391,9 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\app\my_getopt.c" 
 -bit_order=right
 -include="$(TC_INSTALL_DIR)\include\stlport","..\..\..\src\app\..\lib"
 -object="..\h264dec\Release\my_getopt.obj"
+-debug
 -gbr=auto
+-macsave=0
 "..\..\..\src\app\my_getopt.c"
 -global_volatile=0
 -opt_range=all
@@ -2025,11 +1410,13 @@ $(H264DEC_RELEASE_SH_CC_COMPILER02_OUTFILESC5) : "..\..\..\src\app\my_getopt.c" 
 
 $(H264DEC_RELEASE_OPTLINKER04_OUTFILESC0) : $(H264DEC_RELEASE_OPTLINKER04_INFILESC0) $(H264DEC_RELEASE_OPTLINKER04_DEPFILESC0)
 	"$(H264DEC_RELEASE_SH_CC_LIBRARY_GENERATOR01_EXEDIR)\$(H264DEC_RELEASE_OPTLINKER04_EXE)" -subcommand=<<
-nodebug
 nomessage 
 list "..\h264dec\Release\h264dec.map"
+show symbol,reference
 nooptimize
+-start=PBOOT,CBOOT/00,P,D,C,C$VTBL,CM2D,PM2D,PM2D_FAST,B/0C000000,BHEAP/0C080000,BFILES/0D880000
 nologo
+-stack
 -input="..\h264dec\Release\h264dec.obj"
 -input="..\h264dec\Release\lowlevel.obj"
 -input="..\h264dec\Release\md5.obj"
