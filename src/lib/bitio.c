@@ -27,6 +27,10 @@
 
 #include "bitio.h"
 
+enum {
+	CACHE_BITS = sizeof(cache_t) * 8
+};
+
 #ifdef DEBUG_BITIO
 static  void BIT_SANITY_CHECK(dec_bits *ths)
 {
@@ -122,7 +126,7 @@ static int endofbuffer_check(dec_bits *ths)
 /**Returns specified number of bits, while read position shall be unchanged.
  *Read bits are LSB-aligned.
  */
-cache_t show_bits(dec_bits *ths, int pat_len)
+uint32_t show_bits(dec_bits *ths, int pat_len)
 {
 	int cache_len;
 /*	assert((unsigned)pat_len <= CACHE_BITS - 8 + (not_aligned_bits(ths))); */
@@ -132,18 +136,18 @@ cache_t show_bits(dec_bits *ths, int pat_len)
 	if (cache_len < pat_len) {
 		dec_bits_cachefill(ths);
 	}
-	return ths->cache_ >> (CACHE_BITS - pat_len);
+	return (uint32_t)(ths->cache_ >> (CACHE_BITS - pat_len));
 }
 
-cache_t show_onebit(dec_bits *ths)
+uint32_t show_onebit(dec_bits *ths)
 {
-	return ((intptr_t)ths->cache_ < 0);
+	return (uint32_t)((intptr_t)ths->cache_ < 0);
 }
 
 /**Returns specified number of bits as well as read position shall be incremented.
  *Read bits are LSB-aligned.
  */
-cache_t get_bits(dec_bits *ths, int pat_len)
+uint32_t get_bits(dec_bits *ths, int pat_len)
 {
 	int cache_len;
 	cache_t cache;
@@ -156,10 +160,10 @@ cache_t get_bits(dec_bits *ths, int pat_len)
 	cache = ths->cache_;
 	ths->cache_ = cache << pat_len;
 	ths->cache_len_ -= pat_len;
-	return cache >> (CACHE_BITS - pat_len);
+	return (uint32_t)(cache >> (CACHE_BITS - pat_len));
 }
 
-cache_t get_onebit(dec_bits *ths)
+uint32_t get_onebit(dec_bits *ths)
 {
 	int cache_len = ths->cache_len_;
 	cache_t cache;
@@ -169,7 +173,7 @@ cache_t get_onebit(dec_bits *ths)
 	cache = ths->cache_;
 	ths->cache_ = cache * 2;
 	ths->cache_len_--;
-	return ((intptr_t)cache < 0);
+	return (uint32_t)((intptr_t)cache < 0);
 }
 
 /**Discards specified number of bits. Read position shall be incremented.

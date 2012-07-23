@@ -69,8 +69,6 @@ typedef unsigned char byte_t;
 typedef unsigned long long uint64_t;
 #endif
 
-typedef uintptr_t cache_t;
-
 #ifdef __cplusplus
 }
 #endif
