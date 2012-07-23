@@ -35,9 +35,7 @@ extern "C" {
 #endif
 #include "m2types.h"
 
-enum {
-	CACHE_BITS = sizeof(cache_t) * 8
-};
+typedef uintptr_t cache_t;
 
 struct dec_bits_t {
 	cache_t cache_;
@@ -60,10 +58,10 @@ void dec_bits_close(dec_bits *ths);
 void dec_bits_set_callback(dec_bits *ths, int (*error_func)(void *), void *error_arg);
 
 int dec_bits_set_data(dec_bits *ths, const byte_t *buf, size_t buf_len, void *id);
-cache_t show_bits(dec_bits *ths, int bit_len);
-cache_t show_onebit(dec_bits *ths);
-cache_t get_bits(dec_bits *ths, int bit_len);
-cache_t get_onebit(dec_bits *ths);
+uint32_t show_bits(dec_bits *ths, int bit_len);
+uint32_t show_onebit(dec_bits *ths);
+uint32_t get_bits(dec_bits *ths, int bit_len);
+uint32_t get_onebit(dec_bits *ths);
 void skip_bits(dec_bits *ths, int bit_len);
 int not_aligned_bits(dec_bits *ths);
 void byte_align(dec_bits *ths);
