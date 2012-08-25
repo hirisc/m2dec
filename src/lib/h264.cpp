@@ -619,23 +619,10 @@ static int init_mb_buffer(h264d_mb_current *mb, uint8_t *buffer, int len)
 	return (uintptr_t)(buffer + len) < (uintptr_t)src ? -1 : 0;
 }
 
-static void build_4x4offset_table(int dst[], int stride) {
-	int offset = 0;
-	for (int i = 0; i < 4; ++i) {
-		dst[0] = offset;
-		dst[1] = offset + 4;
-		dst[2] = offset + stride * 4;
-		dst[3] = offset + (stride + 1) * 4;
-		dst += 4;
-		offset += (i & 1) ? (stride - 1) * 8 : 8;
-	}
-}
-
 static void set_mb_size(h264d_mb_current *mb, int width, int height)
 {
 	mb->max_x = width >> 4;
 	mb->max_y = height >> 4;
-	build_4x4offset_table(mb->offset4x4, width);
 }
 
 /**Invoked just before each slice_data.
@@ -1489,6 +1476,18 @@ static int set_weighted_info(h264d_mb_current *mb, dec_bits *st, h264d_slice_hea
 	return 0;
 }
 
+static void build_4x4offset_table(int dst[], int stride) {
+	int offset = 0;
+	for (int i = 0; i < 4; ++i) {
+		dst[0] = offset;
+		dst[1] = offset + 4;
+		dst[2] = offset + stride * 4;
+		dst[3] = offset + (stride + 1) * 4;
+		dst += 4;
+		offset += (i & 1) ? (stride - 1) * 8 : 8;
+	}
+}
+
 static int slice_header(h264d_context *h2d, dec_bits *st)
 {
 	h264d_slice_header *hdr = h2d->slice_header;
@@ -1529,6 +1528,8 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 		if ((hdr->field_pic_flag = get_onebit(st)) != 0) {
 			hdr->bottom_field_flag = get_onebit(st);
 		}
+	} else {
+		hdr->field_pic_flag = 0;
 	}
 	if ((h2d->id & 31) == 5) {
 		hdr->marking.idr = 1;
@@ -1536,7 +1537,9 @@ static int slice_header(h264d_context *h2d, dec_bits *st)
 	} else {
 		hdr->marking.idr = 0;
 	}
+	mb->is_field = hdr->field_pic_flag;
 	set_mb_size(mb, sps->pic_width, sps->pic_height);
+	build_4x4offset_table(mb->offset4x4, sps->pic_width);
 	set_dpb_max(&mb->frame->dpb, sps);
 	set_mb_pos(mb, hdr->first_mb_in_slice);
 	if (sps->poc_type == 0) {
@@ -2107,11 +2110,12 @@ static inline int SQUARE(int x) {
 }
 
 struct residual_block_cavlc {
-	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
+	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int level[16];
 		int8_t run[16];
 		const vlc_t *tbl;
 		int zeros_left;
+		int num_coeff = coeff_ofs[cat].num_coeff;
 
 		if (num_coeff <= 4) {
 			tbl = total_ones_nc_chroma_bit6;
@@ -2456,7 +2460,7 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 		return 0;
 	}
 	for (int i = 0; i < 2; ++i) {
-		if (ResidualBlock(mb, 0, 0, st, coeff, 4, mb->qmatc_p[i], avail, 16 + i, 3, 0)) {
+		if (ResidualBlock(mb, 0, 0, st, coeff, mb->qmatc_p[i], avail, 16 + i, 3, 0)) {
 			intra_chroma_dc_transform(coeff, dc[i]);
 		} else {
 			memset(dc[i], 0, sizeof(dc[0][0]) * 4);
@@ -2484,25 +2488,25 @@ static inline int residual_chroma(h264d_mb_current *mb, uint32_t cbp, dec_bits *
 			} else {
 				c0top = c1top = -1;
 			}
-			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, 15, mb->qmatc_p[i], avail, 18 + i * 4, 4, 0x1f)) != 0) {
+			if ((c0 = ResidualBlock(mb, c0left, c0top, st, coeff, mb->qmatc_p[i], avail, 18 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma, *dcp++, stride);
 			}
-			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, 15, mb->qmatc_p[i], avail, 19 + i * 4, 4, 0x1f)) != 0) {
+			if ((c1 = ResidualBlock(mb, c0, c1top, st, coeff, mb->qmatc_p[i], avail, 19 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + 8, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + 8, *dcp++, stride);
 			}
-			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, 15, mb->qmatc_p[i], avail, 20 + i * 4, 4, 0x1f)) != 0) {
+			if ((c2 = ResidualBlock(mb, c2left, c0, st, coeff, mb->qmatc_p[i], avail, 20 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + stride * 4, coeff, stride);
 			} else {
 				ac4x4transform_dconly_chroma(chroma + stride * 4, *dcp++, stride);
 			}
-			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, mb->qmatc_p[i], avail, 21 + i * 4, 4, 0x1f)) != 0) {
+			if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, mb->qmatc_p[i], avail, 21 + i * 4, 4, 0x1f)) != 0) {
 				coeff[0] = *dcp++;
 				ac4x4transform_acdc_chroma(chroma + stride * 4 + 8, coeff, stride);
 			} else {
@@ -3200,16 +3204,16 @@ static inline void luma_intra4x4_with_residual(h264d_mb_current *mb, dec_bits *s
 
 	if (cbp & 1) {
 		intra4x4pred_func[*pr++](luma, stride, avail_intra | (avail_intra & 2 ? 4 : 0));
-		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, qmat, avail_intra, 0, 2, 0xf);
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, qmat, avail_intra, 0, 2, 0xf);
 		ac4x4transform_maybe(luma, coeff, stride, c0);
 		intra4x4pred_func[*pr++](luma + 4, stride, avail_intra | (avail_intra & 2 ? 5 : 1));
-		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, 16, qmat, avail_intra, 1, 2, 0xf);
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, qmat, avail_intra, 1, 2, 0xf);
 		ac4x4transform_maybe(luma + 4, coeff, stride, c1);
 		intra4x4pred_func[*pr++](luma + offset[2], stride, avail_intra | 6);
-		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, 16, qmat, avail_intra, 2, 2, 0xf);
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, qmat, avail_intra, 2, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[2], coeff, stride, c2);
 		intra4x4pred_func[*pr++](luma + offset[3], stride, 3);
-		c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail_intra, 3, 2, 0xf);
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 3, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[3], coeff, stride, c3);
 	} else {
 		intra4x4pred_func[*pr++](luma, stride, avail_intra | (avail_intra & 2 ? 4 : 0));
@@ -3223,17 +3227,17 @@ static inline void luma_intra4x4_with_residual(h264d_mb_current *mb, dec_bits *s
 	}
 	if (cbp & 2) {
 		intra4x4pred_func[*pr++](luma + offset[4], stride, avail_intra | (avail_intra & 2 ? 5 : 1));
-		c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 16, qmat, avail_intra, 4, 2, 0xf);
+		c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, qmat, avail_intra, 4, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[4], coeff, stride, c0);
 		intra4x4pred_func[*pr++](luma + offset[5], stride, avail_intra | 1);
-		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, 16, qmat, avail_intra, 5, 2, 0xf);
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, qmat, avail_intra, 5, 2, 0xf);
 		left = PACK(0, c1, 0);
 		ac4x4transform_maybe(luma + offset[5], coeff, stride, c1);
 		intra4x4pred_func[*pr++](luma + offset[6], stride, 7);
-		c4 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail_intra, 6, 2, 0xf);
+		c4 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail_intra, 6, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[6], coeff, stride, c4);
 		intra4x4pred_func[*pr++](luma + offset[7], stride, 3);
-		c5 = ResidualBlock(mb, c4, c1, st, coeff, 16, qmat, avail_intra, 7, 2, 0xf);
+		c5 = ResidualBlock(mb, c4, c1, st, coeff, qmat, avail_intra, 7, 2, 0xf);
 		left = PACK(left, c5, 1);
 		ac4x4transform_maybe(luma + offset[7], coeff, stride, c5);
 	} else {
@@ -3249,17 +3253,17 @@ static inline void luma_intra4x4_with_residual(h264d_mb_current *mb, dec_bits *s
 	}
 	if (cbp & 4) {
 		intra4x4pred_func[*pr++](luma + offset[8], stride, avail_intra | 6);
-		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, 16, qmat, avail_intra, 8, 2, 0xf);
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, qmat, avail_intra, 8, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[8], coeff, stride, c0);
 		intra4x4pred_func[*pr++](luma + offset[9], stride, 7);
-		c1 = ResidualBlock(mb, c0, c3, st, coeff, 16, qmat, avail_intra, 9, 2, 0xf);
+		c1 = ResidualBlock(mb, c0, c3, st, coeff, qmat, avail_intra, 9, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[9], coeff, stride, c1);
 		intra4x4pred_func[*pr++](luma + offset[10], stride, avail_intra | 6);
-		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, 16, qmat, avail_intra, 10, 2, 0xf);
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, qmat, avail_intra, 10, 2, 0xf);
 		top = PACK(0, c2, 0);
 		ac4x4transform_maybe(luma + offset[10], coeff, stride, c2);
 		intra4x4pred_func[*pr++](luma + offset[11], stride, 3);
-		c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail_intra, 11, 2, 0xf);
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 11, 2, 0xf);
 		top = PACK(top, c3, 1);
 		ac4x4transform_maybe(luma + offset[11], coeff, stride, c3);
 	} else {
@@ -3275,18 +3279,18 @@ static inline void luma_intra4x4_with_residual(h264d_mb_current *mb, dec_bits *s
 	}
 	if (cbp & 8) {
 		intra4x4pred_func[*pr++](luma + offset[12], stride, 7);
-		c0 = ResidualBlock(mb, c1, c4, st, coeff, 16, qmat, avail_intra, 12, 2, 0xf);
+		c0 = ResidualBlock(mb, c1, c4, st, coeff, qmat, avail_intra, 12, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[12], coeff, stride, c0);
 		intra4x4pred_func[*pr++](luma + offset[13], stride, 3);
-		c1 = ResidualBlock(mb, c0, c5, st, coeff, 16, qmat, avail_intra, 13, 2, 0xf);
+		c1 = ResidualBlock(mb, c0, c5, st, coeff, qmat, avail_intra, 13, 2, 0xf);
 		left = PACK(left, c1, 2);
 		ac4x4transform_maybe(luma + offset[13], coeff, stride, c1);
 		intra4x4pred_func[*pr++](luma + offset[14], stride, 7);
-		c2 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail_intra, 14, 2, 0xf);
+		c2 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail_intra, 14, 2, 0xf);
 		top = PACK(top, c2, 2);
 		ac4x4transform_maybe(luma + offset[14], coeff, stride, c2);
 		intra4x4pred_func[*pr++](luma + offset[15], stride, 3);
-		c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail_intra, 15, 2, 0xf);
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 15, 2, 0xf);
 		ac4x4transform_maybe(luma + offset[15], coeff, stride, c3);
 	} else {
 		intra4x4pred_func[*pr++](luma + offset[12], stride, 7);
@@ -4204,14 +4208,14 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 
 	intra8x8pred_func[*pr++](luma, stride, (avail_intra & ~4) | ((avail_intra & 2) * 2));
 	if (cbp & 1) {
-		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 64, qmat, avail_intra, 0, 5, 0x3f);
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, qmat, avail_intra, 0, 5, 0x3f);
 		ac8x8transform(luma, coeff, stride, c0);
 	} else {
 		c0 = 0;
 	}
 	intra8x8pred_func[*pr++](luma + 8, stride, (avail_intra & ~8) | ((avail_intra & 2) * 4) | 1);
 	if (cbp & 2) {
-		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail_intra, 4, 5, 0x3f);
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, qmat, avail_intra, 4, 5, 0x3f);
 		ac8x8transform(luma + 8, coeff, stride, c1);
 		left = c1 * 0x11;
 	} else {
@@ -4220,7 +4224,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 	}
 	intra8x8pred_func[*pr++](luma + offset[8], stride, 6 | ((avail_intra & 1) * 9));
 	if (cbp & 4) {
-		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail_intra, 8, 5, 0x3f);
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, qmat, avail_intra, 8, 5, 0x3f);
 		ac8x8transform(luma + offset[8], coeff, stride, c2);
 		top = c2 * 0x11;
 	} else {
@@ -4229,7 +4233,7 @@ static inline void luma_intra8x8_with_residual(h264d_mb_current *mb, dec_bits *s
 	}
 	intra8x8pred_func[*pr++](luma + offset[12], stride, 11);
 	if (cbp & 8) {
-		c3 = ResidualBlock(mb, c2, c1, st, coeff, 64, qmat, avail_intra, 12, 5, 0x3f);
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 12, 5, 0x3f);
 		ac8x8transform(luma + offset[12], coeff, stride, c3);
 		left |= c3 * 0x1100;
 		top |= c3 * 0x1100;
@@ -4543,7 +4547,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 	if (qp_delta) {
 		set_qp(mb, mb->qp + qp_delta);
 	}
-	if (ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, mb->qmaty, avail_intra, 26, 0, 0)) {
+	if (ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, mb->qmaty, avail_intra, 26, 0, 0)) {
 		intra16x16_dc_transform(coeff, dc);
 		offset = mb->offset4x4;
 		for (int i = 0; i < 16; ++i) {
@@ -4602,55 +4606,55 @@ static int mb_intra16x16_acdc(h264d_mb_current *mb, const mb_code *mbc, dec_bits
 	na = avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1;
 	nb = avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1;
 	qmat = mb->qmaty;
-	if (ResidualBlock(mb, na, nb, st, coeff, 16, qmat, avail_intra, 26, 0, 0)) {
+	if (ResidualBlock(mb, na, nb, st, coeff, qmat, avail_intra, 26, 0, 0)) {
 		intra16x16_dc_transform(coeff, dc);
 	} else {
 		memset(dc, 0, sizeof(dc));
 	}
 	offset = mb->offset4x4;
 	dcp = dc;
-	c0 = ResidualBlock(mb, na, nb, st, coeff, 15, qmat, avail_intra, 0, 1, 0x1f);
+	c0 = ResidualBlock(mb, na, nb, st, coeff, qmat, avail_intra, 0, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c0, *dcp++);
-	c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, 15, qmat, avail_intra, 1, 1, 0x1f);
+	c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, qmat, avail_intra, 1, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c1, *dcp++);
-	c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, 15, qmat, avail_intra, 2, 1, 0x1f);
+	c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, qmat, avail_intra, 2, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c2, *dcp++);
-	c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, qmat, avail_intra, 3, 1, 0x1f);
+	c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 3, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c3, *dcp++);
 
-	c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 15, qmat, avail_intra, 4, 1, 0x1f);
+	c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, qmat, avail_intra, 4, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c0, *dcp++);
-	c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, 15, qmat, avail_intra, 5, 1, 0x1f);
+	c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, qmat, avail_intra, 5, 1, 0x1f);
 	left = mb->left4x4coef & 0xffff0000;
 	left = PACK(left, c1, 0);
 	ac4x4transform(luma + *offset++, coeff, stride, c1, *dcp++);
-	c4 = ResidualBlock(mb, c3, c0, st, coeff, 15, qmat, avail_intra, 6, 1, 0x1f);
+	c4 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail_intra, 6, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c4, *dcp++);
-	c5 = ResidualBlock(mb, c4, c1, st, coeff, 15, qmat, avail_intra, 7, 1, 0x1f);
+	c5 = ResidualBlock(mb, c4, c1, st, coeff, qmat, avail_intra, 7, 1, 0x1f);
 	left = PACK(left, c5, 1);
 	ac4x4transform(luma + *offset++, coeff, stride, c5, *dcp++);
 
-	c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, 15, qmat, avail_intra, 8, 1, 0x1f);
+	c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, qmat, avail_intra, 8, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c0, *dcp++);
-	c1 = ResidualBlock(mb, c0, c3, st, coeff, 15, qmat, avail_intra, 9, 1, 0x1f);
+	c1 = ResidualBlock(mb, c0, c3, st, coeff, qmat, avail_intra, 9, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c1, *dcp++);
-	c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, 15, qmat, avail_intra, 10, 1, 0x1f);
+	c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, qmat, avail_intra, 10, 1, 0x1f);
 	top = *mb->top4x4coef & 0xffff0000;
 	top = PACK(top, c2, 0);
 	ac4x4transform(luma + *offset++, coeff, stride, c2, *dcp++);
-	c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, qmat, avail_intra, 11, 1, 0x1f);
+	c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 11, 1, 0x1f);
 	top = PACK(top, c3, 1);
 	ac4x4transform(luma + *offset++, coeff, stride, c3, *dcp++);
 
-	c0 = ResidualBlock(mb, c1, c4, st, coeff, 15, qmat, avail_intra, 12, 1, 0x1f);
+	c0 = ResidualBlock(mb, c1, c4, st, coeff, qmat, avail_intra, 12, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c0, *dcp++);
-	c1 = ResidualBlock(mb, c0, c5, st, coeff, 15, qmat, avail_intra, 13, 1, 0x1f);
+	c1 = ResidualBlock(mb, c0, c5, st, coeff, qmat, avail_intra, 13, 1, 0x1f);
 	left = PACK(left, c1, 2);
 	ac4x4transform(luma + *offset++, coeff, stride, c1, *dcp++);
-	c2 = ResidualBlock(mb, c3, c0, st, coeff, 15, qmat, avail_intra, 14, 1, 0x1f);
+	c2 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail_intra, 14, 1, 0x1f);
 	top = PACK(top, c2, 2);
 	ac4x4transform(luma + *offset++, coeff, stride, c2, *dcp++);
-	c3 = ResidualBlock(mb, c2, c1, st, coeff, 15, qmat, avail_intra, 15, 1, 0x1f);
+	c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail_intra, 15, 1, 0x1f);
 	ac4x4transform(luma + *offset++, coeff, stride, c3, *dcp++);
 
 	mb->left4x4coef = PACK(left, c3, 3);
@@ -6548,19 +6552,19 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 	stride = mb->max_x * 16;
 	str_map = 0;
 	if (cbp & 1) {
-		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 16, qmat, avail, 0, 2, 0xf)) != 0) {
+		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, qmat, avail, 0, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[0], coeff, stride);
 			str_map = 0x2;
 		}
-		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, 16, qmat, avail, 1, 2, 0xf)) != 0) {
+		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 1) : -1, st, coeff, qmat, avail, 1, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[1], coeff, stride);
 			str_map |= 0x8;
 		}
-		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, 16, qmat, avail, 2, 2, 0xf)) != 0) {
+		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 1) : -1, c0, st, coeff, qmat, avail, 2, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[2], coeff, stride);
 			str_map |= 0x200;
 		}
-		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 3, 2, 0xf)) != 0) {
+		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail, 3, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[3], coeff, stride);
 			str_map |= 0x800;
 		}
@@ -6571,22 +6575,22 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 		c3 = 0;
 	}
 	if (cbp & 2) {
-		if ((c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 16, qmat, avail, 4, 2, 0xf)) != 0) {
+		if ((c0 = ResidualBlock(mb, c1, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, qmat, avail, 4, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[4], coeff, stride);
 			str_map |= 0x20;
 		}
-		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, 16, qmat, avail, 5, 2, 0xf)) != 0) {
+		if ((c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 3) : -1, st, coeff, qmat, avail, 5, 2, 0xf)) != 0) {
 			left = PACK(0, c1, 0);
 			str_map |= 0x80;
 			ac4x4transform_acdc_luma(luma + offset[5], coeff, stride);
 		} else {
 			left = 0;
 		}
-		if ((c4 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 6, 2, 0xf)) != 0) {
+		if ((c4 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail, 6, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[6], coeff, stride);
 			str_map |= 0x2000;
 		}
-		if ((c5 = ResidualBlock(mb, c4, c1, st, coeff, 16, qmat, avail, 7, 2, 0xf)) != 0) {
+		if ((c5 = ResidualBlock(mb, c4, c1, st, coeff, qmat, avail, 7, 2, 0xf)) != 0) {
 			left = PACK(left, c5, 1);
 			str_map |= 0x8000;
 			ac4x4transform_acdc_luma(luma + offset[7], coeff, stride);
@@ -6599,22 +6603,22 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 		left = 0;
 	}
 	if (cbp & 4) {
-		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, 16, qmat, avail, 8, 2, 0xf)) != 0) {
+		if ((c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c2, st, coeff, qmat, avail, 8, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[8], coeff, stride);
 			str_map |= 0x20000;
 		}
-		if ((c1 = ResidualBlock(mb, c0, c3, st, coeff, 16, qmat, avail, 9, 2, 0xf)) != 0) {
+		if ((c1 = ResidualBlock(mb, c0, c3, st, coeff, qmat, avail, 9, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[9], coeff, stride);
 			str_map |= 0x80000;
 		}
-		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, 16, qmat, avail, 10, 2, 0xf)) != 0) {
+		if ((c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 3) : -1, c0, st, coeff, qmat, avail, 10, 2, 0xf)) != 0) {
 			top = PACK(0, c2, 0);
 			str_map |= 0x2000000;
 			ac4x4transform_acdc_luma(luma + offset[10], coeff, stride);
 		} else {
 			top = 0;
 		}
-		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 11, 2, 0xf)) != 0) {
+		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail, 11, 2, 0xf)) != 0) {
 			top = PACK(top, c3, 1);
 			str_map |= 0x8000000;
 			ac4x4transform_acdc_luma(luma + offset[11], coeff, stride);
@@ -6627,21 +6631,21 @@ static inline void residual_luma_inter4x4(h264d_mb_current *mb, uint32_t cbp, de
 		top = 0;
 	}
 	if (cbp & 8) {
-		if ((c0 = ResidualBlock(mb, c1, c4, st, coeff, 16, qmat, avail, 12, 2, 0xf)) != 0) {
+		if ((c0 = ResidualBlock(mb, c1, c4, st, coeff, qmat, avail, 12, 2, 0xf)) != 0) {
 			ac4x4transform_acdc_luma(luma + offset[12], coeff, stride);
 			str_map |= 0x200000;
 		}
-		if ((c1 = ResidualBlock(mb, c0, c5, st, coeff, 16, qmat, avail, 13, 2, 0xf)) != 0) {
+		if ((c1 = ResidualBlock(mb, c0, c5, st, coeff, qmat, avail, 13, 2, 0xf)) != 0) {
 			left = PACK(left, c1, 2);
 			str_map |= 0x800000;
 			ac4x4transform_acdc_luma(luma + offset[13], coeff, stride);
 		}
-		if ((c2 = ResidualBlock(mb, c3, c0, st, coeff, 16, qmat, avail, 14, 2, 0xf)) != 0) {
+		if ((c2 = ResidualBlock(mb, c3, c0, st, coeff, qmat, avail, 14, 2, 0xf)) != 0) {
 			top = PACK(top, c2, 2);
 			str_map |= 0x20000000;
 			ac4x4transform_acdc_luma(luma + offset[14], coeff, stride);
 		}
-		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, 16, qmat, avail, 15, 2, 0xf)) != 0) {
+		if ((c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail, 15, 2, 0xf)) != 0) {
 			str_map |= 0x80000000;
 			ac4x4transform_acdc_luma(luma + offset[15], coeff, stride);
 		}
@@ -6706,13 +6710,13 @@ static inline void residual_luma_inter8x8(h264d_mb_current *mb, uint32_t cbp, de
 	stride = mb->max_x * 16;
 	cbp &= 15;
 	if (cbp & 1) {
-		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, 64, qmat, avail, 0, 5, 0x3f);
+		c0 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 0) : -1, avail & 2 ? UNPACK(*mb->top4x4coef, 0) : -1, st, coeff, qmat, avail, 0, 5, 0x3f);
 		ac8x8transform(mb->luma, coeff, stride, c0);
 	} else {
 		c0 = 0;
 	}
 	if (cbp & 2) {
-		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, 64, qmat, avail, 4, 5, 0x3f);
+		c1 = ResidualBlock(mb, c0, avail & 2 ? UNPACK(*mb->top4x4coef, 2) : -1, st, coeff, qmat, avail, 4, 5, 0x3f);
 		ac8x8transform(mb->luma + 8, coeff, stride, c1);
 		left = c1 * 0x11;
 	} else {
@@ -6720,7 +6724,7 @@ static inline void residual_luma_inter8x8(h264d_mb_current *mb, uint32_t cbp, de
 		left = 0;
 	}
 	if (cbp & 4) {
-		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, 64, qmat, avail, 8, 5, 0x3f);
+		c2 = ResidualBlock(mb, avail & 1 ? UNPACK(mb->left4x4coef, 2) : -1, c1, st, coeff, qmat, avail, 8, 5, 0x3f);
 		ac8x8transform(mb->luma + offset[8], coeff, stride, c2);
 		top = c2 * 0x11;
 	} else {
@@ -6728,7 +6732,7 @@ static inline void residual_luma_inter8x8(h264d_mb_current *mb, uint32_t cbp, de
 		top = 0;
 	}
 	if (cbp & 8) {
-		c3 = ResidualBlock(mb, c2, c1, st, coeff, 64, qmat, avail, 12, 5, 0x3f);
+		c3 = ResidualBlock(mb, c2, c1, st, coeff, qmat, avail, 12, 5, 0x3f);
 		ac8x8transform(mb->luma + offset[12], coeff, stride, c3);
 		left |= c3 * 0x1100;
 		top |= c3 * 0x1100;
@@ -12148,7 +12152,7 @@ static int (* const ctxidxinc_cbf[16 + 2 + 8 + 1])(h264d_mb_current *mb, uint32_
 	ctxidxinc_cbf_intra16x16dc
 };
 
-static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int num_coeff, int *coeff_map)
+static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int is_field, int *coeff_map)
 {
 	static const int8_t significant_coeff_flag_offset16[16][3] = {
 		{0, 0, 0}, {1, 1, 1}, {2, 2, 2}, {3, 3, 3},
@@ -12174,13 +12178,22 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 		{7, 11, 10}, {7, 12, 10}, {7, 13, 14}, {7, 11, 14},
 		{8, 14, 14}, {8, 10, 14}, {8, 12, 14},
 	};
-	static const int16_t significant_coeff_flag_offset[6][2] = {
-		{105, 166}, {105 + 15, 166 + 15}, {105 + 29, 166 + 29},
-		{105 + 44, 166 + 44}, {105 + 47, 166 + 47}, {402, 417}
+	static const int16_t significant_coeff_flag_offset[2][6][2] = {
+		{
+			{105, 166}, {105 + 15, 166 + 15}, {105 + 29, 166 + 29},
+			{105 + 44, 166 + 44}, {105 + 47, 166 + 47}, {402, 417}
+		},
+		{
+			/* field */
+			{277, 338}, {277 + 15, 338 + 15}, {277 + 29, 338 + 29},
+			{277 + 44, 338 + 44}, {277 + 47, 338 + 47}, {436, 451}
+		}
 	};
-	int8_t *sigc_offset = &cb->context[significant_coeff_flag_offset[cat][0]];
-	int8_t *last_offset = &cb->context[significant_coeff_flag_offset[cat][1]];
+	const int16_t *ofs_elem = significant_coeff_flag_offset[is_field][cat];
+	int8_t *sigc_offset = &cb->context[ofs_elem[0]];
+	int8_t *last_offset = &cb->context[ofs_elem[1]];
 	const int8_t (*latter)[3] = (cat == 5) ? significant_coeff_flag_offset64 : significant_coeff_flag_offset16;
+	int num_coeff = coeff_ofs[cat].num_coeff;
 	int map_cnt = 0;
 	int i;
 
@@ -12266,7 +12279,7 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 }
 
 struct residual_block_cabac {
-	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, int num_coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
+	int operator()(h264d_mb_current *mb, int na, int nb, dec_bits *st, int *coeff, const int16_t *qmat, int avail, int pos4x4, int cat, uint32_t dc_mask) const {
 		int coeff_map[8 * 8];
 		int coded_block_flag;
 		h264d_cabac_t *cb = mb->cabac;
@@ -12281,7 +12294,7 @@ struct residual_block_cabac {
 			coded_block_flag = 0xf;
 		}
 		mb->cbf |= coded_block_flag << pos4x4;
-		int map_cnt = get_coeff_map_cabac(cb, st, cat, num_coeff, coeff_map);
+		int map_cnt = get_coeff_map_cabac(cb, st, cat, mb->is_field, coeff_map);
 		get_coeff_from_map_cabac(cb, st, cat, coeff_map, map_cnt, coeff, qmat);
 		return map_cnt <= 15 ? map_cnt : 15;
 	}
