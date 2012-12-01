@@ -17,6 +17,27 @@
 
 #include "unithread.h"
 
+class Uncopyable {
+protected:
+	Uncopyable() {}
+	~Uncopyable() {}
+private:
+	Uncopyable(const Uncopyable&);
+	Uncopyable& operator=(const Uncopyable&);
+};
+
+class Lock: private Uncopyable {
+public:
+	explicit Lock(UniMutex *m) : mutex_(m) {
+		UniLockMutex(m);
+	}
+	~Lock() {
+		UniUnlockMutex(mutex_);
+	}
+private:
+	UniMutex *mutex_;
+};
+
 template <typename T>
 class Queue {
 	T *data_;
@@ -54,21 +75,19 @@ public:
 		return terminated_;
 	}
 	void terminate() {
-		UniLockMutex(mutex_);
+		Lock lk(mutex_);
 		terminated_ = true;
 		UniCondSignal(cond_);
-		UniUnlockMutex(mutex_);
 	}
 	T& front() {
-		UniLockMutex(mutex_);
+		Lock lk(mutex_);
 		while (full()) {
 			UniCondWait(cond_, mutex_);
 		}
-		UniUnlockMutex(mutex_);
 		return data_[head_];
 	}
 	void push_front(const T& dat) {
-		UniLockMutex(mutex_);
+		Lock lk(mutex_);
 		while (full()) {
 			UniCondWait(cond_, mutex_);
 		}
@@ -76,18 +95,16 @@ public:
 		data_[head_] = dat;
 		head_ = next(head_);
 		UniCondSignal(cond_);
-		UniUnlockMutex(mutex_);
 	}
 	T& back() {
-		UniLockMutex(mutex_);
+		Lock lk(mutex_);
 		while (empty() && !terminated()) {
 			UniCondWait(cond_, mutex_);
 		}
-		UniUnlockMutex(mutex_);
 		return data_[tail_];
 	}
 	bool pop_back() {
-		UniLockMutex(mutex_);
+		Lock lk(mutex_);
 		if (empty() && terminated()) {
 			UniUnlockMutex(mutex_);
 			return false;
@@ -96,7 +113,6 @@ public:
 		size_--;
 		tail_ = next(tail_);
 		UniCondSignal(cond_);
-		UniUnlockMutex(mutex_);
 		return true;
 	}
 };
