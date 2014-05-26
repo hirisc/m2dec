@@ -66,54 +66,6 @@ static inline int ABS(int a) {
 #define UNPACK(a, num) (((a) >> ((num) * 4)) & 15)
 #define PACK(a, val, num) ((a) | ((val) << ((num) * 4)))
 
-static inline cache_t get_bits32(dec_bits *ths, int bit_len)
-{
-	if (bit_len <= 24) {
-		return get_bits(ths, bit_len);
-	} else {
-		int rest = bit_len - 24;
-		return (get_bits(ths, 24) << rest) | get_bits(ths, rest);
-	}
-}
-
-static uint32_t ue_golomb(dec_bits *str)
-{
-	int bits, rest;
-	int i;
-
-	if (get_onebit_inline(str)) {
-		return 0;
-	}
-	rest = 0;
-	i = 16;
-	do {
-		bits = get_bits(str, 2);
-		switch (bits) {
-		case 0:
-			rest += 2;
-			break;
-		case 1:
-			return get_bits32(str, rest + 2) + ((bits << 2) << rest) - 1;
-			/* NOTREACHED */
-			break;
-		case 2:
-			/* FALLTHROUGH */
-		case 3:
-			return (rest ? get_bits32(str, rest) : 0) + (bits << rest) - 1;
-			/* NOTREACHED */
-			break;
-		}
-	} while (--i);
-	return 0;
-}
-
-static int32_t se_golomb(dec_bits *stream)
-{
-	int32_t ue = ue_golomb(stream);
-	int32_t t = (ue + 1) >> 1;
-	return (ue & 1) ? t : -t;
-}
-
 static const int8_t me_golomb_lut[2][48] = {
 	{
 		47, 31, 15, 0, 23, 27, 29, 30,
@@ -489,31 +441,6 @@ static int read_pic_parameter_set(h264d_pps *pps, dec_bits *stream)
 	return 0;
 }
 
-void h264d_load_bytes_skip03(dec_bits *ths, int read_bytes)
-{
-	int cache_len;
-	int shift_bits;
-	const byte_t *buf;
-	cache_t cache;
-
-	cache_len = ths->cache_len_;
-	ths->cache_len_ = read_bytes * 8 + cache_len;
-	shift_bits = (sizeof(cache) - read_bytes) * 8 - cache_len;
-	buf = ths->buf_;
-	cache = 0;
-	do {
-		byte_t c = *buf++;
-		if (c == 3) {
-			if (buf[-2] == 0 && buf[-3] == 0) {
-				c = *buf++;
-			}
-		}
-		cache = (cache << 8) | c;
-	} while (--read_bytes);
-	ths->cache_ = ths->cache_ | (cache << shift_bits);
-	ths->buf_ = buf;
-}
-
 static inline void dpb_init(h264d_dpb_t *dpb, int maxsize);
 
 static int header_dummyfunc(void *arg, void *seq_id) {return 0;}
@@ -534,7 +461,7 @@ int h264d_init(h264d_context *h2d, int dpb_max, int (*header_callback)(void *, v
 	h2d->mb_current.num_ref_idx_lx_active_minus1[0] = &h2d->slice_header->num_ref_idx_lx_active_minus1[0];
 	h2d->mb_current.num_ref_idx_lx_active_minus1[1] = &h2d->slice_header->num_ref_idx_lx_active_minus1[1];
 	dpb_init(&h2d->mb_current.frame->dpb, dpb_max);
-	dec_bits_open(h2d->stream, h264d_load_bytes_skip03);
+	dec_bits_open(h2d->stream, m2d_load_bytes_skip03);
 	return 0;
 }
 
@@ -553,7 +480,7 @@ int h264d_read_header(h264d_context *h2d, const byte_t *data, size_t len)
 	int sps_id;
 
 	st = h2d->stream;
-	dec_bits_open(st, h264d_load_bytes_skip03);
+	dec_bits_open(st, m2d_load_bytes_skip03);
 	err = dec_bits_set_data(st, data, len, 0);
 	if (err < 0) {
 		return err;

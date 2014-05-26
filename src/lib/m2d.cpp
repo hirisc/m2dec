@@ -87,6 +87,31 @@ int m2d_next_start_code(const byte_t *org_src, int byte_len)
 	return (byte_len <= 0) ? -1 : (int)((const byte_t *)src - org_src);
 }
 
+void m2d_load_bytes_skip03(dec_bits *ths, int read_bytes)
+{
+	int cache_len;
+	int shift_bits;
+	const byte_t *buf;
+	cache_t cache;
+
+	cache_len = ths->cache_len_;
+	ths->cache_len_ = read_bytes * 8 + cache_len;
+	shift_bits = (sizeof(cache) - read_bytes) * 8 - cache_len;
+	buf = ths->buf_;
+	cache = 0;
+	do {
+		byte_t c = *buf++;
+		if (c == 3) {
+			if (buf[-2] == 0 && buf[-3] == 0) {
+				c = *buf++;
+			}
+		}
+		cache = (cache << 8) | c;
+	} while (--read_bytes);
+	ths->cache_ = ths->cache_ | (cache << shift_bits);
+	ths->buf_ = buf;
+}
+
 /** Search start code for block(s) of input data.
  */
 int m2d_find_mpeg_data(dec_bits *stream)
