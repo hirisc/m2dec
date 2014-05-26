@@ -66,8 +66,57 @@ typedef struct {
 } m2d_func_table_t;
 
 int m2d_dec_vld_unary(dec_bits *stream, const vlc_t *vld_tab, int bitlen);
+void m2d_load_bytes_skip03(dec_bits *ths, int read_bytes);
 int m2d_find_mpeg_data(dec_bits *stream);
 int m2d_next_start_code(const byte_t *org_src, int byte_len);
+
+static inline cache_t get_bits32(dec_bits *ths, int bit_len)
+{
+	if (bit_len <= 24) {
+		return get_bits(ths, bit_len);
+	} else {
+		int rest = bit_len - 24;
+		return (get_bits(ths, 24) << rest) | get_bits(ths, rest);
+	}
+}
+
+static inline uint32_t ue_golomb(dec_bits *str)
+{
+	int bits, rest;
+	int i;
+
+	if (get_onebit_inline(str)) {
+		return 0;
+	}
+	rest = 0;
+	i = 16;
+	do {
+		bits = get_bits(str, 2);
+		switch (bits) {
+		case 0:
+			rest += 2;
+			break;
+		case 1:
+			return get_bits32(str, rest + 2) + ((bits << 2) << rest) - 1;
+			/* NOTREACHED */
+			break;
+		case 2:
+			/* FALLTHROUGH */
+		case 3:
+			return (rest ? get_bits32(str, rest) : 0) + (bits << rest) - 1;
+			/* NOTREACHED */
+			break;
+		}
+	} while (--i);
+	return 0;
+}
+
+static inline int32_t se_golomb(dec_bits *stream)
+{
+	int32_t ue = ue_golomb(stream);
+	int32_t t = (ue + 1) >> 1;
+	return (ue & 1) ? t : -t;
+}
 
 #ifdef __cplusplus
 }

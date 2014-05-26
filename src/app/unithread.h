@@ -9,14 +9,14 @@ extern "C" {
 
 #ifdef __RENESAS_VERSION__
 #else
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 
 typedef SDL_Thread UniThread;
 typedef SDL_mutex UniMutex;
 typedef SDL_cond UniCond;
 typedef SDL_Event UniEvent;
 
-#define UniCreateThreadRaw(x, y) SDL_CreateThread((x), (y))
+#define UniCreateThreadRaw(x, y) SDL_CreateThread((x), "", (y))
 #define UniThreadID SDL_ThreadID
 #define UniGetThreadID(x) SDL_GetThreadID(x)
 #define UniWaitThread(x, y) SDL_WaitThread((x), (y))

@@ -4,7 +4,7 @@ else
 DEFDISP =
 endif
 
-LDDISP = -L/usr/local/lib -lSDL
+LDDISP = -L/usr/local/lib -lSDL2
 
 INCLUDES = -I$(includedir) -I../lib
 DEFS = $(DEFDISP) -DUNIT_TEST -D'_ANSI_ARGS_(x)=x' #-fno-inline-functions
