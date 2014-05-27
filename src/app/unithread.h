@@ -3,9 +3,9 @@
 
 static void RecordTime(int mark);
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
 
 #ifdef __RENESAS_VERSION__
 #else
@@ -51,9 +51,9 @@ static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *lab
 
 #endif /* __RENESAS_VERSION__ */
 
-#ifdef __cplusplus
-}
-#endif
+//#ifdef __cplusplus
+//}
+//#endif
 
 static UniMutex *LogMutex;
 struct LogRecord {
