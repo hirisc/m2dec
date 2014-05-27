@@ -5,6 +5,14 @@
 #include "m2d.h"
 #include "mpeg2.h"
 #include "h264.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern const m2d_func_table_t * const h265d_func;
+#ifdef __cplusplus
+}
+#endif
+
 #include "mpeg_demux.h"
 #include <deque>
 
@@ -16,6 +24,7 @@ public:
 		MODE_MPEG2,
 		MODE_MPEG2PS,
 		MODE_H264,
+		MODE_H265,
 		MODE_NONE
 	} type_t;
 	typedef std::pair<const uint8_t *, int> header_data_t;
@@ -47,7 +56,7 @@ public:
 		int width = (info.src_width + 15) & ~15;
 		int height = (info.src_height + 15) & ~15;
 		int luma_len = width * height;
-		int bufnum = outbuf_ + info.frame_num + ((codec_mode_ == MODE_H264) ? 16 : 0);
+		int bufnum = outbuf_ + info.frame_num + (((codec_mode_ == MODE_H264) || (codec_mode_ == MODE_H265)) ? 16 : 0);
 		if (codec_mode_ == MODE_H264) {
 			if (H264D_MAX_FRAME_NUM < bufnum) {
 				bufnum = H264D_MAX_FRAME_NUM;
@@ -164,6 +173,9 @@ private:
 			break;
 		case MODE_H264:
 			func_ = h264d_func;
+			break;
+		case MODE_H265:
+			func_ = h265d_func;
 			break;
 		}
 		context_ = new byte_t[func_->context_size];

@@ -1,7 +1,13 @@
-AC_INIT(m2dec, 0.1.15)
+AC_INIT([m2dec],
+        m4_esyscmd([./git-version-gen .tarball-version]),
+        [bug@example])
+LT_INIT
+AM_INIT_AUTOMAKE(foreign dist-bzip2 no-dist-gzip)
 AC_CONFIG_SRCDIR(src/lib/mpeg2.cpp)
-AM_INIT_AUTOMAKE(dist-bzip2)
-dnl AC_PROG_LIBTOOL
+AC_ENABLE_SHARED
+AC_DISABLE_STATIC
+AC_PROG_LIBTOOL(libtool)
+AC_CONFIG_MACRO_DIR([m4])
 AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_RANLIB

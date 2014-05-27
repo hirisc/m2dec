@@ -206,4 +206,8 @@ static const m2d_func_table_t h265d_func_ = {
 	(int (*)(void *, m2d_frame_t *, int))h265d_get_decoded_frame
 };
 
+extern "C" {
+extern const m2d_func_table_t * const h265d_func;
+}
+
 const m2d_func_table_t * const h265d_func = &h265d_func_;
