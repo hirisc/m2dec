@@ -70,7 +70,7 @@ void m2d_load_bytes_skip03(dec_bits *ths, int read_bytes);
 int m2d_find_mpeg_data(dec_bits *stream);
 int m2d_next_start_code(const byte_t *org_src, int byte_len);
 
-static inline cache_t get_bits32(dec_bits *ths, int bit_len)
+static inline uint32_t get_bits32(dec_bits *ths, int bit_len)
 {
 	if (bit_len <= 24) {
 		return get_bits(ths, bit_len);
@@ -97,13 +97,13 @@ static inline uint32_t ue_golomb(dec_bits *str)
 			rest += 2;
 			break;
 		case 1:
-			return get_bits32(str, rest + 2) + ((bits << 2) << rest) - 1;
+			return static_cast<uint32_t>(get_bits32(str, rest + 2) + ((bits << 2) << rest) - 1);
 			/* NOTREACHED */
 			break;
 		case 2:
 			/* FALLTHROUGH */
 		case 3:
-			return (rest ? get_bits32(str, rest) : 0) + (bits << rest) - 1;
+			return static_cast<uint32_t>((rest ? get_bits32(str, rest) : 0) + (bits << rest) - 1);
 			/* NOTREACHED */
 			break;
 		}

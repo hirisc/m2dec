@@ -214,6 +214,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\src\lib\h265.h"
+				>
+			</File>
+			<File
 				RelativePath="..\..\src\lib\idct.h"
 				>
 			</File>

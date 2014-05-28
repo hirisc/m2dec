@@ -27,21 +27,8 @@
 #include <setjmp.h>
 #include <stdlib.h>
 #include <limits.h>
-#ifdef _MSC_VER
-#include <crtdbg.h>
-#define VC_CHECK assert(_CrtCheckMemory());
-#else
-#define VC_CHECK
-#endif
-#include "m2d.h"
-
-typedef struct {
-	int id;
-	dec_bits *stream;
-	int (*header_callback)(void *arg, void *seq_id);
-	void *header_callback_arg;
-	dec_bits stream_i;
-} h265d_context;
+#include <algorithm>
+#include "h265.h"
 
 int h265d_init(h265d_context *h2d, int dpb_max, int (*header_callback)(void *, void *), void *arg) {
 	if (!h2d) {
@@ -101,12 +88,90 @@ typedef enum {
 	OUT_OF_RANGE = -2
 } h265d_error_t;
 
+#define IS_ACTIVE(flag, bit) (((flag) & (1 << (bit))) != 0)
+#define NUM_ELEM(arry) (sizeof(arry) / sizeof(arry[0]))
+
+static void sub_layer_info_read(h265d_sub_layer_info_t& dst, uint32_t present, dec_bits& st) {
+	if (IS_ACTIVE(present, 15)) {
+		dst.sub_layer_profile_first8bit = get_bits(&st, 8);
+		dst.sub_layer_profile_compatibility_flag = get_bits32(&st, 32);
+		for (int i = 0; i < NUM_ELEM(dst.sub_layer_second48bit); ++i) {
+			dst.sub_layer_second48bit[i] = get_bits(&st, 8);
+		}
+	}
+	if (IS_ACTIVE(present, 14)) {
+		dst.sub_layer_level_idc = get_bits(&st, 8);
+	}
+}
+
+static void profile_tier_level(uint8_t max_sub_layers_minus1, h265d_profile_tier_level_t& dst, dec_bits& st) {
+	dst.max_sub_layer = max_sub_layers_minus1 + 1;
+	dst.general_profile_first8bit = get_bits(&st, 8);
+	dst.general_profile_compatibility_flag = get_bits32(&st, 32);
+	for (int i = 0; i < NUM_ELEM(dst.general_second48bit); ++i) {
+		dst.general_second48bit[i] = get_bits(&st, 8);
+	}
+	dst.general_level_idc = get_bits(&st, 8);
+	if (max_sub_layers_minus1 != 0) {
+		uint32_t present = get_bits(&st, 16);
+		dst.sub_layer_profile_level_present_flag = present;
+		for (int i = 0; i < max_sub_layers_minus1; ++i) {
+			sub_layer_info_read(dst.sub_layer_info[i], present, st);
+			present <<= 2;
+		}
+	}
+}
+
+static void error_report(dec_bits& st) {
+	longjmp(st.jmp, -1);
+}
+
+#define READ_CHECK_RANGE(val, dst, max, st) {uint32_t t = (val); (dst) = t; if ((max) < t) error_report(st);}
+#define CHECK_RANGE(val, max, st) {if ((max) < (val)) error_report(st);}
+
+static void vps_timing_info_read(h265d_vps_timing_info_t& dst, dec_bits& st) {
+	dst.num_units_in_tick = get_bits32(&st, 32);
+	dst.time_scale = get_bits32(&st, 32);
+	if ((dst.poc_proportional_to_timing_flag = get_onebit(&st)) != 0) {
+		dst.num_ticks_poc_diff_one_minus1 = ue_golomb(&st);
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.vps_num_hrd_parameters, 1024, st);
+	/* current version omits rest of data */
+}
+
+static void video_parameter_set(h265d_vps_t& vps, dec_bits& st) {
+	vps.id = get_bits(&st, 4);
+	skip_bits(&st, 2);
+	vps.max_layer = get_bits(&st, 6);
+	uint8_t max_sub_layers_minus1 = get_bits(&st, 3);
+	CHECK_RANGE(max_sub_layers_minus1, 6, st);
+	vps.temporal_id_nesting_flag = get_onebit(&st);
+	skip_bits(&st, 16);
+	profile_tier_level(max_sub_layers_minus1, vps.profile_tier_level, st);
+	vps.sub_layer_ordering_info_present_flag = get_onebit(&st);
+	for (int i = (vps.sub_layer_ordering_info_present_flag ? 0 : max_sub_layers_minus1); i <= max_sub_layers_minus1; ++i) {
+		vps.max[i].max_dec_pic_buffering_minus1 = ue_golomb(&st);
+		vps.max[i].max_num_reorder_pic = ue_golomb(&st);
+		vps.max[i].max_latency_increase_plus1 = ue_golomb(&st);
+	}
+	vps.max_layer_id = get_bits(&st, 6);
+	READ_CHECK_RANGE(ue_golomb(&st), vps.num_layer_sets_minus1, 1023, st);
+	for (int i = 0; i < vps.num_layer_sets_minus1; ++i) {
+		skip_bits(&st, vps.max_layer_id + 1);
+	}
+	vps.timing_info_present_flag = get_onebit(&st);
+	if (vps.timing_info_present_flag) {
+		vps_timing_info_read(vps.timing_info, st);
+	}
+}
+
 static int dispatch_one_nal(h265d_context *h2d, int code_type) {
 	int err = 0;
 	dec_bits *st = h2d->stream;
 
-	switch (static_cast<h265d_nal_t>((code_type >> 1) & 31)) {
+	switch (static_cast<h265d_nal_t>((code_type >> 1) & 63)) {
 	case VPS_NAL:
+		video_parameter_set(h2d->vps, *st);
 		break;
 	case SPS_NAL:
 		break;
@@ -122,22 +187,21 @@ int h265d_decode_picture(h265d_context *h2d) {
 		return -1;
 	}
 	dec_bits* stream = h2d->stream;
+	if (setjmp(stream->jmp) != 0) {
+		return -2;
+	}
 /*	h2d->slice_header->first_mb_in_slice = UINT_MAX;*/
 	int err = 0;
 	int code_type = 0;
-	try {
-		do {
-			if (0 <= (err = m2d_find_mpeg_data(stream))) {
-				code_type = get_bits(stream, 8);
-				err = dispatch_one_nal(h2d, code_type);
-			} else {
-				throw OUT_OF_RANGE;
-			}
-			VC_CHECK;
-		} while (err == 0);// || (code_type == SPS_NAL && 0 < err));
-	} catch (const h265d_error_t& e) {
-		return static_cast<int>(e);
-	}
+	do {
+		if (0 <= (err = m2d_find_mpeg_data(stream))) {
+			code_type = get_bits(stream, 8);
+			err = dispatch_one_nal(h2d, code_type);
+		} else {
+			throw OUT_OF_RANGE;
+		}
+		VC_CHECK;
+	} while (err == 0);// || (code_type == SPS_NAL && 0 < err));
 	return err;
 }
 
