@@ -358,7 +358,6 @@ void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
 		src += stride;
 		dst += stride;
 		dst1 += stride;
-		VC_CHECK;
 	} while (--height);
 }
 

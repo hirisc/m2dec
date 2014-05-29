@@ -139,6 +139,14 @@ static void vps_timing_info_read(h265d_vps_timing_info_t& dst, dec_bits& st) {
 	/* current version omits rest of data */
 }
 
+static void sub_layer_reordering_info(h265d_sub_layer_reordering_info_t dst[], uint8_t info_present, uint32_t max_sub_layers_minus1, dec_bits& st) {
+	for (uint32_t i = (info_present ? 0 : max_sub_layers_minus1); i <= max_sub_layers_minus1; ++i) {
+		dst[i].max_dec_pic_buffering_minus1 = ue_golomb(&st);
+		dst[i].max_num_reorder_pic = ue_golomb(&st);
+		dst[i].max_latency_increase_plus1 = ue_golomb(&st);
+	}
+}
+
 static void video_parameter_set(h265d_vps_t& vps, dec_bits& st) {
 	vps.id = get_bits(&st, 4);
 	skip_bits(&st, 2);
@@ -149,11 +157,7 @@ static void video_parameter_set(h265d_vps_t& vps, dec_bits& st) {
 	skip_bits(&st, 16);
 	profile_tier_level(max_sub_layers_minus1, vps.profile_tier_level, st);
 	vps.sub_layer_ordering_info_present_flag = get_onebit(&st);
-	for (int i = (vps.sub_layer_ordering_info_present_flag ? 0 : max_sub_layers_minus1); i <= max_sub_layers_minus1; ++i) {
-		vps.max[i].max_dec_pic_buffering_minus1 = ue_golomb(&st);
-		vps.max[i].max_num_reorder_pic = ue_golomb(&st);
-		vps.max[i].max_latency_increase_plus1 = ue_golomb(&st);
-	}
+	sub_layer_reordering_info(vps.max_buffering, vps.sub_layer_ordering_info_present_flag, max_sub_layers_minus1, st);
 	vps.max_layer_id = get_bits(&st, 6);
 	READ_CHECK_RANGE(ue_golomb(&st), vps.num_layer_sets_minus1, 1023, st);
 	for (int i = 0; i < vps.num_layer_sets_minus1; ++i) {
@@ -165,15 +169,154 @@ static void video_parameter_set(h265d_vps_t& vps, dec_bits& st) {
 	}
 }
 
-static int dispatch_one_nal(h265d_context *h2d, int code_type) {
+static void conformance_window(h265d_conformance_window_t& dst, dec_bits& st) {
+	dst.left_offset = ue_golomb(&st);
+	dst.right_offset = ue_golomb(&st);
+	dst.top_offset = ue_golomb(&st);
+	dst.bottom_offset = ue_golomb(&st);
+}
+
+static void scaling_list_read(uint8_t list[], int len, bool upper, dec_bits& st) {
+	uint8_t coef = upper ? (se_golomb(&st) + 8) : 8;
+	for (int i = 0; i < len; ++i) {
+		coef = se_golomb(&st) + coef;
+		list[i] = coef;
+	}
+}
+
+static void scaling_list_read_all(uint8_t list[], int list_num, int list_len, bool upper, dec_bits& st) {
+	for (int i = 0; i < list_num; ++i) {
+		if (get_onebit(&st) == 0) {
+			ue_golomb(&st);
+		} else {
+			scaling_list_read(list, list_len, upper, st);
+		}
+		list += list_len;
+	}
+}
+
+static void scaling_list_data(h265d_scaling_list_data_t& dst, dec_bits& st) {
+	scaling_list_read_all(dst.scale0[0], 6, 16, false, st);
+	scaling_list_read_all(dst.scale1[0], 6, 64, false, st);
+	scaling_list_read_all(dst.scale2[0], 6, 64, true, st);
+	scaling_list_read_all(dst.scale3[0], 2, 64, true, st);
+}
+
+static void short_term_ref_pic_set_nopred(h265d_sps_t& sps, uint8_t num, dec_bits& st) {
+	h265d_short_term_ref_pic_set_nopred_t dst;
+	dst.num_negative_pics = ue_golomb(&st);
+	dst.num_positive_pics = ue_golomb(&st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.delta_poc_s0_minus1, 32767, st);
+	dst.used_by_curr_pic_s0_flag = get_onebit(&st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.delta_poc_s1_minus1, 32767, st);
+	dst.used_by_curr_pic_s1_flag = get_onebit(&st);
+}
+
+static void sps_short_term_ref_pic_set(h265d_sps_t& dst, uint32_t num, dec_bits& st) {
+	short_term_ref_pic_set_nopred(dst, num, st);
+	for (uint32_t i = 1; i < num; ++i) {
+	}
+}
+
+static void vui_parameters(h265d_vui_parameters_t& dst, dec_bits& st) {
+	dst.aspect_ratio_idc = (get_onebit(&st) != 0) ? get_bits(&st, 8) : 0;
+	if (dst.aspect_ratio_idc == 255) {
+		dst.sar_width = get_bits(&st, 16);
+		dst.sar_height = get_bits(&st, 16);
+	}
+	if ((dst.overscan_info_present_flag = get_onebit(&st)) != 0) {
+		dst.overscan_appropriate_flag = get_onebit(&st);
+	}
+	dst.video_format = 5;
+	dst.video_full_range_flag = 0;
+	dst.colour_primaries = 2;
+	dst.transfer_characteristics = 2;
+	dst.matrix_coeffs = 2;
+	if (get_onebit(&st) != 0) {
+		dst.video_format = get_bits(&st, 3);
+		dst.video_full_range_flag = get_onebit(&st);
+		if ((dst.colour_description_present_flag = get_onebit(&st)) != 0) {
+			dst.colour_primaries = get_bits(&st, 8);
+			dst.transfer_characteristics = get_bits(&st, 8);
+			dst.matrix_coeffs = get_bits(&st, 8);
+		}
+	}
+}
+
+static void seq_parameter_set(h265d_sps_t& dst, dec_bits& st) {
+	dst.vps_id = get_bits(&st, 4);
+	uint8_t max_sub_layers_minus1 = get_bits(&st, 3);
+	dst.max_sub_layers_minus1 = max_sub_layers_minus1;
+	dst.temporal_id_nesting_flag = get_onebit(&st);
+	profile_tier_level(max_sub_layers_minus1, dst.profile_tier_level, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.id, 15, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.chroma_format_idc, 3, st);
+	if (dst.chroma_format_idc == 3) {
+		dst.separate_colour_plane_flag = get_onebit(&st);
+	}
+	dst.pic_width_in_luma_samples = ue_golomb(&st);
+	dst.pic_height_in_luma_samples = ue_golomb(&st);
+	if ((dst.conformance_window_flag = get_onebit(&st)) != 0) {
+		conformance_window(dst.conf_win, st);
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.bit_depth_luma_minus8, 6, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.bit_depth_chroma_minus8, 6, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_max_pic_order_cnt_lsb_minus4, 12, st);
+	dst.sub_layer_ordering_info_present_flag = get_onebit(&st);
+	sub_layer_reordering_info(dst.max_buffering, dst.sub_layer_ordering_info_present_flag, max_sub_layers_minus1, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_min_luma_coding_block_size_minus3, 2, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_diff_max_min_luma_coding_block_size, 3, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_min_transform_block_size_minus2, 2, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_diff_max_min_transform_block_size, 3, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.max_transform_hierarchy_depth_inter, 5, st);
+	READ_CHECK_RANGE(ue_golomb(&st), dst.max_transform_hierarchy_depth_intra, 5, st);
+	if ((dst.scaling_list_enabled_flag = get_onebit(&st)) != 0) {
+		if ((dst.scaling_list_data_present_flag = get_onebit(&st)) != 0) {
+			assert(0);
+			scaling_list_data(dst.scaling_list_data, st);
+		}
+	}
+	dst.amp_enabled_flag = get_onebit(&st);
+	dst.sample_adaptive_offset_enabled_flag = get_onebit(&st);
+	if ((dst.pcm_enabled_flag = get_onebit(&st)) != 0) {
+		dst.pcm_sample_bit_depth_luma_minus1 = get_bits(&st, 4);
+		dst.pcm_sample_bit_depth_chroma_minus1 = get_bits(&st, 4);
+		READ_CHECK_RANGE(ue_golomb(&st), dst.log2_min_pcm_luma_coding_block_size_minus3, 2, st);
+		READ_CHECK_RANGE(ue_golomb(&st), dst.log2_diff_max_min_pcm_luma_coding_block_size, 3, st);
+		dst.pcm_loop_filter_disabled_flag = get_onebit(&st);
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.num_short_term_ref_pic_sets, 64, st);
+	sps_short_term_ref_pic_set(dst, dst.num_short_term_ref_pic_sets, st);
+	if ((dst.long_term_ref_pics_present_flag = get_onebit(&st)) != 0) {
+		uint32_t num_lt;
+		READ_CHECK_RANGE(ue_golomb(&st), num_lt, 32, st);
+		dst.num_long_term_ref_pics_sps = num_lt;
+		uint32_t max_lsb = (1 << (dst.log2_max_pic_order_cnt_lsb_minus4 + 4)) - 1;
+		dst.used_by_curr_pic_lt_sps_flag = 0;
+		for (uint32_t i = 0; i < num_lt; ++i) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.lt_ref_pic_poc_lsb_sps[i], max_lsb, st);
+			if (get_onebit(&st)) {
+				dst.used_by_curr_pic_lt_sps_flag |= (1 << i);
+			}
+		}
+	}
+	dst.sps_temporal_mvp_enabled_flag = get_onebit(&st);
+	dst.strong_intra_smoothing_enabled_flag = get_onebit(&st);
+	if ((dst.vui_parameters_present_flag = get_onebit(&st)) != 0) {
+		vui_parameters(dst.vui_parameters, st);
+	}
+}
+
+static int dispatch_one_nal(h265d_context *h2d, uint32_t nalu_header) {
 	int err = 0;
 	dec_bits *st = h2d->stream;
 
-	switch (static_cast<h265d_nal_t>((code_type >> 1) & 63)) {
+	switch (static_cast<h265d_nal_t>((nalu_header >> 9) & 63)) {
 	case VPS_NAL:
 		video_parameter_set(h2d->vps, *st);
 		break;
 	case SPS_NAL:
+		seq_parameter_set(h2d->sps, *st);
 		break;
 	default:
 		throw OUT_OF_RANGE;
@@ -192,11 +335,11 @@ int h265d_decode_picture(h265d_context *h2d) {
 	}
 /*	h2d->slice_header->first_mb_in_slice = UINT_MAX;*/
 	int err = 0;
-	int code_type = 0;
+	uint32_t nalu_header = 0;
 	do {
 		if (0 <= (err = m2d_find_mpeg_data(stream))) {
-			code_type = get_bits(stream, 8);
-			err = dispatch_one_nal(h2d, code_type);
+			nalu_header = get_bits(stream, 16);
+			err = dispatch_one_nal(h2d, nalu_header);
 		} else {
 			throw OUT_OF_RANGE;
 		}
