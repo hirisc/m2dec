@@ -21,8 +21,8 @@ typedef struct {
 	uint8_t general_profile_first8bit;
 	uint8_t general_level_idc;
 	uint8_t general_second48bit[6];
-	uint32_t general_profile_compatibility_flag;
 	uint16_t sub_layer_profile_level_present_flag;
+	uint32_t general_profile_compatibility_flag;
 	h265d_sub_layer_info_t sub_layer_info[8];
 } h265d_profile_tier_level_t;
 
@@ -44,11 +44,11 @@ typedef struct {
 	uint8_t id;
 	uint8_t max_layer;
 	uint8_t max_layer_id;
-	uint8_t temporal_id_nesting_flag;
-	uint8_t sub_layer_ordering_info_present_flag;
-	uint8_t timing_info_present_flag;
-	uint16_t num_layer_sets_minus1;
 	uint8_t layer_id_included_flag[2];
+	uint16_t num_layer_sets_minus1;
+	uint32_t temporal_id_nesting_flag : 1;
+	uint32_t sub_layer_ordering_info_present_flag : 1;
+	uint32_t timing_info_present_flag : 1;
 	h265d_profile_tier_level_t profile_tier_level;
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_vps_timing_info_t timing_info;
@@ -71,13 +71,10 @@ typedef struct {
 } h265d_scaling_list_data_t;
 
 typedef struct {
-	uint8_t num_negative_pics;
-	uint8_t num_positive_pics;
-	uint8_t delta_poc_s0_minus1;
-	uint8_t used_by_curr_pic_s0_flag;
-	uint8_t delta_poc_s1_minus1;
-	uint8_t used_by_curr_pic_s1_flag;
-} h265d_short_term_ref_pic_set_nopred_t;
+	uint8_t num_pics;
+	int16_t delta_poc[16];
+	uint16_t used_by_curr_pic_flag;
+} h265d_short_term_ref_pic_set_t;
 
 typedef struct {
 	uint8_t aspect_ratio_idc;
@@ -85,18 +82,26 @@ typedef struct {
 	uint8_t colour_primaries;
 	uint8_t transfer_characteristics;
 	uint8_t matrix_coeffs;
-	uint8_t overscan_info_present_flag;
-	uint8_t overscan_appropriate_flag;
-	uint8_t video_full_range_flag;
-	uint8_t colour_description_present_flag;
 	uint16_t sar_width;
 	uint16_t sar_height;
+	uint32_t overscan_info_present_flag : 1;
+	uint32_t overscan_appropriate_flag : 1;
+	uint32_t video_full_range_flag : 1;
+	uint32_t colour_description_present_flag : 1;
 } h265d_vui_parameters_t;
 
 typedef struct {
 	uint8_t vps_id;
 	uint8_t max_sub_layers_minus1;
-	uint8_t id;
+	uint8_t temporal_id_nesting_flag;
+	h265d_profile_tier_level_t profile_tier_level;
+} h265d_sps_prefix_t;
+
+typedef struct {
+	uint8_t size_log2;
+} h265d_sps_ctb_info_t;
+
+typedef struct {
 	uint8_t chroma_format_idc;
 	uint32_t pic_width_in_luma_samples;
 	uint32_t pic_height_in_luma_samples;
@@ -115,37 +120,109 @@ typedef struct {
 	uint8_t log2_diff_max_min_pcm_luma_coding_block_size;
 	uint8_t num_short_term_ref_pic_sets;
 	uint8_t num_long_term_ref_pics_sps;
-	uint8_t temporal_id_nesting_flag;
-	uint8_t separate_colour_plane_flag;
-	uint8_t conformance_window_flag;
-	uint8_t sub_layer_ordering_info_present_flag;
-	uint8_t scaling_list_enabled_flag;
-	uint8_t scaling_list_data_present_flag;
-	uint8_t amp_enabled_flag;
-	uint8_t sample_adaptive_offset_enabled_flag;
-	uint8_t pcm_enabled_flag;
-	uint8_t pcm_loop_filter_disabled_flag;
-	uint8_t long_term_ref_pics_present_flag;
-	uint8_t sps_temporal_mvp_enabled_flag;
-	uint8_t strong_intra_smoothing_enabled_flag;
-	uint8_t vui_parameters_present_flag;
+	uint32_t separate_colour_plane_flag : 1;
+	uint32_t conformance_window_flag : 1;
+	uint32_t sub_layer_ordering_info_present_flag : 1;
+	uint32_t scaling_list_enabled_flag : 1;
+	uint32_t scaling_list_data_present_flag : 1;
+	uint32_t amp_enabled_flag : 1;
+	uint32_t sample_adaptive_offset_enabled_flag : 1;
+	uint32_t pcm_enabled_flag : 1;
+	uint32_t pcm_loop_filter_disabled_flag : 1;
+	uint32_t long_term_ref_pics_present_flag : 1;
+	uint32_t sps_temporal_mvp_enabled_flag : 1;
+	uint32_t strong_intra_smoothing_enabled_flag : 1;
+	uint32_t vui_parameters_present_flag : 1;
 	uint32_t used_by_curr_pic_lt_sps_flag;
 	uint16_t lt_ref_pic_poc_lsb_sps[32];
-	h265d_profile_tier_level_t profile_tier_level;
+	h265d_sps_ctb_info_t ctb_info;
+	h265d_sps_prefix_t prefix;
 	h265d_conformance_window_t conf_win;
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_scaling_list_data_t scaling_list_data;
+	h265d_short_term_ref_pic_set_t short_term_ref_pic_set[64][2];
 	h265d_vui_parameters_t vui_parameters;
 } h265d_sps_t;
 
 typedef struct {
-	int id;
-	dec_bits *stream;
+	uint16_t num_tile_columns_minus1;
+	uint16_t num_tile_rows_minus1;
+	uint16_t* column_width_minus1;
+	uint16_t* row_height_minus1;
+	uint32_t uniform_spacing_flag : 1;
+	uint32_t loop_filter_across_tiles_enabled_flag : 1;
+} h265d_tiles_t;
+
+typedef struct {
+	uint8_t sps_id;
+	uint8_t num_ref_idx_l0_default_active_minus1;
+	uint8_t num_ref_idx_l1_default_active_minus1;
+	uint8_t init_qp_minus26;
+	uint8_t diff_cu_qp_delta_depth;
+	int8_t pps_cb_qp_offset;
+	int8_t pps_cr_qp_offset;
+	int8_t pps_beta_offset_div2;
+	int8_t pps_tc_offset_div2;
+	uint8_t log2_parallel_merge_level_minus2;
+	uint32_t dependent_slice_segments_enabled_flag : 1;
+	uint32_t output_flag_present_flag : 1;
+	uint32_t num_extra_slice_header_bits : 3;
+	uint32_t sign_data_hiding_enabled_flag : 1;
+	uint32_t cabac_init_present_flag : 1;
+	uint32_t constrained_intra_pred_flag : 1;
+	uint32_t transform_skip_enabled_flag : 1;
+	uint32_t cu_qp_delta_enabled_flag : 1;
+	uint32_t pps_slice_chroma_qp_offsets_present_flag : 1;
+	uint32_t weighted_pred_flag : 1;
+	uint32_t weighted_bipred_flag : 1;
+	uint32_t transquant_bypass_enabled_flag : 1;
+	uint32_t tiles_enabled_flag : 1;
+	uint32_t entropy_coding_sync_enabled_flag : 1;
+	uint32_t pps_loop_filter_across_slices_enabled_flag : 1;
+	uint32_t deblocking_filter_control_present_flag : 1;
+	uint32_t deblocking_filter_override_enabled_flag : 1;
+	uint32_t pps_deblocking_filter_disabled_flag : 1;
+	uint32_t pps_scaling_list_data_present_flag : 1;
+	uint32_t lists_modification_present_flag : 1;
+	uint32_t slice_segment_header_extension_present_flag : 1;
+	uint32_t pps_extension_flag : 1;
+	h265d_tiles_t tiles;
+	h265d_scaling_list_data_t scaling_list_data;
+} h265d_pps_t;
+
+typedef struct {
+	uint8_t pic_type;
+} h265d_access_unit_delimite_t;
+
+typedef struct {
+	uint8_t first_slice_segment_in_pic_flag;
+} h265d_slice_header_t;
+
+typedef enum {
+	SLICE_IDR_W_RADL = 19,
+	VPS_NAL = 32,
+	SPS_NAL = 33,
+	PPS_NAL = 34,
+	AUD_NAL = 35,
+	EOS_NAL = 36,
+	EOB_NAL = 37,
+	FILLER_NAL = 38,
+	PREFIX_SEI = 39,
+	SUFFIX_SEI = 40
+} h265d_nal_t;
+
+typedef struct {
+	h265d_nal_t current_nal;
 	int (*header_callback)(void *arg, void *seq_id);
 	void *header_callback_arg;
 	dec_bits stream_i;
+	h265d_slice_header_t slice_header;
 	h265d_vps_t vps;
-	h265d_sps_t sps;
-} h265d_context;
+	h265d_sps_t sps[16];
+	h265d_pps_t pps[64];
+} h265d_data_t;
+
+struct h265d_context;
+typedef struct h265d_context h265d_context;
 
 #endif /* __H265DEC_H__ */
