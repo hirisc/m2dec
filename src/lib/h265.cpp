@@ -127,6 +127,7 @@ static void error_report(dec_bits& st) {
 #define READ_CHECK_RANGE(val, dst, max, st) {uint32_t t = (val); (dst) = t; if ((max) < t) error_report(st);}
 #define READ_CHECK_RANGE2(val, dst, min, max, st) {int32_t t = (val); (dst) = t; if (t < (min) || (max) < t) error_report(st);}
 #define CHECK_RANGE(val, max, st) {if ((max) < (val)) error_report(st);}
+#define CHECK_RANGE2(val, min, max, st) {if (((val) < (min)) || ((max) < (val))) error_report(st);}
 
 static void vps_timing_info_read(h265d_vps_timing_info_t& dst, dec_bits& st) {
 	dst.num_units_in_tick = get_bits32(&st, 32);
@@ -263,6 +264,29 @@ static void vui_parameters(h265d_vui_parameters_t& dst, dec_bits& st) {
 	}
 }
 
+static inline uint32_t log2ceil(uint32_t num) {
+	static const int8_t MultiplyDeBruijnBitPosition[32] = {
+		0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,
+		8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31
+	};
+	num = num | (num >> 1);
+	num = num | (num >> 2);
+	num = num | (num >> 4);
+	num = num | (num >> 8);
+	num = num | (num >> 16);
+	return MultiplyDeBruijnBitPosition[(uint32_t)(num * 0x07C4ACDDU) >> 27];
+}
+
+static void set_ctb_info(h265d_sps_ctb_info_t& ctb_info, const h265d_sps_t& sps) {
+	uint32_t ctb_log2 = sps.log2_min_luma_coding_block_size_minus3 + 3 + sps.log2_diff_max_min_luma_coding_block_size;
+	ctb_info.size_log2 = ctb_log2;
+	uint32_t columns = (sps.pic_width_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1);
+	uint32_t rows = (sps.pic_height_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1);
+	ctb_info.columns = columns;
+	ctb_info.rows = rows;
+	ctb_info.num_ctb_log2 = log2ceil(columns * rows);
+}
+
 static uint32_t sps_prefix(h265d_sps_prefix_t& dst, dec_bits& st) {
 	dst.vps_id = get_bits(&st, 4);
 	uint8_t max_sub_layers_minus1 = get_bits(&st, 3);
@@ -292,7 +316,7 @@ static void sps_residual(h265d_sps_t& dst, const h265d_sps_prefix_t& prefix, dec
 	sub_layer_reordering_info(dst.max_buffering, dst.sub_layer_ordering_info_present_flag, prefix.max_sub_layers_minus1, st);
 	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_min_luma_coding_block_size_minus3, 2, st);
 	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_diff_max_min_luma_coding_block_size, 3, st);
-	dst.ctb_info.size_log2 = dst.log2_min_luma_coding_block_size_minus3 + 3 + dst.log2_diff_max_min_luma_coding_block_size;
+	set_ctb_info(dst.ctb_info, dst);
 	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_min_transform_block_size_minus2, 2, st);
 	READ_CHECK_RANGE(ue_golomb(&st), dst.log2_diff_max_min_transform_block_size, 3, st);
 	READ_CHECK_RANGE(ue_golomb(&st), dst.max_transform_hierarchy_depth_inter, 5, st);
@@ -339,14 +363,11 @@ static void seq_parameter_set(h265d_data_t& h2d, dec_bits& st) {
 }
 
 static void pps_tiles(h265d_tiles_t& dst, dec_bits& st, const h265d_sps_t& sps) {
-	uint32_t ctb_log2 = sps.ctb_info.size_log2;
-	uint32_t columns_max_minus1 = ((sps.pic_width_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1)) - 1;
 	uint32_t columns_minus1;
-	READ_CHECK_RANGE(ue_golomb(&st), columns_minus1, columns_max_minus1, st);
+	READ_CHECK_RANGE(ue_golomb(&st), columns_minus1, (uint32_t)(sps.ctb_info.columns - 1), st);
 	dst.num_tile_columns_minus1 = columns_minus1;
-	uint32_t rows_max_minus1 = ((sps.pic_height_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1)) - 1;
 	uint32_t rows_minus1;
-	READ_CHECK_RANGE(ue_golomb(&st), rows_minus1, rows_max_minus1, st);
+	READ_CHECK_RANGE(ue_golomb(&st), rows_minus1, (uint32_t)(sps.ctb_info.rows - 1), st);
 	dst.num_tile_rows_minus1 = rows_minus1;
 	if ((dst.uniform_spacing_flag = get_onebit(&st)) == 0) {
 		for (uint32_t i = 0; i < columns_minus1; ++i) {
@@ -415,16 +436,116 @@ static void au_delimiter(h265d_data_t& h2d, dec_bits& st) {
 static void skip_nal(h265d_data_t& h2d, dec_bits& st) {
 }
 
+static void entry_points(h265d_entry_point_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	uint32_t max_num;
+	if (!pps.tiles_enabled_flag) {
+		max_num = sps.ctb_info.rows - 1;
+	} else if (!pps.entropy_coding_sync_enabled_flag) {
+		max_num = (pps.tiles.num_tile_columns_minus1 + 1) * (pps.tiles.num_tile_rows_minus1 + 1) - 1;
+	} else {
+		max_num = (pps.tiles.num_tile_columns_minus1 + 1) * sps.ctb_info.rows - 1;
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.num_entry_point_offsets, max_num, st);
+	uint32_t num_points = dst.num_entry_point_offsets;
+	if (0 < num_points) {
+		READ_CHECK_RANGE(ue_golomb(&st), dst.offset_len_minus1, 31, st);
+		uint32_t offset_bits = dst.offset_len_minus1 + 1;
+		uint32_t* points = dst.entry_point_offset_minus1;
+		do {
+			*points++ = ue_golomb(&st);
+		} while (--num_points);
+	}
+}
+
+static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	if (pps.num_extra_slice_header_bits) {
+		skip_bits(&st, pps.num_extra_slice_header_bits);
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.slice_type, 2, st);
+	dst.pic_output_flag = (pps.output_flag_present_flag) ? get_onebit(&st) : 1;
+	if (sps.separate_colour_plane_flag) {
+		dst.colour_plane_id = get_bits(&st, 2);
+	}
+	if (dst.nal_type != IDR_W_RADL && dst.nal_type != IDR_N_LP) {
+		assert(0);
+	}
+	if (sps.sample_adaptive_offset_enabled_flag) {
+		dst.slice_sao_luma_flag = get_onebit(&st);
+		dst.slice_sao_chroma_flag = get_onebit(&st);
+	}
+	if (dst.slice_type != 2) {
+		assert(0);
+	}
+	int32_t qp_delta = se_golomb(&st);
+	dst.slice_qpy = pps.init_qp_minus26 + qp_delta + 26;
+	CHECK_RANGE2(dst.slice_qpy, -sps.bit_depth_luma_minus8 * 6, 51, st);
+	int32_t cb_qp_offset = 0;
+	int32_t cr_qp_offset = 0;
+	if (pps.pps_slice_chroma_qp_offsets_present_flag) {
+		READ_CHECK_RANGE2(se_golomb(&st), cb_qp_offset, -12, 12, st);
+		READ_CHECK_RANGE2(se_golomb(&st), cr_qp_offset, -12, 12, st);
+	}
+	cb_qp_offset += pps.pps_cb_qp_offset;
+	READ_CHECK_RANGE2(se_golomb(&st), cb_qp_offset, -12, 12, st);
+	cr_qp_offset += pps.pps_cr_qp_offset;
+	READ_CHECK_RANGE2(se_golomb(&st), cr_qp_offset, -12, 12, st);
+	dst.deblocking_filter_disabled_flag = pps.pps_deblocking_filter_disabled_flag;
+	dst.deblocking_filter_override_flag = pps.deblocking_filter_override_enabled_flag ? get_onebit(&st) : 0;
+	if (dst.deblocking_filter_override_flag) {
+		if ((dst.deblocking_filter_disabled_flag = get_onebit(&st)) == 0) {
+			READ_CHECK_RANGE2(se_golomb(&st), dst.slice_beta_offset_div2, -6, 6, st);
+			READ_CHECK_RANGE2(se_golomb(&st), dst.slice_tc_offset_div2, -6, 6, st);
+		}
+	}
+	if (pps.pps_loop_filter_across_slices_enabled_flag && (dst.slice_sao_luma_flag || dst.slice_sao_chroma_flag || !dst.deblocking_filter_disabled_flag)) {
+		dst.slice_loop_filter_across_slices_enabled_flag = get_onebit(&st);
+	} else {
+		dst.slice_loop_filter_across_slices_enabled_flag = pps.pps_loop_filter_across_slices_enabled_flag;
+	}
+}
+
+static void slice_header(h265d_slice_header_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	dst.dependent_slice_segment_flag = 0;
+	if (!dst.first_slice_segment_in_pic_flag) {
+		if (pps.dependent_slice_segments_enabled_flag) {
+			dst.dependent_slice_segment_flag = get_onebit(&st);
+		}
+		READ_CHECK_RANGE(get_bits(&st, sps.ctb_info.num_ctb_log2), dst.slice_segment_address, (uint32_t)(sps.ctb_info.columns * sps.ctb_info.rows - 1), st);
+	}
+	if (!dst.dependent_slice_segment_flag) {
+		slice_header_body(dst.body, pps, sps, st);
+	}
+	if (pps.tiles_enabled_flag || pps.entropy_coding_sync_enabled_flag) {
+		entry_points(dst.entry_points, pps, sps, st);
+	}
+	if (pps.slice_segment_header_extension_present_flag) {
+		uint32_t ext_len = ue_golomb(&st);
+		dst.slice_segment_header_extension_length = ext_len;
+		while (ext_len--) {
+			get_bits(&st, 8);
+		}
+	}
+	byte_align(&st);
+}
+
 static void slice_layer(h265d_data_t& h2d, dec_bits& st) {
 	h265d_slice_header_t& dst = h2d.slice_header;
+	dst.body.nal_type = h2d.current_nal;
 	dst.first_slice_segment_in_pic_flag = get_onebit(&st);
+	if ((BLA_W_LP <= h2d.current_nal) &&  (h2d.current_nal <= RSV_IRAP_VCL23)) {
+		dst.no_output_of_prior_pics_flag = get_onebit(&st);
+	}
+	READ_CHECK_RANGE(ue_golomb(&st), dst.pps_id, 63, st);
+	const h265d_pps_t& pps = h2d.pps[dst.pps_id];
+	const h265d_sps_t& sps = h2d.sps[pps.sps_id];
+	slice_header(dst, pps, sps, st);
 }
 
 static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {
 	int err = 0;
 	dec_bits& st = h2d.stream_i;
 	switch (h2d.current_nal = static_cast<h265d_nal_t>((nalu_header >> 9) & 63)) {
-	case SLICE_IDR_W_RADL:
+	case IDR_W_RADL:
 		slice_layer(h2d, st);
 		break;
 	case VPS_NAL:
