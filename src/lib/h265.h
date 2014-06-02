@@ -214,6 +214,34 @@ typedef enum {
 } h265d_nal_t;
 
 typedef struct {
+	uint32_t range;
+	uint32_t offset;
+	struct {
+		int8_t sao_merge_flag[3];
+		int8_t sao_type_idx[3];
+		int8_t split_cu_flag[9];
+		int8_t cu_transquant_bypass_flag[3];
+		int8_t cu_skip_flag[6];
+		int8_t pred_mode_flag[2];
+		int8_t part_mode[9];
+		int8_t prev_intra_luma_pred_flag[3];
+		int8_t intra_chroma_pred_mode[3];
+		int8_t rqt_root_cbf[2];
+		int8_t merge_flag[2];
+		int8_t merge_idx[2];
+		int8_t inter_pred_idc[10];
+		int8_t ref_idx[4];
+		int8_t mvp_flag[2];
+		int8_t split_transform_flag[9];
+		int8_t cbf_luma[6];
+		int8_t cbf_chroma[12];
+		int8_t abs_mvd_greater_flag[4];
+		int8_t cu_qp_delta_abs[6];
+		int8_t transform_skip_flag[6];
+	} context;
+} h265d_cabac_t;
+
+typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
@@ -228,6 +256,7 @@ typedef struct {
 	uint32_t deblocking_filter_override_flag : 1;
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
+	h265d_cabac_t cabac;
 } h265d_slice_header_body_t;
 
 typedef struct {
