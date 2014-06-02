@@ -99,6 +99,9 @@ typedef struct {
 
 typedef struct {
 	uint8_t size_log2;
+	uint8_t num_ctb_log2;
+	uint16_t columns;
+	uint16_t rows;
 } h265d_sps_ctb_info_t;
 
 typedef struct {
@@ -194,12 +197,11 @@ typedef struct {
 	uint8_t pic_type;
 } h265d_access_unit_delimite_t;
 
-typedef struct {
-	uint8_t first_slice_segment_in_pic_flag;
-} h265d_slice_header_t;
-
 typedef enum {
-	SLICE_IDR_W_RADL = 19,
+	BLA_W_LP = 16,
+	IDR_W_RADL = 19,
+	IDR_N_LP = 20,
+	RSV_IRAP_VCL23 = 23,
 	VPS_NAL = 32,
 	SPS_NAL = 33,
 	PPS_NAL = 34,
@@ -210,6 +212,40 @@ typedef enum {
 	PREFIX_SEI = 39,
 	SUFFIX_SEI = 40
 } h265d_nal_t;
+
+typedef struct {
+	h265d_nal_t nal_type;
+	uint8_t slice_type;
+	int8_t slice_qpy;
+	int8_t slice_qpcb;
+	int8_t slice_qpcr;
+	int8_t slice_beta_offset_div2;
+	int8_t slice_tc_offset_div2;
+	uint32_t pic_output_flag : 1;
+	uint32_t colour_plane_id : 2;
+	uint32_t slice_sao_luma_flag : 1;
+	uint32_t slice_sao_chroma_flag : 1;
+	uint32_t deblocking_filter_override_flag : 1;
+	uint32_t deblocking_filter_disabled_flag : 1;
+	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
+} h265d_slice_header_body_t;
+
+typedef struct {
+	uint8_t offset_len_minus1;
+	uint32_t num_entry_point_offsets;
+	uint32_t* entry_point_offset_minus1;
+} h265d_entry_point_t;
+
+typedef struct {
+	uint8_t pps_id;
+	uint32_t slice_segment_address;
+	uint32_t slice_segment_header_extension_length;
+	uint8_t first_slice_segment_in_pic_flag;
+	uint8_t no_output_of_prior_pics_flag;
+	uint8_t dependent_slice_segment_flag;
+	h265d_slice_header_body_t body;
+	h265d_entry_point_t entry_points;
+} h265d_slice_header_t;
 
 typedef struct {
 	h265d_nal_t current_nal;
