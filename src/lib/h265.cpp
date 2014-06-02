@@ -486,9 +486,9 @@ static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t&
 		READ_CHECK_RANGE2(se_golomb(&st), cr_qp_offset, -12, 12, st);
 	}
 	cb_qp_offset += pps.pps_cb_qp_offset;
-	READ_CHECK_RANGE2(se_golomb(&st), cb_qp_offset, -12, 12, st);
+	CHECK_RANGE2(cb_qp_offset, -12, 12, st);
 	cr_qp_offset += pps.pps_cr_qp_offset;
-	READ_CHECK_RANGE2(se_golomb(&st), cr_qp_offset, -12, 12, st);
+	CHECK_RANGE2(cr_qp_offset, -12, 12, st);
 	dst.deblocking_filter_disabled_flag = pps.pps_deblocking_filter_disabled_flag;
 	dst.deblocking_filter_override_flag = pps.deblocking_filter_override_enabled_flag ? get_onebit(&st) : 0;
 	if (dst.deblocking_filter_override_flag) {
