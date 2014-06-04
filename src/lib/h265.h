@@ -9,6 +9,8 @@
 #endif
 #include "m2d.h"
 
+static const int H265D_MAX_FRAME_NUM = 16;
+
 typedef struct {
 	uint8_t sub_layer_profile_first8bit;
 	uint8_t sub_layer_level_idc;
@@ -53,13 +55,6 @@ typedef struct {
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_vps_timing_info_t timing_info;
 } h265d_vps_t;
-
-typedef struct {
-	uint32_t left_offset;
-	uint32_t right_offset;
-	uint32_t top_offset;
-	uint32_t bottom_offset;
-} h265d_conformance_window_t;
 
 typedef struct {
 	uint8_t scaling_list_pred_mode_flag[4][6];
@@ -138,9 +133,9 @@ typedef struct {
 	uint32_t vui_parameters_present_flag : 1;
 	uint32_t used_by_curr_pic_lt_sps_flag;
 	uint16_t lt_ref_pic_poc_lsb_sps[32];
+	uint16_t cropping[4];
 	h265d_sps_ctb_info_t ctb_info;
 	h265d_sps_prefix_t prefix;
-	h265d_conformance_window_t conf_win;
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_scaling_list_data_t scaling_list_data;
 	h265d_short_term_ref_pic_set_t short_term_ref_pic_set[64][2];
@@ -214,34 +209,56 @@ typedef enum {
 } h265d_nal_t;
 
 typedef struct {
-	int8_t sao_merge_flag[3];
-	int8_t sao_type_idx[3];
-	int8_t split_cu_flag[9];
-	int8_t cu_transquant_bypass_flag[3];
-	int8_t cu_skip_flag[6];
-	int8_t pred_mode_flag[2];
-	int8_t part_mode[9];
-	int8_t prev_intra_luma_pred_flag[3];
-	int8_t intra_chroma_pred_mode[3];
-	int8_t rqt_root_cbf[2];
-	int8_t merge_flag[2];
-	int8_t merge_idx[2];
-	int8_t inter_pred_idc[10];
-	int8_t ref_idx[4];
-	int8_t mvp_flag[2];
-	int8_t split_transform_flag[9];
-	int8_t cbf_luma[6];
-	int8_t cbf_chroma[12];
-	int8_t abs_mvd_greater_flag[4];
-	int8_t cu_qp_delta_abs[6];
-	int8_t transform_skip_flag[6];
-} context;
+	uint8_t sao_merge_flag[1];
+	uint8_t sao_type_idx[1];
+	uint8_t split_cu_flag[3];
+	uint8_t cu_transquant_bypass_flag[1];
+	uint8_t cu_skip_flag[3];
+	uint8_t pred_mode_flag[1];
+	uint8_t part_mode[4];
+	uint8_t prev_intra_luma_pred_flag[1];
+	uint8_t intra_chroma_pred_mode[1];
+	uint8_t rqt_root_cbf[1];
+	uint8_t merge_flag[1];
+	uint8_t merge_idx[1];
+	uint8_t inter_pred_idc[5];
+	uint8_t ref_idx[2];
+	uint8_t mvp_flag[1];
+	uint8_t split_transform_flag[3];
+	uint8_t cbf_luma[2];
+	uint8_t cbf_chroma[4];
+	uint8_t abs_mvd_greater_flag[2];
+	uint8_t cu_qp_delta_abs[2];
+	uint8_t transform_skip_flag[2];
+	uint8_t last_sig_coeff_x_prefix[18];
+	uint8_t last_sig_coeff_y_prefix[18];
+	uint8_t coded_sub_block_flag[4];
+	uint8_t sig_coeff_flag[42];
+	uint8_t coeff_abs_level_greater1_flag[24];
+	uint8_t coeff_abs_level_greater2_flag[6];
+} h265d_cabac_context_t;
 
 typedef struct {
 	uint32_t range;
 	uint32_t offset;
 	h265d_cabac_context_t context;
 } h265d_cabac_t;
+
+typedef struct h265d_sao_map_t {
+	struct {
+		int8_t offset[4];
+		uint8_t band_pos[4];
+	} elem[3];
+} h265d_sao_map_t;
+
+typedef struct {
+	h265d_cabac_t cabac;
+	h265d_sao_map_t* sao_map;
+	void (*sao_read)(h265d_sao_map_t& ctu, dec_bits& st);
+	int8_t num_frames;
+	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
+	int8_t lru[H265D_MAX_FRAME_NUM];
+} h265d_ctu_t;
 
 typedef struct {
 	h265d_nal_t nal_type;
@@ -255,10 +272,10 @@ typedef struct {
 	uint32_t colour_plane_id : 2;
 	uint32_t slice_sao_luma_flag : 1;
 	uint32_t slice_sao_chroma_flag : 1;
+	uint32_t cabac_init_flag : 1;
 	uint32_t deblocking_filter_override_flag : 1;
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
-	h265d_cabac_t cabac;
 } h265d_slice_header_body_t;
 
 typedef struct {
@@ -283,6 +300,7 @@ typedef struct {
 	int (*header_callback)(void *arg, void *seq_id);
 	void *header_callback_arg;
 	dec_bits stream_i;
+	h265d_ctu_t coding_tree_unit;
 	h265d_slice_header_t slice_header;
 	h265d_vps_t vps;
 	h265d_sps_t sps[16];
