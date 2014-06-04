@@ -35,6 +35,11 @@ typedef enum {
 	OUT_OF_RANGE = -2
 } h265d_error_t;
 
+typedef enum {
+	DIR_LEFT = 1,
+	DIR_TOP = 2
+} h265d_direction_t;
+
 #define IS_ACTIVE(flag, bit) (((flag) & (1 << (bit))) != 0)
 #define NUM_ELEM(arry) (sizeof(arry) / sizeof(arry[0]))
 #define READ_CHECK_RANGE(val, dst, max, st) {uint32_t t = (val); (dst) = t; if ((max) < t) error_report(st);}
@@ -580,13 +585,27 @@ static void cabac_init_engine(h265d_cabac_t& cb, dec_bits& st) {
 	cb.offset = get_bits(&st, 9);
 }
 
-static void sao_read(h265d_sao_map_t& dst, dec_bits& st) {
+static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
+	uint32_t merge_flag = 0;
+	if (dst.pos_x != 0) {
+		merge_flag = DIR_LEFT;
+	}
+	if (dst.pos_y != 0) {
+		merge_flag |= DIR_TOP;
+	}
+	if (!merge_flag) {
+		if (hdr.body.slice_sao_luma_flag) {
+			//sao_type_idx_luma
+			//sao_offset_abs[4]
+			//dst.sao_map[0];
+		}
+	}
 }
 
-static void sao_ignore(h265d_sao_map_t& dst, dec_bits& st) {}
+static void sao_ignore(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {}
 
 static void coding_tree_unit(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
-	dst.sao_read(dst.sao_map[0], st);
+	dst.sao_read(dst, hdr, st);
 }
 
 static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
@@ -597,6 +616,8 @@ static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const 
 	cabac_init_engine(dst.cabac, st);
 	dst.sao_read = (hdr.body.slice_sao_luma_flag || hdr.body.slice_sao_chroma_flag) ? sao_read : sao_ignore;
 	int ctu_address = hdr.slice_segment_address;
+	dst.pos_y = ctu_address / sps.ctb_info.columns;
+	dst.pos_x = ctu_address - sps.ctb_info.columns * dst.pos_y;
 	int end_of_slice;
 	do {
 		coding_tree_unit(dst, hdr, st);

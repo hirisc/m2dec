@@ -252,15 +252,6 @@ typedef struct h265d_sao_map_t {
 } h265d_sao_map_t;
 
 typedef struct {
-	h265d_cabac_t cabac;
-	h265d_sao_map_t* sao_map;
-	void (*sao_read)(h265d_sao_map_t& ctu, dec_bits& st);
-	int8_t num_frames;
-	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
-	int8_t lru[H265D_MAX_FRAME_NUM];
-} h265d_ctu_t;
-
-typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
@@ -294,6 +285,16 @@ typedef struct {
 	h265d_slice_header_body_t body;
 	h265d_entry_point_t entry_points;
 } h265d_slice_header_t;
+
+typedef struct h265d_ctu_t {
+	h265d_cabac_t cabac;
+	uint16_t pos_x, pos_y;
+	h265d_sao_map_t* sao_map;
+	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
+	int8_t num_frames;
+	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
+	int8_t lru[H265D_MAX_FRAME_NUM];
+} h265d_ctu_t;
 
 typedef struct {
 	h265d_nal_t current_nal;
