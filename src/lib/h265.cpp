@@ -612,7 +612,7 @@ static uint32_t cabac_decode_tr(h265d_cabac_t& cb, dec_bits& st, const uint8_t* 
 #endif
 
 static uint32_t sao_type_idx(m2d_cabac_t& cabac, dec_bits& st) {
-	if (!cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(&cabac.context)->sao_type_idx)) {
+	if (!cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->sao_type_idx)) {
 		return 0;
 	} else {
 		return 1 + cabac_decode_bypass(&cabac, &st);
@@ -675,8 +675,22 @@ static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits
 
 static void sao_ignore(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {}
 
+static uint32_t split_cu_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return 1;
+}
+
+static void quad_tree_normal(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st, int size_log2) {
+	if (split_cu_flag(dst.cabac, st)) {
+	}
+}
+
 static void coding_tree_unit(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
 	dst.sao_read(dst, hdr, st);
+	if ((dst.ctb_info->columns - dst.pos_x < 2) || (dst.ctb_info->rows - dst.pos_y < 2)) {
+		assert(0);
+	} else {
+		quad_tree_normal(dst, hdr, st, dst.ctb_info->size_log2);
+	}
 }
 
 static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
@@ -689,6 +703,7 @@ static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const 
 	int ctu_address = hdr.slice_segment_address;
 	dst.pos_y = ctu_address / sps.ctb_info.columns;
 	dst.pos_x = ctu_address - sps.ctb_info.columns * dst.pos_y;
+	dst.ctb_info = &sps.ctb_info;
 	int end_of_slice;
 	do {
 		coding_tree_unit(dst, hdr, st);
