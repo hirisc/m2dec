@@ -286,6 +286,7 @@ typedef struct {
 typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
+	const h265d_sps_ctb_info_t* ctb_info;
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	int8_t num_frames;
