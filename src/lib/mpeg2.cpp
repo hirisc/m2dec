@@ -221,8 +221,6 @@ static void m2d_frames_set_mb_pos(m2d_mb_current *mb, int mb_x, int mb_y, int wi
 
 void m2d_mb_set_default(m2d_mb_current *mb);
 
-static int header_dummyfunc(void *arg, void *seq_id) {return 0;}
-
 __LIBM2DEC_API int m2d_init(m2d_context *m2d, int dummy, int (*header_callback)(void *arg, void *seq_id), void *arg)
 {
 	memset(m2d, 0, sizeof(*m2d));

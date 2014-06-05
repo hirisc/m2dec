@@ -53,6 +53,9 @@ int h265d_init(h265d_context *h2, int dpb_max, int (*header_callback)(void *, vo
 	}
 	h265d_data_t& h2d = *reinterpret_cast<h265d_data_t*>(h2);
 	memset(&h2d, 0, sizeof(h2d));
+	h2d.coding_tree_unit.cabac.context = reinterpret_cast<int8_t*>(&h2d.coding_tree_unit.context);
+	h2d.header_callback = header_callback ? header_callback : header_dummyfunc;
+	h2d.header_callback_arg = arg;
 	dec_bits_open(&h2d.stream_i, m2d_load_bytes_skip03);
 	return 0;
 }
@@ -67,16 +70,17 @@ int h265d_get_info(h265d_context *h2, m2d_info_t *info) {
 	}
 	h265d_data_t& h2d = *reinterpret_cast<h265d_data_t*>(h2);
 	h265d_sps_t& sps = h2d.sps[h2d.pps[h2d.slice_header.pps_id].sps_id];
-	int width = sps.ctb_info.columns << sps.ctb_info.num_ctb_log2;
-	int height = sps.ctb_info.rows << sps.ctb_info.num_ctb_log2;
+	int width = sps.ctb_info.columns << sps.ctb_info.size_log2;
+	int height = sps.ctb_info.rows << sps.ctb_info.size_log2;
 	info->src_width = width;
 	info->src_height = height;
 	info->disp_width = width;
 	info->disp_height = height;
 	info->frame_num = sps.num_long_term_ref_pics_sps + sps.num_short_term_ref_pic_sets;
-	for (int i = 0; i < 4; ++i) {
-		info->crop[i] = sps.cropping[i];
-	}
+	info->crop[0] = sps.cropping[0];
+	info->crop[1] = width - sps.pic_width_in_luma_samples + sps.cropping[1];
+	info->crop[2] = sps.cropping[2];
+	info->crop[3] = height - sps.pic_height_in_luma_samples + sps.cropping[3];
 	info->additional_size = sizeof(h2d.coding_tree_unit.sao_map[0]) * (sps.ctb_info.columns * sps.ctb_info.rows);
 	return 0;
 }
@@ -287,8 +291,8 @@ static inline uint32_t log2ceil(uint32_t num) {
 static void set_ctb_info(h265d_sps_ctb_info_t& ctb_info, const h265d_sps_t& sps) {
 	uint32_t ctb_log2 = sps.log2_min_luma_coding_block_size_minus3 + 3 + sps.log2_diff_max_min_luma_coding_block_size;
 	ctb_info.size_log2 = ctb_log2;
-	uint32_t columns = (sps.pic_width_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1);
-	uint32_t rows = (sps.pic_height_in_luma_samples + (1 << ctb_log2) - 1) >> (ctb_log2 - 1);
+	uint32_t columns = (sps.pic_width_in_luma_samples + (1 << ctb_log2) - 1) >> ctb_log2;
+	uint32_t rows = (sps.pic_height_in_luma_samples + (1 << ctb_log2) - 1) >> ctb_log2;
 	ctb_info.columns = columns;
 	ctb_info.rows = rows;
 	ctb_info.num_ctb_log2 = log2ceil(columns * rows);
@@ -532,34 +536,41 @@ static void slice_header(h265d_slice_header_t& dst, const h265d_pps_t& pps, cons
 			get_bits(&st, 8);
 		}
 	}
-	byte_align(&st);
+	int to_be_skipped = not_aligned_bits(&st);
+	skip_bits(&st, to_be_skipped ? to_be_skipped : 8);
 }
 
 /** Constants for initialization of CABAC context.
     m, n are to be derived by:
-        m = (elem >> 4) * 5 − 45
-        n = ((elem & 15) << 3) − 16
+        m = (elem >> 4) * 5 - 45
+        n = ((elem & 15) << 3) - 16
  */
-static const h265d_cabac_context_t cabac_initial_value[3] = {
+static const m2d_cabac_init_mn_t cabac_initial_value[3][154] = {
 	{
-		{153}, {200}, {139, 141, 157}, {154}, {0, 0, 0}, {0},
-		{184, 0, 0, 0}, {184}, {63}, {0},
-		{0}, {0}, {0, 0, 0, 0, 0}, {0, 0}, {0},
-		{153, 138, 138}, {111, 141}, {94, 138, 182, 154},
-		{0, 0}, {154, 154},
-		{139, 139},
-		{110, 110, 124, 125, 140, 153, 125, 127, 140, 109, 111, 143, 127, 111, 79, 108, 123, 63},
-		{110, 110, 124, 125, 140, 153, 125, 127, 140, 109, 111, 143, 127, 111, 79, 108, 123, 63},
-		{91, 171, 134, 141},
-		{111, 111, 125, 110, 110, 94, 124, 108, 124, 107, 125, 141, 179, 153, 125, 107,
-		125, 141, 179, 153, 125, 107, 125, 141, 179, 153, 125, 140, 139, 182, 182, 152,
-		136, 152, 136, 153, 136, 139, 111, 136, 139, 111},
-		{140, 92, 137, 138, 140, 152, 138, 139, 153, 74, 149, 92, 139, 107, 122, 152,
-		140, 179, 166, 182, 140, 227, 122, 197},
-		{138, 153, 136, 167, 152, 152}
+		{0, 56}, {15, 48}, {-5, 72}, {-5, 88}, {0, 88}, {0, 64}, {0, 0}, {0, 0},
+		{0, 0}, {0, 0}, {10, 48}, {0, 0}, {0, 0}, {0, 0}, {10, 48}, {-30, 104},
+		{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
+		{0, 0}, {0, 0}, {0, 0}, {0, 56}, {-5, 64}, {-5, 64}, {-15, 104}, {-5, 88},
+		{-20, 96}, {-5, 64}, {10, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88}, {-5, 80}, {0, 56},
+		{-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104}, {-10, 104}, {-15, 104},
+		{-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88},
+		{-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104},
+		{-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-20, 72}, {5, 72},
+		{-5, 32}, {-5, 88}, {-15, 104}, {-15, 104}, {-10, 88}, {-15, 96}, {-15, 96}, {-20, 96},
+		{-10, 80}, {-15, 80}, {-10, 80}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56},
+		{-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-15, 72},
+		{-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-5, 80}, {-5, 72}, {10, 32},
+		{10, 32}, {0, 48}, {-5, 48}, {0, 48}, {-5, 48}, {0, 56}, {-5, 48}, {-5, 72},
+		{-15, 104}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 80}, {-20, 80}, {-5, 56}, {-5, 64},
+		{-5, 80}, {0, 48}, {-5, 64}, {-5, 72}, {0, 56}, {-25, 64}, {0, 24}, {-20, 80},
+		{-5, 72}, {-15, 72}, {-10, 64}, {0, 48}, {-5, 80}, {10, 8}, {5, 32}, {10, 32},
+		{-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64}, {0, 56}, {-5, 48}, {5, 40},
+		{0, 48}, {0, 48},
 	},
 };
 
+#if 0
 static void cabac_init_context(h265d_cabac_context_t& context, int slice_qp, int idc) {
 	const uint8_t* base = reinterpret_cast<const uint8_t*>(&cabac_initial_value[idc]);
 	uint8_t* ctx = reinterpret_cast<uint8_t*>(&context);
@@ -585,6 +596,53 @@ static void cabac_init_engine(h265d_cabac_t& cb, dec_bits& st) {
 	cb.offset = get_bits(&st, 9);
 }
 
+static uint32_t cabac_decode_tr(h265d_cabac_t& cb, dec_bits& st, const uint8_t* ctx) {
+	int state = *reinterpret_cast<const int8_t*>(ctx);
+	uint32_t valMPS = state & 1;
+	state >>= 1;
+	uint32_t range = cb->range;
+	uint32_t offset = cb->offset;
+	uint32_t lps = rangeTabLPS[pStateIdx][(range >> 6) & 3];
+	if (cb.offset == 0) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+#endif
+
+static uint32_t sao_type_idx(m2d_cabac_t& cabac, dec_bits& st) {
+	if (!cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(&cabac.context)->sao_type_idx)) {
+		return 0;
+	} else {
+		return 1 + cabac_decode_bypass(&cabac, &st);
+	}
+}
+
+static uint32_t sao_offset_abs(m2d_cabac_t& cabac, dec_bits& st) {
+	assert(0);
+	return 0;
+}
+
+static uint32_t sao_offset_sign(m2d_cabac_t& cabac, dec_bits& st) {
+	assert(0);
+	return 0;
+}
+
+#define NEGATE(val, sign) (((val) ^ (unsigned)-(signed)(sign)) + (sign))
+
+static void sao_read_elem(h265d_sao_map_elem_t& dst, uint32_t idx, m2d_cabac_t& cabac, dec_bits& st) {
+	for (int j = 0; j < 4; ++j) {
+		dst.offset[j] = sao_offset_abs(cabac, st);
+	}
+	if (idx == 1) {
+		for (int j = 0; j < 4; ++j) {
+			uint32_t sign = sao_offset_sign(cabac, st);
+			dst.offset[j] = NEGATE(dst.offset[j], sign);
+		}
+	}
+}
+
 static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
 	uint32_t merge_flag = 0;
 	if (dst.pos_x != 0) {
@@ -593,11 +651,24 @@ static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits
 	if (dst.pos_y != 0) {
 		merge_flag |= DIR_TOP;
 	}
+	h265d_sao_map_t& sao_map = dst.sao_map[0];
 	if (!merge_flag) {
+		sao_map.idx = 0;
 		if (hdr.body.slice_sao_luma_flag) {
-			//sao_type_idx_luma
-			//sao_offset_abs[4]
-			//dst.sao_map[0];
+			uint32_t idx = sao_type_idx(dst.cabac, st);
+			if (idx != 0) {
+				sao_map.idx = idx;
+				sao_read_elem(sao_map.elem[0], idx, dst.cabac, st);
+			}
+		}
+		if (hdr.body.slice_sao_chroma_flag) {
+			uint32_t idx = sao_type_idx(dst.cabac, st);
+			if (idx != 0) {
+				sao_map.idx |= idx << 4;
+				for (int i = 1; i < 3; ++i) {
+					sao_read_elem(sao_map.elem[i], idx, dst.cabac, st);
+				}
+			}
 		}
 	}
 }
@@ -612,8 +683,8 @@ static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const 
 	const h265d_slice_header_body_t& header = hdr.body;
 	int slice_type = header.slice_type;
 	int idc = (slice_type < 2) ? ((slice_type ^ header.cabac_init_flag) + 1) : 0;
-	cabac_init_context(dst.cabac.context, header.slice_qpy, idc);
-	cabac_init_engine(dst.cabac, st);
+	init_cabac_context(&dst.cabac, header.slice_qpy, cabac_initial_value[idc], NUM_ELEM(cabac_initial_value[idc]));
+	init_cabac_engine(&dst.cabac, &st);
 	dst.sao_read = (hdr.body.slice_sao_luma_flag || hdr.body.slice_sao_chroma_flag) ? sao_read : sao_ignore;
 	int ctu_address = hdr.slice_segment_address;
 	dst.pos_y = ctu_address / sps.ctb_info.columns;
@@ -651,6 +722,7 @@ static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {
 		break;
 	case SPS_NAL:
 		seq_parameter_set(h2d, st);
+		h2d.header_callback(h2d.header_callback_arg, st.id);
 		break;
 	case PPS_NAL:
 		pic_parameter_set(h2d, st);
