@@ -209,46 +209,43 @@ typedef enum {
 } h265d_nal_t;
 
 typedef struct {
-	uint8_t sao_merge_flag[1];
-	uint8_t sao_type_idx[1];
-	uint8_t split_cu_flag[3];
-	uint8_t cu_transquant_bypass_flag[1];
-	uint8_t cu_skip_flag[3];
-	uint8_t pred_mode_flag[1];
-	uint8_t part_mode[4];
-	uint8_t prev_intra_luma_pred_flag[1];
-	uint8_t intra_chroma_pred_mode[1];
-	uint8_t rqt_root_cbf[1];
-	uint8_t merge_flag[1];
-	uint8_t merge_idx[1];
-	uint8_t inter_pred_idc[5];
-	uint8_t ref_idx[2];
-	uint8_t mvp_flag[1];
-	uint8_t split_transform_flag[3];
-	uint8_t cbf_luma[2];
-	uint8_t cbf_chroma[4];
-	uint8_t abs_mvd_greater_flag[2];
-	uint8_t cu_qp_delta_abs[2];
-	uint8_t transform_skip_flag[2];
-	uint8_t last_sig_coeff_x_prefix[18];
-	uint8_t last_sig_coeff_y_prefix[18];
-	uint8_t coded_sub_block_flag[4];
-	uint8_t sig_coeff_flag[42];
-	uint8_t coeff_abs_level_greater1_flag[24];
-	uint8_t coeff_abs_level_greater2_flag[6];
+	int8_t sao_merge_flag[1];
+	int8_t sao_type_idx[1];
+	int8_t split_cu_flag[3];
+	int8_t cu_transquant_bypass_flag[1];
+	int8_t cu_skip_flag[3];
+	int8_t pred_mode_flag[1];
+	int8_t part_mode[4];
+	int8_t prev_intra_luma_pred_flag[1];
+	int8_t intra_chroma_pred_mode[1];
+	int8_t rqt_root_cbf[1];
+	int8_t merge_flag[1];
+	int8_t merge_idx[1];
+	int8_t inter_pred_idc[5];
+	int8_t ref_idx[2];
+	int8_t mvp_flag[1];
+	int8_t split_transform_flag[3];
+	int8_t cbf_luma[2];
+	int8_t cbf_chroma[4];
+	int8_t abs_mvd_greater_flag[2];
+	int8_t cu_qp_delta_abs[2];
+	int8_t transform_skip_flag[2];
+	int8_t last_sig_coeff_x_prefix[18];
+	int8_t last_sig_coeff_y_prefix[18];
+	int8_t coded_sub_block_flag[4];
+	int8_t sig_coeff_flag[42];
+	int8_t coeff_abs_level_greater1_flag[24];
+	int8_t coeff_abs_level_greater2_flag[6];
 } h265d_cabac_context_t;
 
 typedef struct {
-	uint32_t range;
-	uint32_t offset;
-	h265d_cabac_context_t context;
-} h265d_cabac_t;
+	int8_t offset[4];
+	uint8_t band_pos[4];
+} h265d_sao_map_elem_t;
 
 typedef struct h265d_sao_map_t {
-	struct {
-		int8_t offset[4];
-		uint8_t band_pos[4];
-	} elem[3];
+	uint8_t idx;
+	h265d_sao_map_elem_t elem[3];
 } h265d_sao_map_t;
 
 typedef struct {
@@ -287,13 +284,14 @@ typedef struct {
 } h265d_slice_header_t;
 
 typedef struct h265d_ctu_t {
-	h265d_cabac_t cabac;
+	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	int8_t num_frames;
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
+	h265d_cabac_context_t context;
 } h265d_ctu_t;
 
 typedef struct {
