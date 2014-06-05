@@ -676,7 +676,7 @@ static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits
 static void sao_ignore(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {}
 
 static uint32_t split_cu_flag(m2d_cabac_t& cabac, dec_bits& st) {
-	return 1;
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->split_cu_flag);
 }
 
 static void quad_tree_normal(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st, int size_log2) {
