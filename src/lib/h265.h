@@ -94,6 +94,7 @@ typedef struct {
 
 typedef struct {
 	uint8_t size_log2;
+	uint8_t size_log2_min;
 	uint8_t num_ctb_log2;
 	uint16_t columns;
 	uint16_t rows;
@@ -286,7 +287,12 @@ typedef struct {
 typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
+	uint32_t idx_in_slice;
 	const h265d_sps_ctb_info_t* ctb_info;
+	const h265d_slice_header_t* slice_header;
+	const h265d_pps_t* pps;
+	uint32_t neighbour_flags_left;
+	uint8_t* neighbour_flags_top;
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	int8_t num_frames;
