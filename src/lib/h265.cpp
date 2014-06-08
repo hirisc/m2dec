@@ -81,7 +81,8 @@ int h265d_get_info(h265d_context *h2, m2d_info_t *info) {
 	info->crop[1] = width - sps.pic_width_in_luma_samples + sps.cropping[1];
 	info->crop[2] = sps.cropping[2];
 	info->crop[3] = height - sps.pic_height_in_luma_samples + sps.cropping[3];
-	info->additional_size = (sizeof(h2d.coding_tree_unit.sao_map[0]) * sps.ctb_info.rows + (3 * 64 / 8) / 8) * sps.ctb_info.columns;
+	info->additional_size = (sizeof(h2d.coding_tree_unit.sao_map[0]) * sps.ctb_info.rows) * sps.ctb_info.columns
+		+ sizeof(h2d.coding_tree_unit.neighbour_flags_top[0]) * ((sps.ctb_info.columns + 1) / 2);
 	return 0;
 }
 
@@ -94,7 +95,7 @@ int h265d_set_frames(h265d_context *h2, int num_frame, m2d_frame_t *frame, uint8
 	ctu.num_frames = num_frame;
 	std::copy(frame, frame + num_frame, ctu.frames);
 	memset(ctu.lru, 0, sizeof(ctu.lru));
-	ctu.neighbour_flags_top = second_frame;
+	ctu.neighbour_flags_top = reinterpret_cast<uint8_t*>(second_frame);
 /*
 	h2d->slice_header->reorder[0].ref_frames = mb->frame->refs[0];
 	h2d->slice_header->reorder[1].ref_frames = mb->frame->refs[1];
@@ -716,12 +717,16 @@ static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	if ((dst.ctb_info->columns - dst.pos_x < 2) || (dst.ctb_info->rows - dst.pos_y < 2)) {
 		assert(0);
 	} else {
-		uint8_t* top = dst.neighbour_flags_top + dst.pos_x * 3;
-		uint32_t neighbour = dst.neighbour_flags_left | (top[0] << 24) | (top[1] << 16);
-		uint32_t devided = quad_tree_normal(dst, st, dst.ctb_info->size_log2, 0, 0, neighbour);
-		dst.neighbour_flags_left = devided;
-		top[0] = devided >> 24;
-		top[1] = devided >> 16;
+		uint8_t* top_info = &dst.neighbour_flags_top[dst.pos_x >> 1];
+		uint32_t top = *top_info;
+		top = ((dst.pos_x & 1) ? top : (top << 4)) & 0xf0;
+		uint32_t devided = quad_tree_normal(dst, st, dst.ctb_info->size_log2, 0, 0, top | dst.neighbour_flags_left);
+		dst.neighbour_flags_left = devided & 15;
+		if (dst.pos_x & 1) {
+			*top_info |= devided & 0xf0;
+		} else {
+			*top_info = devided >> 4;
+		}
 	}
 }
 
@@ -739,7 +744,7 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
 	dst.neighbour_flags_left = 0;
-	uint32_t neighbour_flags_top_len = ((3 * 64 / 8) / 8) * sps.ctb_info.columns;
+	uint32_t neighbour_flags_top_len = (sps.ctb_info.columns * sizeof(dst.neighbour_flags_top[0]) + 1) >> 1;
 	memset(dst.neighbour_flags_top, 0, neighbour_flags_top_len);
 	dst.sao_map = reinterpret_cast<h265d_sao_map_t*>(dst.neighbour_flags_top + neighbour_flags_top_len);
 }
