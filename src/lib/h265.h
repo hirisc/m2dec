@@ -95,6 +95,8 @@ typedef struct {
 typedef struct {
 	uint8_t size_log2;
 	uint8_t size_log2_min;
+	uint8_t pcm_log2;
+	uint8_t pcm_log2_min;
 	uint8_t num_ctb_log2;
 	uint16_t columns;
 	uint16_t rows;
@@ -209,6 +211,44 @@ typedef enum {
 	SUFFIX_SEI = 40
 } h265d_nal_t;
 
+typedef enum {
+	INTRA_PLANAR = 0,
+	INTRA_DC = 1,
+	INTRA_ANGULAR2 = 2,
+	INTRA_ANGULAR3,
+	INTRA_ANGULAR4,
+	INTRA_ANGULAR5,
+	INTRA_ANGULAR6,
+	INTRA_ANGULAR7,
+	INTRA_ANGULAR8,
+	INTRA_ANGULAR9,
+	INTRA_ANGULAR10,
+	INTRA_ANGULAR11,
+	INTRA_ANGULAR12,
+	INTRA_ANGULAR13,
+	INTRA_ANGULAR14,
+	INTRA_ANGULAR15,
+	INTRA_ANGULAR16,
+	INTRA_ANGULAR17,
+	INTRA_ANGULAR18,
+	INTRA_ANGULAR19,
+	INTRA_ANGULAR20,
+	INTRA_ANGULAR21,
+	INTRA_ANGULAR22,
+	INTRA_ANGULAR23,
+	INTRA_ANGULAR24,
+	INTRA_ANGULAR25,
+	INTRA_ANGULAR26,
+	INTRA_ANGULAR27,
+	INTRA_ANGULAR28,
+	INTRA_ANGULAR29,
+	INTRA_ANGULAR30,
+	INTRA_ANGULAR31,
+	INTRA_ANGULAR32,
+	INTRA_ANGULAR33,
+	INTRA_ANGULAR34
+} h265d_intra_pred_mode_t;
+
 typedef struct {
 	int8_t sao_merge_flag[1];
 	int8_t sao_type_idx[1];
@@ -288,13 +328,14 @@ typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint32_t idx_in_slice;
-	const h265d_sps_ctb_info_t* ctb_info;
+	const h265d_sps_t* sps;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
 	uint8_t neighbour_flags_left;
 	uint8_t* neighbour_flags_top; // use 4bits for each CTU
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
+	uint8_t intra_pred_record[8 * 9];
 	int8_t num_frames;
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
