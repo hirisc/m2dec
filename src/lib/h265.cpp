@@ -662,8 +662,12 @@ static inline uint32_t intra_chroma_pred_mode(m2d_cabac_t& cabac, dec_bits& st) 
 	}
 }
 
-static inline uint32_t cbf_cbcr_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t depth) {
+static inline uint32_t cbf_chroma(m2d_cabac_t& cabac, dec_bits& st, uint32_t depth) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cbf_chroma + depth);
+}
+
+static inline uint32_t cbf_luma(m2d_cabac_t& cabac, dec_bits& st, uint32_t depth) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cbf_luma + (depth == 0));
 }
 
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
@@ -721,26 +725,29 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 	} else {
 		split = true;
 	}
-	uint8_t cbf_cbcr;
+	uint8_t cbf = 0;
 	if (2 < size_log2) {
-		cbf_cbcr = 0;
 		for (int i = 0; i < 2; ++i) {
 			if (upper_cbf_cbcr & 1) {
-				cbf_cbcr = (cbf_cbcr << 1) | cbf_cbcr_flag(dst.cabac, st, depth);
+				cbf = (cbf << 1) | cbf_chroma(dst.cabac, st, depth);
 			}
 			upper_cbf_cbcr >>= 1;
 		}
-	} else {
-		cbf_cbcr = 0;
 	}
 	if (split) {
 		size_log2 -= 1;
 		depth += 1;
-		transform_tree(dst, st, size_log2, depth, cbf_cbcr);
-		transform_tree(dst, st, size_log2, depth, cbf_cbcr);
-		transform_tree(dst, st, size_log2, depth, cbf_cbcr);
-		transform_tree(dst, st, size_log2, depth, cbf_cbcr);
+		transform_tree(dst, st, size_log2, depth, cbf);
+		transform_tree(dst, st, size_log2, depth, cbf);
+		transform_tree(dst, st, size_log2, depth, cbf);
+		transform_tree(dst, st, size_log2, depth, cbf);
 	} else {
+		uint8_t cbf_y = 0;
+		if (depth || cbf) {
+			cbf = (cbf << 1) | cbf_luma(dst.cabac, st, depth);
+		}
+		if (cbf) {
+		}
 	}
 }
 
