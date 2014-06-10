@@ -652,6 +652,32 @@ static inline uint32_t mpm_idx(m2d_cabac_t& cabac, dec_bits& st) {
 	return cabac_decode_bypass(&cabac, &st) ? 1 + cabac_decode_bypass(&cabac, &st) : 0;
 }
 
+static inline uint32_t intra_chroma_pred_mode(m2d_cabac_t& cabac, dec_bits& st) {
+	if (cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->intra_chroma_pred_mode)) {
+		return (cabac_decode_bypass(&cabac, &st) << 1) + cabac_decode_bypass(&cabac, &st);
+	} else {
+		return 4;
+	}
+}
+
+static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
+	switch (chroma_pred_mode) {
+	case 0:
+		mode = (mode == 0) ? 34 : 0;
+		break;
+	case 1:
+		mode = (mode == 26) ? 34 : 26;
+		break;
+	case 2:
+		mode = (mode == 10) ? 34 : 10;
+		break;
+	case 3:
+		mode = (mode == 1) ? 34 : 1;
+		break;
+	}
+	return mode;
+}
+
 typedef union {
 	struct {
 		uint8_t right, bottom;
@@ -696,6 +722,14 @@ static void intra_pred_candidate(h265d_ctu_t& dst, uint8_t cand[], h265d_qtree_i
 	}
 }
 
+static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_qtree_info_t info) {
+}
+
+static void intra_pred_mode_fill(uint8_t dst[], uint32_t mode, uint32_t size_log2) {
+	uint32_t store_offset = 1 << size_log2;
+	memset(dst + store_offset, mode, 1 << (size_log2 - 3));
+}
+
 static void coding_unit_ipic(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_qtree_info_t info) {
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
@@ -707,18 +741,23 @@ static void coding_unit_ipic(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2,
 	for (int i = 0; i < 1; ++i) {
 		pred_flag |= prev_intra_luma_pred_flag(dst.cabac, st) << i;
 	}
+	uint8_t luma_mode[1];
 	for (int i = 0; i < 1; ++i) {
 		uint8_t candidate[3];
 		intra_pred_candidate(dst, candidate, info);
-		uint32_t mode;
 		if (pred_flag & 1) {
-			mode = candidate[mpm_idx(dst.cabac, st)];
+			luma_mode[i] = candidate[mpm_idx(dst.cabac, st)];
 		} else {
 			assert(0);
 		}
-		uint8_t* right_edge = &dst.intra_pred_record[(info.elem.offset_x + (1 << size_log2)) & ~7];
 		pred_flag >>= 1;
+		intra_pred_mode_fill(dst.intra_pred_record, luma_mode[i], size_log2);
 	}
+	uint32_t chroma_mode = intra_chroma_pred_mode(dst.cabac, st);
+	for (int i = 0; i < 1; ++i) {
+		intra_chroma_pred_dir(chroma_mode, luma_mode[i]);
+	}
+	transform_tree(dst, st, size_log2, info);
 }
 
 static uint16_t quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_qtree_info_t info) {
@@ -784,7 +823,7 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
 	dst.neighbour_flags_left = 0;
-	memset(dst.intra_pred_record, 0, 8);
+	memset(dst.intra_pred_record, 1, 8);
 	uint32_t neighbour_flags_top_len = (sps.ctb_info.columns * sizeof(dst.neighbour_flags_top[0]) + 1) >> 1;
 	memset(dst.neighbour_flags_top, 0, neighbour_flags_top_len);
 	dst.sao_map = reinterpret_cast<h265d_sao_map_t*>(dst.neighbour_flags_top + neighbour_flags_top_len);
@@ -795,7 +834,7 @@ static void ctu_pos_increment(h265d_ctu_t& dst) {
 	if (dst.sps->ctb_info.columns <= pos_x) {
 		dst.pos_y++;
 		dst.neighbour_flags_left = 0;
-		memset(dst.intra_pred_record, 0, 8);
+		memset(dst.intra_pred_record, 1, 8);
 		pos_x = 0;
 	}
 	dst.pos_x = pos_x;
