@@ -155,12 +155,27 @@ static inline void init_cabac_context(m2d_cabac_t *cabac, int slice_qp, const m2
 
 static inline void cabac_renorm(m2d_cabac_t *cb, dec_bits *st, int range, int offset)
 {
-	do {
-		range = (uint16_t)(range * 2);
-		offset = (uint16_t)(offset * 2 + get_onebit_inline(st));
-	} while (range < 256);
-	cb->range = range;
-	cb->offset = offset;
+	static const uint8_t num_leading_zeros_plus1[256] = {
+		9, 8, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5,
+		4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+		3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+		3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	};
+	uint32_t bits = num_leading_zeros_plus1[range];
+	cb->range = range << bits;
+	cb->offset = (offset << bits) | get_bits(st, bits);
 }
 
 static inline int cabac_decode_decision_raw(m2d_cabac_t *cb, dec_bits *st, int8_t *ctx)
@@ -231,6 +246,22 @@ static inline int cabac_decode_decision_raw(m2d_cabac_t *cb, dec_bits *st, int8_
 	}
 	cabac_renorm(cb, st, range, offset);
 	return valMPS;
+}
+
+static inline int cabac_decode_multibypass(m2d_cabac_t *cb, dec_bits *st, uint32_t num)
+{
+	int range = cb->range;
+	int offset = cb->offset;
+	uint32_t bin = 0;
+	do {
+		offset = (offset << 1) | get_onebit_inline(st);
+		bin = bin * 2;
+		if (range <= offset) {
+			offset -= range;
+		}
+	} while (--num);
+	cb->offset = offset;
+	return bin;
 }
 
 static inline int cabac_decode_bypass(m2d_cabac_t *cb, dec_bits *st)
