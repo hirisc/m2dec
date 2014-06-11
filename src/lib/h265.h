@@ -335,6 +335,8 @@ typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint32_t idx_in_slice;
+	int8_t qp, qp_delta_req;
+	uint8_t is_intra;
 	const h265d_sps_t* sps;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
