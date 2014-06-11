@@ -839,6 +839,14 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 
 template <typename F>
 static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+	static const uint8_t scan_order[35] = {
+		0, 0, 0, 0, 0, 0,
+		2, 2, 2, 2, 2, 2,
+		2, 2, 2, 0, 0, 0,
+		0, 0, 0, 0, 1, 1,
+		1, 1, 1, 1, 1, 1,
+		1, 0, 0, 0, 0
+	};
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
 	}
@@ -860,11 +868,13 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 	} else {
 		assert(0);
 	}
+	dst.order_luma = scan_order[luma_mode];
 	pred_flag >>= 1;
 	intra_pred_mode_fill(left, top, luma_mode, size_log2);
-	uint32_t chroma_mode = intra_chroma_pred_mode(dst.cabac, st);
+	uint32_t chroma_mode_idx = intra_chroma_pred_mode(dst.cabac, st);
 	for (int i = 0; i < 1; ++i) {
-		intra_chroma_pred_dir(chroma_mode, luma_mode);
+		uint8_t chroma_mode = intra_chroma_pred_dir(chroma_mode_idx, luma_mode);
+		dst.order_chroma = scan_order[chroma_mode];
 	}
 	transform_tree(dst, st, size_log2, 0, 3, 0);
 }
