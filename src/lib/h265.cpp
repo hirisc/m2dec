@@ -712,6 +712,14 @@ static inline int32_t sig_coeff_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t i
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->sig_coeff_flag + inc);
 }
 
+static inline int32_t coeff_abs_level_greater1_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coeff_abs_level_greater1_flag + inc);
+}
+
+static inline int32_t coeff_abs_level_greater2_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coeff_abs_level_greater2_flag + inc);
+}
+
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
 	switch (chroma_pred_mode) {
 	case 0:
@@ -932,9 +940,8 @@ static inline uint32_t scan_order_index(uint32_t x, uint32_t y, uint32_t size_lo
 	return (y << size_log2) + x;
 }
 
-static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2) {
+static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour) {
 	uint8_t sub_block_flags[8];
-	uint16_t sig_coeff_flags;
 	uint32_t max = size_log2 * 2;
 	uint32_t offset = (size_log2 - 2) * 3 + ((size_log2 - 1) >> 2);
 	uint32_t shift = (size_log2 + 1) >> 2;
@@ -943,12 +950,12 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2) 
 	uint32_t last_sig_coeff_x = last_sig_coeff_suffix_add(dst.cabac, st, x);
 	uint32_t last_sig_coeff_y = last_sig_coeff_suffix_add(dst.cabac, st, y);
 	memset(sub_block_flags, 0, sizeof(sub_block_flags));
-	sig_coeff_flags = 0;
 	const residual_scan_order_t& suborder = residual_scan_order[dst.order_luma][0];
 	const residual_scan_order_t& order = residual_scan_order[dst.order_luma][size_log2 - 4];
 	uint32_t last_subblock_pos = order.sub_block_num[scan_order_index(last_sig_coeff_x >> 2, last_sig_coeff_y >> 2, size_log2 - 2)];
 	uint8_t sub_pos_max = (1 << (size_log2 - 2)) - 1;
 	int i = last_subblock_pos;
+	uint8_t prev_greater1 = 0;
 	uint32_t num = scan_order_index(last_sig_coeff_x & 3, last_sig_coeff_y & 3, 2);
 	do {
 		uint8_t sx = order.xy_pos[i] & 7;
@@ -959,15 +966,47 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2) 
 		if ((unsigned)(i - 1) < last_subblock_pos - 1) {
 			coded = coded_sub_block_flag(dst.cabac, st, prev_sbf);
 		} else {
-			coded = 1;
+			coded = 2;
 		}
 		if (coded) {
 			sub_block_flags[sy] |= (coded << sx);
+			uint16_t sig_coeff_flags = 0;
+			uint32_t last_pos = 0;
+			uint32_t first_pos;
 			while (0 < num) {
 				uint8_t px = suborder.xy_pos[i] & 7;
 				uint8_t py = suborder.xy_pos[i] >> 4;
-				sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, px, py, prev_sbf));
+				if (sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, px, py, prev_sbf))) {
+					sig_coeff_flags |= 1 << num;
+					last_pos = (last_pos == 0) ? num : last_pos;
+					first_pos = num;
+				}
 				num--;
+			}
+			if (coded & 2) {
+				sig_coeff_flags |= sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, 0, 0, prev_sbf));
+			} else {
+				sig_coeff_flags |= 1;
+			}
+			uint32_t num_greater1 = 0;
+			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (prev_greater1 ^ 1);
+			uint32_t greater1ctx = 1;
+			uint16_t greater1_flags = 0;
+			for (int pos = last_pos; 0 <= pos; --pos) {
+				if (sig_coeff_flags & (1 << pos)) {
+					prev_greater1 = coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
+					if (prev_greater1) {
+						greater1ctx = 0;
+					} else if ((uint32_t)(greater1ctx - 1) < 2) {
+						greater1ctx++;
+					}
+					if (8 <= ++num_greater1) {
+						break;
+					}
+				}
+			}
+			uint32_t greater2_flag = (num_greater1 != 0) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
+			if (!dst.pps->sign_data_hiding_enabled_flag || (last_pos - first_pos <= 3)) {
 			}
 		}
 		num = 16;
@@ -980,7 +1019,7 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		dst.qp += cu_qp_delta(dst.cabac, st);
 	}
 	if (cbf & 4) {
-		residual_coding(dst, st, size_log2);
+		residual_coding(dst, st, size_log2, 0);
 	}
 	if (cbf & 3) {
 		if (2 < size_log2) {
@@ -989,10 +1028,10 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 			return;
 		}
 		if (cbf & 2) {
-			residual_coding(dst, st, size_log2);
+			residual_coding(dst, st, size_log2, 1);
 		}
 		if (cbf & 1) {
-			residual_coding(dst, st, size_log2);
+			residual_coding(dst, st, size_log2, 2);
 		}
 	}
 }
