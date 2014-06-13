@@ -940,6 +940,23 @@ static inline uint32_t scan_order_index(uint32_t x, uint32_t y, uint32_t size_lo
 	return (y << size_log2) + x;
 }
 
+static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, uint8_t (*sig_coeff_flag_inc)(uint8_t, uint8_t, uint8_t, uint8_t, uint8_t), uint8_t subblock_pos, uint32_t num, int8_t flags[], uint8_t sx, uint8_t sy, uint8_t prev_sbf) {
+	uint32_t first_pos;
+	uint32_t idx = 0;
+	uint8_t px = subblock_pos & 7;
+	uint8_t py = subblock_pos >> 4;
+	while (0 < num) {
+		if (sig_coeff_flag(cabac, st, sig_coeff_flag_inc(sx, sy, px, py, prev_sbf))) {
+			flags[idx] = num;
+			first_pos = num;
+			idx++;
+		}
+		num--;
+	}
+	flags[idx] = -1;
+	return first_pos;
+}
+
 static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour) {
 	uint8_t sub_block_flags[8];
 	uint32_t max = size_log2 * 2;
@@ -970,23 +987,11 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 		}
 		if (coded) {
 			sub_block_flags[sy] |= (coded << sx);
-			uint16_t sig_coeff_flags = 0;
-			uint32_t last_pos = 0;
-			uint32_t first_pos;
-			while (0 < num) {
-				uint8_t px = suborder.xy_pos[i] & 7;
-				uint8_t py = suborder.xy_pos[i] >> 4;
-				if (sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, px, py, prev_sbf))) {
-					sig_coeff_flags |= 1 << num;
-					last_pos = (last_pos == 0) ? num : last_pos;
-					first_pos = num;
-				}
-				num--;
-			}
-			if (coded & 2) {
-				sig_coeff_flags |= sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, 0, 0, prev_sbf));
-			} else {
-				sig_coeff_flags |= 1;
+			int8_t sig_coeff_flags[4 * 4 + 1];
+			uint32_t first_pos = sig_coeff_flags_read(dst.cabac, st, order.sig_coeff_flag_inc, suborder.xy_pos[i], num, sig_coeff_flags, sx, sy, prev_sbf);
+			if (!(coded & 2) || sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, 0, 0, prev_sbf))) {
+				sig_coeff_flags[first_pos++] = 0;
+				sig_coeff_flags[first_pos] = -1;
 			}
 			uint32_t num_greater1 = 0;
 			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (prev_greater1 ^ 1);
