@@ -997,21 +997,21 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (prev_greater1 ^ 1);
 			uint32_t greater1ctx = 1;
 			uint16_t greater1_flags = 0;
-			for (int pos = last_pos; 0 <= pos; --pos) {
-				if (sig_coeff_flags & (1 << pos)) {
-					prev_greater1 = coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
-					if (prev_greater1) {
-						greater1ctx = 0;
-					} else if ((uint32_t)(greater1ctx - 1) < 2) {
-						greater1ctx++;
-					}
-					if (8 <= ++num_greater1) {
-						break;
-					}
+			const int8_t* sig_coeff = sig_coeff_flags;
+			int8_t pos;
+			while (0 <= (pos = *sig_coeff++)) {
+				prev_greater1 = coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
+				if (prev_greater1) {
+					greater1ctx = 0;
+				} else if ((uint32_t)(greater1ctx - 1) < 2) {
+					greater1ctx++;
+				}
+				if (8 <= ++num_greater1) {
+					break;
 				}
 			}
 			uint32_t greater2_flag = (num_greater1 != 0) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
-			if (!dst.pps->sign_data_hiding_enabled_flag || (last_pos - first_pos <= 3)) {
+			if (!dst.pps->sign_data_hiding_enabled_flag || (sig_coeff_flags[0] - first_pos <= 3)) {
 			}
 		}
 		num = 16;
