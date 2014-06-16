@@ -704,20 +704,34 @@ static inline int32_t last_sig_coeff_suffix_add(m2d_cabac_t& cabac, dec_bits& st
 	}
 }
 
-static inline int32_t coded_sub_block_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t prev_sbf) {
+static inline uint32_t coded_sub_block_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t prev_sbf) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coded_sub_block_flag + ((prev_sbf & 1) | (prev_sbf >> 1)));
 }
 
-static inline int32_t sig_coeff_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
+static inline uint32_t sig_coeff_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->sig_coeff_flag + inc);
 }
 
-static inline int32_t coeff_abs_level_greater1_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
+static inline uint32_t coeff_abs_level_greater1_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coeff_abs_level_greater1_flag + inc);
 }
 
-static inline int32_t coeff_abs_level_greater2_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
+static inline uint32_t coeff_abs_level_greater2_flag(m2d_cabac_t& cabac, dec_bits& st, uint8_t inc) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coeff_abs_level_greater2_flag + inc);
+}
+
+static inline uint32_t coeff_sign_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_bypass(&cabac, &st);
+}
+
+static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
+	uint32_t i;
+	for (i = 0; i < max; ++i) {
+		if (cabac_decode_bypass(&cabac, &st) == 0) {
+			break;
+		}
+	}
+	return i;
 }
 
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
@@ -977,6 +991,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	do {
 		uint8_t sx = order.xy_pos[i] & 7;
 		uint8_t sy = order.xy_pos[i] >> 4;
+		int8_t* coeff = dst.coeff + (sy * (1 << size_log2) + sx) * 4;
 		uint8_t prev_sbf = (sx < sub_pos_max) ? sub_block_flags[sy] & (1 << (sx + 1)) : 0;
 		prev_sbf |= (sy < sub_pos_max) ? (sub_block_flags[sy + 1] & (1 << sx)) << 1 : 0;
 		uint32_t coded;
@@ -996,13 +1011,17 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			uint32_t num_greater1 = 0;
 			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (prev_greater1 ^ 1);
 			uint32_t greater1ctx = 1;
-			uint16_t greater1_flags = 0;
+			uint8_t greater1_flags = 0;
+			int last_greater1_pos = -1;
 			const int8_t* sig_coeff = sig_coeff_flags;
 			int8_t pos;
 			while (0 <= (pos = *sig_coeff++)) {
-				prev_greater1 = coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
-				if (prev_greater1) {
+				greater1_flags = (greater1_flags << 1) + coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
+				if (greater1_flags & 1) {
 					greater1ctx = 0;
+					if (last_greater1_pos < 0) {
+						last_greater1_pos = pos;
+					}
 				} else if ((uint32_t)(greater1ctx - 1) < 2) {
 					greater1ctx++;
 				}
@@ -1011,7 +1030,21 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 				}
 			}
 			uint32_t greater2_flag = (num_greater1 != 0) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
+			uint16_t sign_flags = 0;
 			if (!dst.pps->sign_data_hiding_enabled_flag || (sig_coeff_flags[0] - first_pos <= 3)) {
+				for (uint32_t i = 0; i != first_pos; ++i) {
+					sign_flags = (sign_flags << 1) | coeff_sign_flag(dst.cabac, st);
+				}
+			}
+			uint32_t base_level = 1 + greater2_flag;
+			sig_coeff = sig_coeff_flags;
+			uint32_t last_abs_level = 0;
+			uint32_t last_rice_param = 0;
+			while (0 <= (pos = *sig_coeff++)) {
+				uint32_t remain_thr = (first_pos < 7) ? ((pos == last_greater1_pos) ? 3 : 2) : 1;
+				if (base_level == remain_thr) {
+					coeff_abs_level_remaining(dst.cabac, st);
+				}
 			}
 		}
 		num = 16;
@@ -1183,6 +1216,7 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 	memset(dst.neighbour_left, INTRA_DC, sizeof(dst.neighbour_left));
 	uint32_t neighbour_flags_top_len = sps.ctb_info.columns * sizeof(dst.neighbour_left);
 	memset(dst.neighbour_top, INTRA_DC, neighbour_flags_top_len);
+	dst.coeff = dst.coeff_buf;
 	dst.sao_map = reinterpret_cast<h265d_sao_map_t*>(dst.neighbour_top + neighbour_flags_top_len);
 }
 
