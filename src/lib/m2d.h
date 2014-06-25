@@ -253,11 +253,13 @@ static inline int cabac_decode_multibypass(m2d_cabac_t *cb, dec_bits *st, uint32
 	int range = cb->range;
 	int offset = cb->offset;
 	uint32_t bin = 0;
+	assert (num <= 16);
+	offset = (offset << num) | get_bits(st, num);
 	do {
-		offset = (offset << 1) | get_onebit_inline(st);
 		bin = bin * 2;
-		if (range <= offset) {
-			offset -= range;
+		if (range <= (offset >> (num - 1))) {
+			offset -= range << (num - 1);
+			bin |= 1;
 		}
 	} while (--num);
 	cb->offset = offset;
