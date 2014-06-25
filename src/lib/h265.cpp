@@ -720,11 +720,11 @@ static inline uint32_t coeff_abs_level_greater2_flag(m2d_cabac_t& cabac, dec_bit
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->coeff_abs_level_greater2_flag + inc);
 }
 
-static inline uint32_t coeff_sign_flag(m2d_cabac_t& cabac, dec_bits& st) {
-	return cabac_decode_bypass(&cabac, &st);
+static inline uint32_t coeff_sign_flags(m2d_cabac_t& cabac, dec_bits& st, uint32_t first_pos, uint32_t hidden_bit) {
+	return cabac_decode_multibypass(&cabac, &st, first_pos + (hidden_bit ^ 1)) << hidden_bit;
 }
 
-static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
+static inline uint32_t coeff_abs_level_remaining_prefix(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
 	uint32_t i;
 	for (i = 0; i < max; ++i) {
 		if (cabac_decode_bypass(&cabac, &st) == 0) {
@@ -732,6 +732,30 @@ static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& s
 		}
 	}
 	return i;
+}
+
+static inline uint32_t egk_binstring(m2d_cabac_t& cabac, dec_bits& st, uint32_t k) {
+	uint32_t step = 1 << k;
+	uint32_t sum = 0;
+	for (uint32_t i = 0; i < 16; ++i) {
+		if (cabac_decode_bypass(&cabac, &st) == 0) {
+			sum += cabac_decode_multibypass(&cabac, &st, k);
+			break;
+		} else {
+			sum += 1 << k;
+			k++;
+		}
+	}
+	return sum;
+}
+
+static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
+	uint32_t prefix = coeff_abs_level_remaining_prefix(cabac, st, max);
+	if (prefix == 4) {
+		return egk_binstring(cabac, st, max + 1) + (4 << max);
+	} else {
+		return prefix;
+	}
 }
 
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
@@ -954,18 +978,21 @@ static inline uint32_t scan_order_index(uint32_t x, uint32_t y, uint32_t size_lo
 	return (y << size_log2) + x;
 }
 
-static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, uint8_t (*sig_coeff_flag_inc)(uint8_t, uint8_t, uint8_t, uint8_t, uint8_t), uint8_t subblock_pos, uint32_t num, int8_t flags[], uint8_t sx, uint8_t sy, uint8_t prev_sbf) {
-	uint32_t first_pos;
+static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, uint8_t (*sig_coeff_flag_inc)(uint8_t, uint8_t, uint8_t, uint8_t, uint8_t), uint8_t subblock_pos, bool sig_coeff_zero_inferred, uint32_t num, int8_t flags[], uint8_t sx, uint8_t sy, uint8_t prev_sbf) {
+	uint32_t first_pos = 0;
 	uint32_t idx = 0;
 	uint8_t px = subblock_pos & 7;
 	uint8_t py = subblock_pos >> 4;
 	while (0 < num) {
 		if (sig_coeff_flag(cabac, st, sig_coeff_flag_inc(sx, sy, px, py, prev_sbf))) {
-			flags[idx] = num;
+			flags[idx++] = num;
 			first_pos = num;
-			idx++;
 		}
 		num--;
+	}
+	if (sig_coeff_zero_inferred || sig_coeff_flag(cabac, st, sig_coeff_flag_inc(sx, sy, 0, 0, prev_sbf))) {
+		flags[idx++] = 0;
+		first_pos = 0;
 	}
 	flags[idx] = -1;
 	return first_pos;
@@ -982,11 +1009,11 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	uint32_t last_sig_coeff_y = last_sig_coeff_suffix_add(dst.cabac, st, y);
 	memset(sub_block_flags, 0, sizeof(sub_block_flags));
 	const residual_scan_order_t& suborder = residual_scan_order[dst.order_luma][0];
-	const residual_scan_order_t& order = residual_scan_order[dst.order_luma][size_log2 - 4];
+	const residual_scan_order_t& order = residual_scan_order[dst.order_luma][size_log2 - 2];
 	uint32_t last_subblock_pos = order.sub_block_num[scan_order_index(last_sig_coeff_x >> 2, last_sig_coeff_y >> 2, size_log2 - 2)];
 	uint8_t sub_pos_max = (1 << (size_log2 - 2)) - 1;
 	int i = last_subblock_pos;
-	uint8_t prev_greater1 = 0;
+	uint8_t greater1ctx = 1;
 	uint32_t num = scan_order_index(last_sig_coeff_x & 3, last_sig_coeff_y & 3, 2);
 	do {
 		uint8_t sx = order.xy_pos[i] & 7;
@@ -994,23 +1021,14 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 		int8_t* coeff = dst.coeff + (sy * (1 << size_log2) + sx) * 4;
 		uint8_t prev_sbf = (sx < sub_pos_max) ? sub_block_flags[sy] & (1 << (sx + 1)) : 0;
 		prev_sbf |= (sy < sub_pos_max) ? (sub_block_flags[sy + 1] & (1 << sx)) << 1 : 0;
-		uint32_t coded;
-		if ((unsigned)(i - 1) < last_subblock_pos - 1) {
-			coded = coded_sub_block_flag(dst.cabac, st, prev_sbf);
-		} else {
-			coded = 2;
-		}
-		if (coded) {
-			sub_block_flags[sy] |= (coded << sx);
+		bool sig_coeff_zero_inferred = ((unsigned)(last_subblock_pos - 1) <= (unsigned)(i - 1));
+		if (sig_coeff_zero_inferred || coded_sub_block_flag(dst.cabac, st, prev_sbf)) {
+			sub_block_flags[sy] |= 1 << sx;
 			int8_t sig_coeff_flags[4 * 4 + 1];
-			uint32_t first_pos = sig_coeff_flags_read(dst.cabac, st, order.sig_coeff_flag_inc, suborder.xy_pos[i], num, sig_coeff_flags, sx, sy, prev_sbf);
-			if (!(coded & 2) || sig_coeff_flag(dst.cabac, st, order.sig_coeff_flag_inc(sx, sy, 0, 0, prev_sbf))) {
-				sig_coeff_flags[first_pos++] = 0;
-				sig_coeff_flags[first_pos] = -1;
-			}
+			uint32_t first_pos = sig_coeff_flags_read(dst.cabac, st, order.sig_coeff_flag_inc, suborder.xy_pos[i], sig_coeff_zero_inferred, num, sig_coeff_flags, sx, sy, prev_sbf);
 			uint32_t num_greater1 = 0;
-			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (prev_greater1 ^ 1);
-			uint32_t greater1ctx = 1;
+			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (greater1ctx == 0);
+			greater1ctx = 1;
 			uint8_t greater1_flags = 0;
 			int last_greater1_pos = -1;
 			const int8_t* sig_coeff = sig_coeff_flags;
@@ -1031,20 +1049,30 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			}
 			uint32_t greater2_flag = (num_greater1 != 0) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
 			uint16_t sign_flags = 0;
-			if (!dst.pps->sign_data_hiding_enabled_flag || (sig_coeff_flags[0] - first_pos <= 3)) {
-				for (uint32_t i = 0; i != first_pos; ++i) {
-					sign_flags = (sign_flags << 1) | coeff_sign_flag(dst.cabac, st);
-				}
+			uint8_t hidden_bit;
+			if (dst.pps->sign_data_hiding_enabled_flag && (3 < sig_coeff_flags[0] - sig_coeff_flags[first_pos])) {
+				hidden_bit = 1;
+			} else {
+				hidden_bit = 0;
 			}
+			sign_flags = coeff_sign_flags(dst.cabac, st, first_pos, hidden_bit);
 			uint32_t base_level = 1 + greater2_flag;
 			sig_coeff = sig_coeff_flags;
-			uint32_t last_abs_level = 0;
-			uint32_t last_rice_param = 0;
+			uint32_t abs_level = 0;
+			uint32_t rice_param = 0;
+			uint32_t shift = first_pos;
+			int8_t* write_pos = dst.coeff_buf + (sy * (1 << size_log2) + sx) * 4;
 			while (0 <= (pos = *sig_coeff++)) {
+				uint32_t level = base_level + ((greater1_flags >> shift) & 1);
 				uint32_t remain_thr = (first_pos < 7) ? ((pos == last_greater1_pos) ? 3 : 2) : 1;
-				if (base_level == remain_thr) {
-					coeff_abs_level_remaining(dst.cabac, st);
+				if (level == remain_thr) {
+					rice_param = std::min(rice_param + ((static_cast<uint32_t>(3) << rice_param) < abs_level), static_cast<uint32_t>(4));
+					abs_level = coeff_abs_level_remaining(dst.cabac, st, rice_param);
+					level += abs_level;
 				}
+				uint8_t cx = suborder.xy_pos[i] & 7;
+				uint8_t cy = suborder.xy_pos[i] >> 4;
+				write_pos[cy * (1 << size_log2) + cx] = ((sign_flags >> shift) & 1) ? -(int32_t)level : level;
 			}
 		}
 		num = 16;
