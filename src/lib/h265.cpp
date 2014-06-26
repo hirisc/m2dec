@@ -724,38 +724,37 @@ static inline uint32_t coeff_sign_flags(m2d_cabac_t& cabac, dec_bits& st, uint32
 	return cabac_decode_multibypass(&cabac, &st, first_pos + (hidden_bit ^ 1)) << hidden_bit;
 }
 
-static inline uint32_t coeff_abs_level_remaining_prefix(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
-	uint32_t i;
-	for (i = 0; i < max; ++i) {
+static inline uint32_t coeff_abs_level_remaining_prefix(m2d_cabac_t& cabac, dec_bits& st, uint8_t rice) {
+	uint32_t i = 0;
+	do {
 		if (cabac_decode_bypass(&cabac, &st) == 0) {
 			break;
 		}
+	} while (++i < 4);
+	if (rice != 0) {
+		i = (i << rice) + cabac_decode_multibypass(&cabac, &st, rice);
 	}
 	return i;
 }
 
 static inline uint32_t egk_binstring(m2d_cabac_t& cabac, dec_bits& st, uint32_t k) {
-	uint32_t step = 1 << k;
-	uint32_t sum = 0;
-	for (uint32_t i = 0; i < 16; ++i) {
+	uint32_t quot;
+	for (quot = 0; quot < 32; ++quot) {
 		if (cabac_decode_bypass(&cabac, &st) == 0) {
-			sum += cabac_decode_multibypass(&cabac, &st, k);
 			break;
-		} else {
-			sum += 1 << k;
-			k++;
 		}
 	}
-	return sum;
+	return (quot << k) + cabac_decode_multibypass(&cabac, &st, k);
 }
 
-static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t max) {
-	uint32_t prefix = coeff_abs_level_remaining_prefix(cabac, st, max);
-	if (prefix == 4) {
-		return egk_binstring(cabac, st, max + 1) + (4 << max);
-	} else {
-		return prefix;
-	}
+static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t rice) {
+	uint32_t i = 0;
+	do {
+		if (cabac_decode_bypass(&cabac, &st) == 0) {
+			return (rice) ? ((i << rice) + cabac_decode_multibypass(&cabac, &st, rice)) : i;
+		}
+	} while (++i < 4);
+	return (4 << rice) + egk_binstring(cabac, st, rice + 1);
 }
 
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
