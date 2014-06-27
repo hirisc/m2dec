@@ -744,17 +744,22 @@ static inline uint32_t egk_binstring(m2d_cabac_t& cabac, dec_bits& st, uint32_t 
 			break;
 		}
 	}
-	return (quot << k) + cabac_decode_multibypass(&cabac, &st, k);
+	return (1 << (quot + k)) - (1 << k) + cabac_decode_multibypass(&cabac, &st, quot + k);
 }
 
 static inline uint32_t coeff_abs_level_remaining(m2d_cabac_t& cabac, dec_bits& st, uint8_t rice) {
-	uint32_t i = 0;
-	do {
+	uint32_t i;
+	for (i = 0; i < 20; ++i) {
 		if (cabac_decode_bypass(&cabac, &st) == 0) {
-			return (rice) ? ((i << rice) + cabac_decode_multibypass(&cabac, &st, rice)) : i;
+			break;
 		}
-	} while (++i < 4);
-	return (4 << rice) + egk_binstring(cabac, st, rice + 1);
+	}
+	if (i < 4) {
+		return (rice) ? ((i << rice) + cabac_decode_multibypass(&cabac, &st, rice)) : i;
+	} else {
+		i -= 4;
+		return (1 << (i + rice + 1)) + (2 << rice) + cabac_decode_multibypass(&cabac, &st, i + rice + 1);
+	}
 }
 
 static inline uint32_t intra_chroma_pred_dir(uint32_t chroma_pred_mode, uint32_t mode) {
