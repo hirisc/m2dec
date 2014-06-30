@@ -46,6 +46,8 @@ typedef enum {
 #define READ_CHECK_RANGE2(val, dst, min, max, st) {int32_t t = (val); (dst) = t; if (t < (min) || (max) < t) error_report(st);}
 #define CHECK_RANGE(val, max, st) {if ((max) < (val)) error_report(st);}
 #define CHECK_RANGE2(val, min, max, st) {if (((val) < (min)) || ((max) < (val))) error_report(st);}
+#define NEGATE(val, sign) (((val) ^ (unsigned)-(signed)(sign)) + (sign))
+
 
 int h265d_init(h265d_context *h2, int dpb_max, int (*header_callback)(void *, void *), void *arg) {
 	if (!h2) {
@@ -596,8 +598,6 @@ static uint32_t sao_offset_sign(m2d_cabac_t& cabac, dec_bits& st) {
 	return 0;
 }
 
-#define NEGATE(val, sign) (((val) ^ (unsigned)-(signed)(sign)) + (sign))
-
 static void sao_read_elem(h265d_sao_map_elem_t& dst, uint32_t idx, m2d_cabac_t& cabac, dec_bits& st) {
 	for (int j = 0; j < 4; ++j) {
 		dst.offset[j] = sao_offset_abs(cabac, st);
@@ -935,47 +935,81 @@ struct residual_scan_order_t {
 	uint8_t (*sig_coeff_flag_inc)(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf);
 };
 
-static uint8_t sig_coeff_flag_inc4_luma(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf) {
+template <int OFFSET>
+static uint8_t sig_coeff_flag_inc4(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf) {
 	static const int8_t inc_map[] = {
 		0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8
 	};
-	return inc_map[py * 4 + px];
+	return inc_map[py * 4 + px] + OFFSET;
 }
 
-template <int MOD1, int MOD2>
-static uint8_t sig_coeff_flag_inc(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf) {
-	static const int8_t sig_coeff_inc_init[64] = {
-		2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 0, 2, 0, 2, 0, 2,
-		1, 1, 2, 2, 1, 1, 1, 2, 0, 1, 0, 2, 0, 1, 0, 2,
-		1, 0, 2, 2, 0, 0, 1, 2, 0, 0, 0, 2, 0, 0, 0, 2,
-		0, 0, 2, 2, 0, 0, 1, 2, 0, 0, 0, 2, 0, 0, 0, 2
-	};
-	uint8_t inc = MOD1;
+static const int8_t sig_coeff_inc_init[64] = {
+	2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 0, 2, 0, 2, 0, 2,
+	1, 1, 2, 2, 1, 1, 1, 2, 0, 1, 0, 2, 0, 1, 0, 2,
+	1, 0, 2, 2, 0, 0, 1, 2, 0, 0, 0, 2, 0, 0, 0, 2,
+	0, 0, 2, 2, 0, 0, 1, 2, 0, 0, 0, 2, 0, 0, 0, 2
+};
+
+template <int MOD>
+static uint8_t sig_coeff_flag_inc_luma(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf) {
+	uint8_t inc = 3;
 	if ((sx == 0) && (sy == 0)) {
 		if ((px == 0) && (py == 0)) {
 			return 0;
 		}
 		inc = 0;
 	}
-	return sig_coeff_inc_init[(py << 4) | (px << 2) | prev_sbf] + MOD2;
+	return sig_coeff_inc_init[(py << 4) | (px << 2) | prev_sbf] + inc + MOD;
 }
 
-static const residual_scan_order_t residual_scan_order[3][3] = {
+template <int MOD>
+static uint8_t sig_coeff_flag_inc_chroma(uint8_t sx, uint8_t sy, uint8_t px, uint8_t py, uint8_t prev_sbf) {
+	return sig_coeff_inc_init[(py << 4) | (px << 2) | prev_sbf] + MOD + 27;
+}
+
+static const residual_scan_order_t residual_scan_order[3][3][2] = {
 	{
-		{h265d_scan_order2x2[0][0], h265d_scan_order2x2[0][1], sig_coeff_flag_inc4_luma},
-		{h265d_scan_order4x4[0][0], h265d_scan_order4x4[0][1], sig_coeff_flag_inc<3, 9>},
-		{h265d_scan_order8x8[0][0], h265d_scan_order8x8[0][1], sig_coeff_flag_inc<3, 21>}
+		{
+			{h265d_scan_order2x2[0][0], h265d_scan_order2x2[0][1], sig_coeff_flag_inc4<0>},
+			{h265d_scan_order2x2[0][0], h265d_scan_order2x2[0][1], sig_coeff_flag_inc4<27>}
+		},
+		{
+			{h265d_scan_order4x4[0][0], h265d_scan_order4x4[0][1], sig_coeff_flag_inc_luma<9>},
+			{h265d_scan_order4x4[0][0], h265d_scan_order4x4[0][1], sig_coeff_flag_inc_chroma<9>}
+		},
+		{
+			{h265d_scan_order8x8[0][0], h265d_scan_order8x8[0][1], sig_coeff_flag_inc_luma<21>},
+			{h265d_scan_order8x8[0][0], h265d_scan_order8x8[0][1], sig_coeff_flag_inc_chroma<12>}
+		}
 	},
 	{
-		{h265d_scan_order2x2[1][0], h265d_scan_order2x2[1][1], sig_coeff_flag_inc4_luma},
-		{h265d_scan_order4x4[1][0], h265d_scan_order4x4[1][1], sig_coeff_flag_inc<3, 15>},
-		{h265d_scan_order8x8[1][0], h265d_scan_order8x8[1][1], sig_coeff_flag_inc<3, 21>}
+		{
+			{h265d_scan_order2x2[1][0], h265d_scan_order2x2[1][1], sig_coeff_flag_inc4<0>},
+			{h265d_scan_order2x2[1][0], h265d_scan_order2x2[1][1], sig_coeff_flag_inc4<27>}
+		},
+		{
+			{h265d_scan_order4x4[1][0], h265d_scan_order4x4[1][1], sig_coeff_flag_inc_luma<15>},
+			{h265d_scan_order4x4[1][0], h265d_scan_order4x4[1][1], sig_coeff_flag_inc_chroma<9>}
+		},
+		{
+			{h265d_scan_order8x8[1][0], h265d_scan_order8x8[1][1], sig_coeff_flag_inc_luma<21>},
+			{h265d_scan_order8x8[1][0], h265d_scan_order8x8[1][1], sig_coeff_flag_inc_chroma<12>}
+		}
 	},
 	{
-		{h265d_scan_order2x2[2][0], h265d_scan_order2x2[2][1], sig_coeff_flag_inc4_luma},
-		{h265d_scan_order4x4[2][0], h265d_scan_order4x4[2][1], sig_coeff_flag_inc<3, 15>},
-		{h265d_scan_order8x8[2][0], h265d_scan_order8x8[2][1], sig_coeff_flag_inc<3, 21>}
-	},
+		{
+			{h265d_scan_order2x2[2][0], h265d_scan_order2x2[2][1], sig_coeff_flag_inc4<0>},
+			{h265d_scan_order2x2[2][0], h265d_scan_order2x2[2][1], sig_coeff_flag_inc4<27>}
+		},
+		{
+			{h265d_scan_order4x4[2][0], h265d_scan_order4x4[2][1], sig_coeff_flag_inc_luma<15>},
+			{h265d_scan_order4x4[2][0], h265d_scan_order4x4[2][1], sig_coeff_flag_inc_chroma<9>}
+		},
+		{
+			{h265d_scan_order8x8[2][0], h265d_scan_order8x8[2][1], sig_coeff_flag_inc_luma<21>},
+			{h265d_scan_order8x8[2][0], h265d_scan_order8x8[2][1], sig_coeff_flag_inc_chroma<12>}
+		}
+	}
 };
 
 static inline uint32_t scan_order_index(uint32_t x, uint32_t y, uint32_t size_log2) {
@@ -1004,16 +1038,28 @@ static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, ui
 
 static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour) {
 	uint8_t sub_block_flags[8];
-	uint32_t max = size_log2 * 2;
-	uint32_t offset = (size_log2 - 2) * 3 + ((size_log2 - 1) >> 2);
-	uint32_t shift = (size_log2 + 1) >> 2;
+	uint32_t max = size_log2 * 2 - 1;
+	uint32_t offset, shift;
+	if (colour == 0) {
+		offset = (size_log2 - 2) * 3 + ((size_log2 - 1) >> 2);
+		shift = (size_log2 + 1) >> 2;
+	} else {
+		offset = 15;
+		shift = size_log2 - 2;
+	}
 	uint32_t x = last_sig_coeff_prefix_luma(dst.cabac, st, reinterpret_cast<h265d_cabac_context_t*>(dst.cabac.context)->last_sig_coeff_x_prefix + offset, shift, max);
 	uint32_t y = last_sig_coeff_prefix_luma(dst.cabac, st, reinterpret_cast<h265d_cabac_context_t*>(dst.cabac.context)->last_sig_coeff_y_prefix + offset, shift, max);
 	uint32_t last_sig_coeff_x = last_sig_coeff_suffix_add(dst.cabac, st, x);
 	uint32_t last_sig_coeff_y = last_sig_coeff_suffix_add(dst.cabac, st, y);
 	memset(sub_block_flags, 0, sizeof(sub_block_flags));
-	const residual_scan_order_t& suborder = residual_scan_order[dst.order_luma][0];
-	const residual_scan_order_t& order = residual_scan_order[dst.order_luma][size_log2 - 2];
+	uint32_t order_idx;
+	if (colour == 0) {
+		order_idx = dst.order_luma;
+	} else {
+		order_idx = dst.order_chroma;
+	}
+	const residual_scan_order_t& suborder = residual_scan_order[order_idx][0][0];
+	const residual_scan_order_t& order = residual_scan_order[order_idx][size_log2 - 2][(colour + 1) >> 1];
 	uint32_t last_subblock_pos = order.sub_block_num[scan_order_index(last_sig_coeff_x >> 2, last_sig_coeff_y >> 2, size_log2 - 2)];
 	uint8_t sub_pos_max = (1 << (size_log2 - 2)) - 1;
 	int i = last_subblock_pos;
@@ -1022,7 +1068,6 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	do {
 		uint8_t sx = order.xy_pos[i] & 7;
 		uint8_t sy = order.xy_pos[i] >> 4;
-		int8_t* coeff = dst.coeff + (sy * (1 << size_log2) + sx) * 4;
 		uint8_t prev_sbf = (sx < sub_pos_max) ? sub_block_flags[sy] & (1 << (sx + 1)) : 0;
 		prev_sbf |= (sy < sub_pos_max) ? (sub_block_flags[sy + 1] & (1 << sx)) << 1 : 0;
 		bool sig_coeff_zero_inferred = ((unsigned)(last_subblock_pos - 1) <= (unsigned)(i - 1));
@@ -1065,7 +1110,8 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			uint32_t abs_level = 0;
 			uint32_t rice_param = 0;
 			uint32_t shift = first_pos;
-			int8_t* write_pos = dst.coeff_buf + (sy * (1 << size_log2) + sx) * 4;
+			int16_t* write_pos = dst.coeff_buf + (sy * (1 << size_log2) + sx) * 4;
+			int32_t level_sum = 0;
 			while (0 <= (pos = *sig_coeff++)) {
 				uint32_t level = base_level + ((greater1_flags >> shift) & 1);
 				uint32_t remain_thr = (first_pos < 7) ? ((pos == last_greater1_pos) ? 3 : 2) : 1;
@@ -1074,9 +1120,11 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 					abs_level = coeff_abs_level_remaining(dst.cabac, st, rice_param);
 					level += abs_level;
 				}
+				level_sum += level;
 				uint8_t cx = suborder.xy_pos[i] & 7;
 				uint8_t cy = suborder.xy_pos[i] >> 4;
-				write_pos[cy * (1 << size_log2) + cx] = ((sign_flags >> shift) & 1) ? -(int32_t)level : level;
+				write_pos[cy * (1 << size_log2) + cx] = NEGATE(level, (sign_flags >> shift) & 1);
+				shift--;
 			}
 		}
 		num = 16;
@@ -1088,19 +1136,19 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		dst.qp_delta_req = 0;
 		dst.qp += cu_qp_delta(dst.cabac, st);
 	}
-	if (cbf & 4) {
+	if (cbf & 1) {
 		residual_coding(dst, st, size_log2, 0);
 	}
-	if (cbf & 3) {
+	if (cbf & 6) {
 		if (2 < size_log2) {
 			size_log2 -= 1;
 		} else if (idx != 3) {
 			return;
 		}
-		if (cbf & 2) {
+		if (cbf & 4) {
 			residual_coding(dst, st, size_log2, 1);
 		}
-		if (cbf & 1) {
+		if (cbf & 2) {
 			residual_coding(dst, st, size_log2, 2);
 		}
 	}
@@ -1119,12 +1167,11 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 	}
 	uint8_t cbf = 0;
 	if (2 < size_log2) {
-		while (upper_cbf_cbcr != 0) {
-			cbf = cbf * 2;
-			if (upper_cbf_cbcr & 1) {
-				cbf |= cbf_chroma(dst.cabac, st, depth);
-			}
-			upper_cbf_cbcr >>= 1;
+		if (upper_cbf_cbcr & 2) {
+			cbf |= cbf_chroma(dst.cabac, st, depth) * 2;
+		}
+		if (upper_cbf_cbcr & 1) {
+			cbf |= cbf_chroma(dst.cabac, st, depth);
 		}
 	}
 	if (split) {
@@ -1248,7 +1295,6 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 	memset(dst.neighbour_left, INTRA_DC, sizeof(dst.neighbour_left));
 	uint32_t neighbour_flags_top_len = sps.ctb_info.columns * sizeof(dst.neighbour_left);
 	memset(dst.neighbour_top, INTRA_DC, neighbour_flags_top_len);
-	dst.coeff = dst.coeff_buf;
 	dst.sao_map = reinterpret_cast<h265d_sao_map_t*>(dst.neighbour_top + neighbour_flags_top_len);
 }
 
