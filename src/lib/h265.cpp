@@ -1077,13 +1077,14 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			uint32_t first_pos = sig_coeff_flags_read(dst.cabac, st, order.sig_coeff_flag_inc, suborder.xy_pos[i], sig_coeff_zero_inferred, num, sig_coeff_flags, sx, sy, prev_sbf);
 			uint32_t num_greater1 = 0;
 			uint32_t ctxset = (((colour == 0) || (i == 0)) ? 0 : 2) + (greater1ctx == 0);
+			uint32_t greater1offset = ctxset * 4 + ((colour == 0) ? 0 : 16);
 			greater1ctx = 1;
 			uint8_t greater1_flags = 0;
 			int last_greater1_pos = -1;
 			const int8_t* sig_coeff = sig_coeff_flags;
 			int8_t pos;
 			while (0 <= (pos = *sig_coeff++)) {
-				greater1_flags = (greater1_flags << 1) + coeff_abs_level_greater1_flag(dst.cabac, st, ctxset * 4 + greater1ctx);
+				greater1_flags = (greater1_flags << 1) + coeff_abs_level_greater1_flag(dst.cabac, st, greater1offset + greater1ctx);
 				if (greater1_flags & 1) {
 					greater1ctx = 0;
 					if (last_greater1_pos < 0) {
@@ -1096,16 +1097,14 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 					break;
 				}
 			}
-			uint32_t greater2_flag = (num_greater1 != 0) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
-			uint16_t sign_flags = 0;
+			uint32_t greater2_flag = (0 <= last_greater1_pos) ? coeff_abs_level_greater2_flag(dst.cabac, st, (colour == 0) ? ctxset : ctxset + 4) : 0;
 			uint8_t hidden_bit;
 			if (dst.pps->sign_data_hiding_enabled_flag && (3 < sig_coeff_flags[0] - sig_coeff_flags[first_pos])) {
 				hidden_bit = 1;
 			} else {
 				hidden_bit = 0;
 			}
-			sign_flags = coeff_sign_flags(dst.cabac, st, first_pos, hidden_bit);
-			uint32_t base_level = 1 + greater2_flag;
+			uint16_t sign_flags = coeff_sign_flags(dst.cabac, st, first_pos, hidden_bit);
 			sig_coeff = sig_coeff_flags;
 			uint32_t abs_level = 0;
 			uint32_t rice_param = 0;
@@ -1113,7 +1112,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			int16_t* write_pos = dst.coeff_buf + (sy * (1 << size_log2) + sx) * 4;
 			int32_t level_sum = 0;
 			while (0 <= (pos = *sig_coeff++)) {
-				uint32_t level = base_level + ((greater1_flags >> shift) & 1);
+				uint32_t level = ((pos == last_greater1_pos) ? greater2_flag + 1 : 1) + ((greater1_flags >> shift) & 1);
 				uint32_t remain_thr = (first_pos < 7) ? ((pos == last_greater1_pos) ? 3 : 2) : 1;
 				if (level == remain_thr) {
 					rice_param = std::min(rice_param + ((static_cast<uint32_t>(3) << rice_param) < abs_level), static_cast<uint32_t>(4));
