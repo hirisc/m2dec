@@ -341,8 +341,8 @@ typedef struct h265d_ctu_t {
 	const h265d_sps_t* sps;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
-	h265d_neighbour_t neighbour_left[8];
-	h265d_neighbour_t* neighbour_top; // use 8 bytes for each CTU
+	h265d_neighbour_t neighbour_left[16];
+	h265d_neighbour_t* neighbour_top; // use 16 bytes for each CTU
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	uint8_t intra_pred_record[8 * 9];
