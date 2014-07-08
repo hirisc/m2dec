@@ -724,7 +724,7 @@ static inline int32_t cu_qp_delta(m2d_cabac_t& cabac, dec_bits& st) {
 }
 
 static inline int32_t transform_skip_flag(m2d_cabac_t& cabac, dec_bits& st, int colour) {
-	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->transform_skip_flag + (colour == 0 ? 0 : 3));
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->transform_skip_flag + ((colour + 1) >> 1));
 }
 
 static inline int32_t last_sig_coeff_prefix_luma(m2d_cabac_t& cabac, dec_bits& st, int8_t* ctx, uint32_t shift, uint32_t max) {
@@ -1159,23 +1159,26 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 
 static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, int idx) {
 	uint32_t split;
-	if (size_log2 <= dst.sps->ctb_info.transform_log2) {
+	if ((dst.sps->ctb_info.transform_log2 < size_log2) || ((depth == 0) && dst.intra_split)) {
+		split = 1;
+	} else {
 		if ((dst.sps->ctb_info.transform_log2_min < size_log2) && (depth < dst.sps->max_transform_hierarchy_depth_intra)) {
 			split = split_transform_flag(dst.cabac, st, size_log2);
 		} else {
 			split = 0;
 		}
-	} else {
-		split = 1;
 	}
-	uint8_t cbf = 0;
+	uint8_t cbf;
 	if (2 < size_log2) {
+		cbf = 0;
 		if (upper_cbf_cbcr & 2) {
 			cbf |= cbf_chroma(dst.cabac, st, depth) * 2;
 		}
 		if (upper_cbf_cbcr & 1) {
 			cbf |= cbf_chroma(dst.cabac, st, depth);
 		}
+	} else {
+		cbf = upper_cbf_cbcr;
 	}
 	if (split) {
 		size_log2 -= 1;
@@ -1225,10 +1228,12 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 		assert(0);
 	}
 	int part_num = 1;
+	dst.intra_split = 0;
 	if ((dst.is_intra = PredModeFlag(dst.cabac, st)) == 0) {
 		assert(0);
 	} else if (dst.sps->ctb_info.size_log2_min == size_log2) {
 		if (part_mode_intra(dst.cabac, st) == 0) {
+			dst.intra_split = 1;
 			part_num = 4;
 		}
 	}
@@ -1258,7 +1263,7 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 		intra_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
 	}
 	uint32_t chroma_mode_idx = intra_chroma_pred_mode(dst.cabac, st);
-	for (int i = 0; i < part_num; ++i) {
+	for (int i = 0; i < 1; ++i) {
 		uint8_t chroma_mode = intra_chroma_pred_dir(chroma_mode_idx, luma_mode[i]);
 		dst.order_chroma = scan_order[chroma_mode];
 	}
