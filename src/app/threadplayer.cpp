@@ -514,7 +514,9 @@ const int IBUFNUM = 3;
 
 static void BlameUser() {
 	fprintf(stderr,
-		"Usage: srview [-r] [-t interval] [-m outfile(MD5)] [-o outfile(Raw)] infile [infile ...]\n"
+		"Usage: srview [-m] [-o] [-r] [-t interval] infile [infile ...]\n"
+		"\t-m : outfile(MD5)\n"
+		"\t-o : outfile(Raw)\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
 		"\t-f frame_num(3-256) : specify number of frames before display.\n"
