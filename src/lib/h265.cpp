@@ -1274,7 +1274,7 @@ static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2,
 	if ((dst.sps->ctb_info.size_log2_min < size_log2) && split_cu_flag(dst.cabac, st, (6 < size_log2 + left->depth) + (6 < size_log2 + top->depth))) {
 		size_log2 -= 1;
 		uint32_t block_len = 1 << size_log2;
-		uint32_t info_offset = 1 << (size_log2 - 3);
+		uint32_t info_offset = 1 << (size_log2 - 2);
 		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, left, top);
 		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y, left, top + info_offset);
 		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, left + info_offset, top);
