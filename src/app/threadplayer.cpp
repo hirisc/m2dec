@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <algorithm>
 #include <functional>
 #include <vector>
@@ -195,6 +196,7 @@ public:
 			{ M2Decoder::MODE_MPEG2PS, "vob"},
 			{ M2Decoder::MODE_H264, "264"},
 			{ M2Decoder::MODE_H264, "jsv"},
+			{ M2Decoder::MODE_H265, "265"},
 			{ M2Decoder::MODE_NONE, ""}
 		};
 		char ext[16];
@@ -335,6 +337,31 @@ private:
 
 #include <emmintrin.h>
 
+void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
+	uint8_t* dst1 = dst + (stride >> 1);
+	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
+	msk = _mm_shuffle_epi32(msk, 0);
+	int width = (stride + 1) >> 1;
+	do {
+		for (int x = 0; x < width; x += 16) {
+			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
+			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
+			__m128i d0l = _mm_and_si128(d0, msk);
+			__m128i d1l = _mm_and_si128(d1, msk);
+			d0 = _mm_srli_epi16(d0, 8);
+			d1 = _mm_srli_epi16(d1, 8);
+			d0l = _mm_packus_epi16(d0l, d1l);
+			d0 = _mm_packus_epi16(d0, d1);
+			_mm_storeu_si128((__m128i *)&dst[x], d0l);
+			_mm_storeu_si128((__m128i *)&dst1[x], d0);
+		}
+		src += stride;
+		dst += stride;
+		dst1 += stride;
+	} while (--height);
+}
+
+#if 0
 void display_write_halve(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
 		   uint16_t *pitches, int width, int height)
 {
@@ -477,6 +504,7 @@ void display_write_small(uint8_t **dst, const uint8_t *src_luma, const uint8_t *
 		dst2 += pitches[2];
 	}
 }
+#endif
 
 const int MAX_WIDTH = 1920;
 const int MAX_HEIGHT = 1088;
@@ -486,7 +514,9 @@ const int IBUFNUM = 3;
 
 static void BlameUser() {
 	fprintf(stderr,
-		"Usage: srview [-r] [-t interval] [-m outfile(MD5)] [-o outfile(Raw)] infile [infile ...]\n"
+		"Usage: srview [-m] [-o] [-r] [-t interval] infile [infile ...]\n"
+		"\t-m : outfile(MD5)\n"
+		"\t-o : outfile(Raw)\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
 		"\t-f frame_num(3-256) : specify number of frames before display.\n"
@@ -616,32 +646,31 @@ struct Options {
 
 struct UniSurface {
 #ifdef ENABLE_DISPLAY
-	SDL_Surface *surface;
-	SDL_Overlay *yuv;
-	SDL_Rect rect;
+	SDL_Window *screen_;
+	SDL_Renderer *renderer_;
+	SDL_Texture *texture_;
+	std::vector<uint8_t> cbcr_base_;
+	uint8_t* cbcr_;
+	int width_, height_;
 	int scale_;
-	void (*display_write)(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride, uint16_t *pitches, int width, int height);
+//	void (*display_write)(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride, uint16_t *pitches, int width, int height);
 #endif /* ENABLE_DISPLAY */
 	int suspended_;
 	void *id_;
 	UniSurface() :
 #ifdef ENABLE_DISPLAY
-		yuv(0),
+		screen_(0), renderer_(0), texture_(0),
+		width_(0), height_(0),
 		scale_(1),
 #endif /* ENABLE_DISPLAY */
 		suspended_(0), id_(0) {
 #ifdef ENABLE_DISPLAY
 		UniEvent ev;
 		while (UniPollEvent(&ev)) ;
-		memset(&rect, 0, sizeof(rect));
 #endif /* ENABLE_DISPLAY */
-	};
+	}
 	~UniSurface() {
-#ifdef ENABLE_DISPLAY
-		if (yuv) {
-			SDL_FreeYUVOverlay(yuv);
-		}
-#endif /* ENABLE_DISPLAY */
+		teardown();
 	}
 	int suspended() const {
 		return suspended_;
@@ -652,9 +681,13 @@ struct UniSurface {
 			id_ = out.id;
 			change(out);
 		}
-		SDL_LockYUVOverlay(yuv);
-		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
-		SDL_UnlockYUVOverlay(yuv);
+//		SDL_LockYUVOverlay(yuv);
+//		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
+//		SDL_UnlockYUVOverlay(yuv);
+		deinterleave(out.chroma, &cbcr_[0], out.width, out.height >> 1);
+		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], out.width, &cbcr_[out.width >> 1], out.width);
+		SDL_RenderClear(renderer_);
+		SDL_RenderCopy(renderer_, texture_, NULL, NULL);
 #endif /* ENABLE_DISPLAY */
 	}
 	void waitevents(int interval) {
@@ -667,6 +700,19 @@ struct UniSurface {
 #endif /* ENABLE_DISPLAY */
 	}
 private:
+	void teardown() {
+#ifdef ENABLE_DISPLAY
+		if (texture_) {
+			SDL_DestroyTexture(texture_);
+		}
+		if (renderer_) {
+			SDL_DestroyRenderer(renderer_);
+		}
+		if (screen_) {
+			SDL_DestroyWindow(screen_);
+		}
+#endif /* ENABLE_DISPLAY */
+	}
 #ifdef ENABLE_DISPLAY
 	void waitevents_with_timer() {
 		UniEvent ev;
@@ -674,7 +720,7 @@ private:
 		do {
 			switch (ev.type) {
 			case SDL_USEREVENT:
-				SDL_DisplayYUVOverlay(yuv, &rect);
+				SDL_RenderPresent(renderer_);
 				break;
 			case SDL_MOUSEBUTTONDOWN:
 				suspended_ ^= 1;
@@ -688,7 +734,7 @@ private:
 	}
 	void waitevents_without_timer() {
 		UniEvent ev;
-		SDL_DisplayYUVOverlay(yuv, &rect);
+		SDL_RenderPresent(renderer_);
 		while (SDL_PollEvent(&ev)) {
 			switch (ev.type) {
 			case SDL_MOUSEBUTTONDOWN:
@@ -702,28 +748,29 @@ private:
 		}
 	}
 	void change(const Frame& out) {
-		int width = rect.w * scale_;
-		int height = rect.h * scale_;
+		int width = width_ * scale_;
+		int height = height_ * scale_;
 		if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
+			teardown();
 			width = out.width - out.crop[1];
 			height = out.height - out.crop[3];
+			cbcr_base_.resize(((width * height) >> 1) + 15);
+			cbcr_ = reinterpret_cast<uint8_t*>(ALIGN16(reinterpret_cast<uintptr_t>(&cbcr_base_[0])));
 			if ((1440 < width) || (720 < height)) {
 				scale_ = 2;
-				width >>= 1;
-				height >>= 1;
-				display_write = display_write_halve;
-			} else if ((32 <= width) && (2 < height)) {
-				display_write = display_write_normal;
-			} else {
-				display_write = display_write_small;
+//				width >>= 1;
+//				height >>= 1;
+//				display_write = display_write_halve;
+//			} else if ((32 <= width) && (2 < height)) {
+//				display_write = display_write_normal;
+//			} else {
+//				display_write = display_write_small;
 			}
-			rect.w = width;
-			rect.h = height;
-			surface = SDL_SetVideoMode(width, height, 0, SDL_SWSURFACE);
-			if (yuv) {
-				SDL_FreeYUVOverlay(yuv);
-			}
-			yuv = SDL_CreateYUVOverlay(width, height, SDL_IYUV_OVERLAY, surface);
+			width_ = width;
+			height_ = height;
+			screen_ = SDL_CreateWindow("disp", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_OPENGL);
+			renderer_ = SDL_CreateRenderer(screen_, -1, 0);
+			texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, width, height);
 		}
 	}
 #endif /* ENABLE_DISPLAY */
@@ -779,6 +826,10 @@ Uint32 DispTimer(Uint32 interval, void *param)
 	return interval;
 }
 
+void logOut(void* p, int category, SDL_LogPriority priority, const char* message) {
+	fprintf(stderr, "%s", message);
+}
+
 #ifdef main
 #undef main
 #endif
@@ -808,8 +859,9 @@ int main(int argc, char **argv)
 		atexit(LogDump);
 	}
 #ifdef ENABLE_DISPLAY
-	SDL_EventState(SDL_ACTIVEEVENT, SDL_IGNORE);
+	SDL_EventState(SDL_WINDOWEVENT, SDL_IGNORE);
 	SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
+	SDL_LogSetOutputFunction(logOut, 0);
 	if (opt.interval_) {
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
