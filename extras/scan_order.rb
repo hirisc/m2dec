@@ -41,8 +41,12 @@ class GeneratedArray < PrintableArray
   end
 end
 
-def print_lut(suffix, size, array)
-  print "static const int8_t h265d_scan_order", size, "x", size, suffix, "[", size, " * ", size, "] = "
+def mux_subblock(subxy, log2size)
+  mux_xy(subxy & 3, subxy >> 2, log2size)
+end
+
+def print_lut(suffix, num, size, array)
+  print "static const int8_t h265d_scan_order", num, "x", num, suffix, "[", size, " * ", size, "] = "
   array.dump(8, 0)
   print ";\n\n"
 end
@@ -50,8 +54,22 @@ end
 (1..3).each do |log2size|
   diag = DiagonalArray.new(log2size)
   size = 1 << log2size
-  print_lut("diag_inverse", size, GeneratedArray.new(log2size, lambda {|x, y, log2size| diag.index(mux_xy(x, y, log2size))}))
-  print_lut("diag", size, diag)
-  print_lut("vertical", size, GeneratedArray.new(log2size, lambda {|x, y, log2size| mux_xy(y, x, log2size)}))
+  print_lut("diag_inverse", size, size, GeneratedArray.new(log2size, lambda {|x, y, log2size| diag.index(mux_xy(x, y, log2size))}))
+  print_lut("diag", size, size, diag)
+  print_lut("vertical", size, size, GeneratedArray.new(log2size, lambda {|x, y, log2size| mux_xy(y, x, log2size)}))
 end
-print_lut("horizontal", 8, PrintableArray.new(8 * 8) do |i| i end)
+horiz = PrintableArray.new(8 * 8) do |i| i end
+print_lut("horizontal", 8, 8, horiz)
+
+sub_blocks =
+  [
+   ["diagonal", DiagonalArray.new(2)],
+   ["horizontal", horiz],
+   ["vertical", GeneratedArray.new(2, lambda {|x, y, log2size| mux_xy(y, x, 2)})]
+  ]
+(3..5).each {|log2size|
+  size = (1 << log2size)
+  sub_blocks.each {|sub|
+    print_lut(sub[0] + "_subblock", size, 4, PrintableArray.new(4 * 4) do |i| mux_subblock(sub[1][i], log2size) end)
+  }
+}
