@@ -738,11 +738,13 @@ static inline int32_t last_sig_coeff_prefix_luma(m2d_cabac_t& cabac, dec_bits& s
 }
 
 static inline int32_t last_sig_coeff_suffix_add(m2d_cabac_t& cabac, dec_bits& st, uint32_t prefix) {
-	if (prefix <= 3) {
+	if (prefix < 4) {
 		return prefix;
 	} else {
-		uint32_t max = 1 << ((prefix >> 1) - 1);
-		return max * (2 + (prefix & 1)) + cabac_decode_multibypass(&cabac, &st, max);
+		static const int8_t prefix_adj[] = {
+			0x04, 0x06, 0x08, 0x0c, 0x10, 0x18
+		};
+		return prefix_adj[prefix - 4] + cabac_decode_multibypass(&cabac, &st, (prefix >> 1) - 1);
 	}
 }
 
@@ -847,8 +849,8 @@ static void intra_pred_candidate(uint8_t cand[], uint8_t candA, uint8_t candB) {
 			cand[2] = INTRA_ANGULAR26;
 		} else {
 			cand[0] = candA;
-			cand[1] = (candA - 3) & 31;
-			cand[2] = (candA - 1) & 31;
+			cand[1] = ((candA - 3) & 31) + 2;
+			cand[2] = ((candA - 1) & 31) + 2;
 		}
 	} else {
 		cand[0] = candA;
@@ -1088,7 +1090,7 @@ static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, si
 
 static inline uint32_t sig_coeff_greater(int colour, int subblock_idx, uint8_t& greater1ctx, h265d_sigcoeff_t coeff[], uint32_t num_coeff, m2d_cabac_t& cabac, dec_bits& st) {
 	uint32_t num_greater1 = 0;
-	uint32_t ctxset = (((colour == 0) || (subblock_idx == 0)) ? 0 : 2) + (greater1ctx == 0);
+	uint32_t ctxset = (((colour == 0) && (subblock_idx != 0)) ? 2 : 0) + (greater1ctx == 0);
 	uint32_t greater1offset = ctxset * 4 + ((colour == 0) ? 0 : 16);
 	greater1ctx = 1;
 	uint32_t max_flags = 0;
@@ -1142,7 +1144,15 @@ static inline void sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t coef
 	}
 }
 
-static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour) {
+static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour, int pred_idx) {
+	static const uint8_t scan_order[35] = {
+		0, 0, 0, 0, 0, 0,
+		2, 2, 2, 2, 2, 2,
+		2, 2, 2, 0, 0, 0,
+		0, 0, 0, 0, 1, 1,
+		1, 1, 1, 1, 1, 1,
+		1, 0, 0, 0, 0
+	};
 	bool transform_skip = ((size_log2 == 2) && dst.pps->transform_skip_enabled_flag && transform_skip_flag(dst.cabac, st, colour));
 	uint8_t sub_block_flags[8];
 	uint32_t max = size_log2 * 2 - 1;
@@ -1162,10 +1172,10 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	uint32_t order_idx = 0;
 	if (colour == 0) {
 		if (size_log2 <= 3) {
-			order_idx = dst.order_luma;
+			order_idx = scan_order[dst.order_luma[pred_idx]];
 		}
 	} else if (size_log2 == 2) {
-		order_idx = dst.order_chroma;
+		order_idx = scan_order[dst.order_chroma];
 	}
 	const residual_scan_order_t& order = residual_scan_order[order_idx][size_log2 - 2];
 	sig_coeff_flag_inc_func_t sig_coeff_flag_inc = sig_coeff_flag_inc_func[size_log2 - 2][(colour + 1) >> 1];
@@ -1174,16 +1184,15 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	int i = last_subblock_pos;
 	uint8_t greater1ctx = 1;
 	uint32_t num = order.inner_pos_num[scan_order_index(last_sig_coeff_x & 3, last_sig_coeff_y & 3, 2)];
-	bool is_last = true;
 	do {
 		uint8_t sx = order.macro_xy_pos[i] & ((1 << size_log2) - 1);
 		uint8_t sy = order.macro_xy_pos[i] >> size_log2;
-		uint8_t prev_sbf = (sx < sub_pos_max) ? sub_block_flags[sy] & (1 << (sx + 1)) : 0;
-		prev_sbf |= (sy < sub_pos_max) ? (sub_block_flags[sy + 1] & (1 << sx)) << 1 : 0;
+		uint8_t prev_sbf = (sx < sub_pos_max) ? ((sub_block_flags[sy] >> (sx + 1)) & 1) : 0;
+		prev_sbf |= (sy < sub_pos_max) ? ((sub_block_flags[sy + 1] >> sx) & 1) * 2 : 0;
 		if (((unsigned)(last_subblock_pos - 1) <= (unsigned)(i - 1)) || coded_sub_block_flag(dst.cabac, st, prev_sbf)) {
 			sub_block_flags[sy] |= 1 << sx;
 			h265d_sigcoeff_t sig_coeff_flags[4 * 4];
-			uint32_t num_coeff = sig_coeff_flags_read(dst.cabac, st, sig_coeff_flag_inc, order.inner_xy_pos, is_last, num, sig_coeff_flags, sx, sy, prev_sbf);
+			uint32_t num_coeff = sig_coeff_flags_read(dst.cabac, st, sig_coeff_flag_inc, order.inner_xy_pos, (i == last_subblock_pos), num, sig_coeff_flags, sx, sy, prev_sbf);
 			if (num_coeff == 0) {
 				return;
 			}
@@ -1196,13 +1205,13 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	} while (0 <= --i);
 }
 
-static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx) {
+static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx) {
 	if (dst.qp_delta_req) {
 		dst.qp_delta_req = 0;
 		dst.qp += cu_qp_delta(dst.cabac, st);
 	}
 	if (cbf & 1) {
-		residual_coding(dst, st, size_log2, 0);
+		residual_coding(dst, st, size_log2, 0, pred_idx);
 	}
 	if (cbf & 6) {
 		if (2 < size_log2) {
@@ -1211,18 +1220,20 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 			return;
 		}
 		if (cbf & 4) {
-			residual_coding(dst, st, size_log2, 1);
+			residual_coding(dst, st, size_log2, 1, pred_idx);
 		}
 		if (cbf & 2) {
-			residual_coding(dst, st, size_log2, 2);
+			residual_coding(dst, st, size_log2, 2, pred_idx);
 		}
 	}
 }
 
-static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, int idx) {
+static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, int idx, int pred_idx) {
 	uint32_t split;
-	if ((dst.sps->ctb_info.transform_log2 < size_log2) || ((depth == 0) && dst.intra_split)) {
+	if (dst.sps->ctb_info.transform_log2 < size_log2) {
 		split = 1;
+	} else if ((depth == 0) && dst.intra_split) {
+		split = 2;
 	} else {
 		if ((dst.sps->ctb_info.transform_log2_min < size_log2) && (depth < dst.sps->max_transform_hierarchy_depth_intra)) {
 			split = split_transform_flag(dst.cabac, st, size_log2);
@@ -1243,19 +1254,31 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		cbf = upper_cbf_cbcr;
 	}
 	if (split) {
+		int pi0, pi1, pi2, pi3;
+		if (split == 2) {
+			pi0 = 0;
+			pi1 = 1;
+			pi2 = 2;
+			pi3 = 3;
+		} else {
+			pi0 = pred_idx;
+			pi1 = pred_idx;
+			pi2 = pred_idx;
+			pi3 = pred_idx;
+		}
 		size_log2 -= 1;
 		depth += 1;
-		transform_tree(dst, st, size_log2, depth, cbf, 0);
-		transform_tree(dst, st, size_log2, depth, cbf, 1);
-		transform_tree(dst, st, size_log2, depth, cbf, 2);
-		transform_tree(dst, st, size_log2, depth, cbf, 3);
+		transform_tree(dst, st, size_log2, depth, cbf, 0, pi0);
+		transform_tree(dst, st, size_log2, depth, cbf, 1, pi1);
+		transform_tree(dst, st, size_log2, depth, cbf, 2, pi2);
+		transform_tree(dst, st, size_log2, depth, cbf, 3, pi3);
 	} else {
 		cbf = cbf * 2;
 		if (dst.is_intra || depth || cbf) {
 			cbf |= cbf_luma(dst.cabac, st, depth);
 		}
 		if (cbf) {
-			transform_unit(dst, st, size_log2, cbf, idx);
+			transform_unit(dst, st, size_log2, cbf, idx, pred_idx);
 		}
 	}
 }
@@ -1278,14 +1301,6 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 
 template <typename F>
 static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
-	static const uint8_t scan_order[35] = {
-		0, 0, 0, 0, 0, 0,
-		2, 2, 2, 2, 2, 2,
-		2, 2, 2, 0, 0, 0,
-		0, 0, 0, 0, 1, 1,
-		1, 1, 1, 1, 1, 1,
-		1, 0, 0, 0, 0
-	};
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
 	}
@@ -1307,7 +1322,6 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 		pred_flag |= prev_intra_luma_pred_flag(dst.cabac, st) << i;
 	}
 	uint32_t neighbour_num = 1 << (size_log2 - (part_num == 1 ? 2 : 3));
-	uint8_t luma_mode[4];
 	for (int i = 0; i < part_num; ++i) {
 		uint8_t candidate[3];
 		h265d_neighbour_t* left_tmp = left + (i >> 1);
@@ -1319,17 +1333,18 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 		} else {
 			mode = rem_intra_luma_pred_mode(dst.cabac, st, candidate);
 		}
-		luma_mode[i] = mode;
-		dst.order_luma = scan_order[mode];
+		dst.order_luma[i] = mode;
 		pred_flag >>= 1;
 		intra_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
 	}
+	if (part_num < 4) {
+		memset(dst.order_luma + 1, dst.order_luma[0], sizeof(dst.order_luma[0]) * 3);
+	}
 	uint32_t chroma_mode_idx = intra_chroma_pred_mode(dst.cabac, st);
 	for (int i = 0; i < 1; ++i) {
-		uint8_t chroma_mode = intra_chroma_pred_dir(chroma_mode_idx, luma_mode[i]);
-		dst.order_chroma = scan_order[chroma_mode];
+		dst.order_chroma = intra_chroma_pred_dir(chroma_mode_idx, dst.order_luma[i]);
 	}
-	transform_tree(dst, st, size_log2, 0, 3, 0);
+	transform_tree(dst, st, size_log2, 0, 3, 0, 0);
 }
 
 static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
