@@ -338,7 +338,7 @@ typedef struct h265d_ctu_t {
 	int8_t qp, qp_delta_req;
 	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
-	uint8_t order_luma, order_chroma;
+	int8_t order_luma[4], order_chroma;
 	const h265d_sps_t* sps;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
