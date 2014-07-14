@@ -298,7 +298,7 @@ private:
 	int reread_file_impl() {
 		Buffer *src;
 		if (!src_next_) {
-			if (!inqueue().pop_back()) {
+			if (!inqueue().pop_back() || inqueue().empty()) {
 				return -1;
 			}
 			src = &inqueue().back();
