@@ -1220,7 +1220,6 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	const residual_scan_order_t& order = residual_scan_order[order_idx][size_log2 - 2];
 	sig_coeff_flag_inc_func_t sig_coeff_flag_inc = sig_coeff_flag_inc_func[order_idx][size_log2 - 2][(colour + 1) >> 1];
 	uint32_t last_subblock_pos = order.sub_block_num[scan_order_index(last_sig_coeff_x >> 2, last_sig_coeff_y >> 2, size_log2 - 2)];
-//	uint8_t sub_pos_max = (1 << (size_log2 - 2)) - 1;
 	int i = last_subblock_pos;
 	uint8_t greater1ctx = 1;
 	uint32_t num = order.inner_pos_num[scan_order_index(last_sig_coeff_x & 3, last_sig_coeff_y & 3, 2)];
@@ -1266,7 +1265,137 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 	}
 }
 
-static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, int idx, int pred_idx) {
+template <int N>
+static inline uint32_t sum_left(uint8_t* dst, uint32_t size_log2, uint32_t stride) {
+	const uint8_t* src = dst - N;
+	uint32_t sum = 0;
+	uint32_t cnt = 1 << size_log2;
+	do {
+		for (int n = 0; n < N; ++n) {
+			sum += (src[n] << (16 * n));
+		}
+		src += stride;
+	} while (--cnt);
+	return sum;
+}
+
+template <int N>
+static inline uint32_t sum_top(uint8_t* dst, uint32_t size_log2, uint32_t stride) {
+	const uint8_t* src = dst - stride;
+	uint32_t sum = 0;
+	uint32_t cnt = 1 << (size_log2 - 2);
+	do {
+		for (int n = 0; n < N; ++n) {
+			sum = sum + ((src[n] + src[n + N] + src[n + N * 2] + src[n + N * 3]) << (16 * n));
+		}
+		src += 4 * N;
+	} while (--cnt);
+	return sum;
+}
+
+template <int N>
+static inline void fill_dc(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t dc) {
+	if (N == 1) {
+		dc *= 0x01010101;
+	} else {
+		dc = ((dc & 255) | ((dc >> 8) & 0xff00)) * 0x00010001;
+	}
+	uint32_t y = 1 << size_log2;
+	uint32_t cnt = 1 << (size_log2 - 3 + N);
+	do {
+		for (uint32_t x = 0; x < cnt; ++x) {
+			reinterpret_cast<uint32_t*>(dst)[x] = dc;
+		}
+		dst += stride;
+	} while (--y);
+}
+
+template <int N>
+static inline void intra_dc_filter_left(uint8_t* dst, uint32_t cnt, uint32_t stride, uint32_t dc) {
+	dc = dc * 3 + 0x00020002;
+	uint8_t* s = dst - N;
+	do {
+		for (int n = 0; n < N; ++n) {
+			s[n + N] = (s[n] + (dc >> (n * 16))) >> 2;
+		}
+		s += stride;
+	} while (--cnt);
+}
+
+template <int N>
+static inline void intra_dc_filter_lefttop(uint8_t* dst, uint32_t stride, uint32_t dc) {
+	for (uint32_t i = 0; i < N; ++i) {
+		uint32_t val = 2 * static_cast<uint8_t>(dc);
+		dst[i] = (*(dst - stride + i) + *(dst - N + i) + val) >> 2;
+		dc >>= 16;
+	}
+}
+
+template <int N>
+static inline void intra_dc_filter_top(uint8_t* dst, uint32_t cnt, uint32_t stride, uint32_t dc) {
+	dc = dc * 3 + 0x00020002;
+	const uint8_t* s = dst - stride;
+	for (uint32_t i = 0; i < cnt; ++i) {
+		for (int n = 0; n < N; ++n) {
+			dst[i * N + n] = (s[i * N + n] + (dc >> (n * 16))) >> 2;
+		}
+	}
+}
+
+template <int N>
+static void intra_pred_dc(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
+	uint32_t dc = (N == 1) ? 128 : 0x00800080;
+	switch (avail) {
+	case 0:
+		break;
+	case 1:
+		dc = ((dc >> (8 - size_log2)) + sum_left<N>(dst, size_log2, stride)) >> size_log2;
+		break;
+	case 2:
+		dc = ((dc >> (8 - size_log2)) + sum_top<N>(dst, size_log2, stride)) >> size_log2;
+		break;
+	case 3:
+		dc = ((dc >> (7 - size_log2)) + sum_left<N>(dst, size_log2, stride) + sum_top<N>(dst, size_log2, stride)) >> (size_log2 + 1);
+		break;
+	}
+	fill_dc<N>(dst, size_log2, stride, dc);
+	if (size_log2 < 5) {
+		uint32_t cnt = 1 << size_log2;
+		if (avail & 1) {
+			intra_dc_filter_left<N>(dst, cnt, stride, dc);
+		}
+		if (avail & 2) {
+			if (avail & 1) {
+				intra_dc_filter_lefttop<N>(dst, stride, dc);
+				dst += N;
+				cnt -= 1;
+			}
+			intra_dc_filter_top<N>(dst, cnt, stride, dc);
+		}
+	}
+}
+
+template <int N>
+static inline void intra_prediction_dispatch(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode) {
+	switch (mode) {
+	case 1:
+		intra_pred_dc<N>(dst, size_log2, stride, avail);
+		break;
+	default:
+		assert(0);
+		break;
+	}
+}
+
+static inline void intra_prediction(h265d_ctu_t& dst, uint32_t size_log2, uint32_t offset_x, uint32_t offset_y, int pred_idx, uint32_t avail) {
+	uint32_t stride = dst.sps->ctb_info.columns << dst.sps->ctb_info.size_log2;
+	intra_prediction_dispatch<1>(dst.luma + offset_y * stride + offset_x, size_log2, stride, avail, dst.order_luma[pred_idx]);
+	if (2 < size_log2) {
+		intra_prediction_dispatch<2>(dst.chroma + (offset_y >> 1) * stride + offset_x, size_log2 - 1, stride, avail, dst.order_chroma);
+	}
+}
+
+static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, uint32_t offset_x, uint32_t offset_y, int idx, int pred_idx, uint32_t avail) {
 	uint32_t split;
 	if (dst.sps->ctb_info.transform_log2 < size_log2) {
 		split = 1;
@@ -1306,11 +1435,13 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		}
 		size_log2 -= 1;
 		depth += 1;
-		transform_tree(dst, st, size_log2, depth, cbf, 0, pi0);
-		transform_tree(dst, st, size_log2, depth, cbf, 1, pi1);
-		transform_tree(dst, st, size_log2, depth, cbf, 2, pi2);
-		transform_tree(dst, st, size_log2, depth, cbf, 3, pi3);
+		uint32_t block_len = 1 << size_log2;
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y, 0, pi0, avail);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y, 1, pi1, avail | 1);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y + block_len, 2, pi2, avail | 2);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y + block_len, 3, pi3, avail | 3);
 	} else {
+		intra_prediction(dst, size_log2, offset_x, offset_y, pred_idx, avail);
 		cbf = cbf * 2;
 		if (dst.is_intra || depth || cbf) {
 			cbf |= cbf_luma(dst.cabac, st, depth);
@@ -1338,7 +1469,7 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 }
 
 template <typename F>
-static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t offset_x, uint32_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
 	}
@@ -1359,7 +1490,7 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 	for (int i = 0; i < part_num; ++i) {
 		pred_flag |= prev_intra_luma_pred_flag(dst.cabac, st) << i;
 	}
-	uint32_t neighbour_num = 1 << (size_log2 - (part_num == 1 ? 2 : 3));
+	uint32_t neighbour_num = 1 << (size_log2 - 2);
 	for (int i = 0; i < part_num; ++i) {
 		uint8_t candidate[3];
 		h265d_neighbour_t* left_tmp = left + (i >> 1);
@@ -1375,35 +1506,37 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, h265
 		pred_flag >>= 1;
 		intra_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
 	}
-	if (part_num < 4) {
+	if (part_num == 4) {
+		size_log2++;
+	} else {
 		memset(dst.order_luma + 1, dst.order_luma[0], sizeof(dst.order_luma[0]) * 3);
 	}
 	uint32_t chroma_mode_idx = intra_chroma_pred_mode(dst.cabac, st);
 	for (int i = 0; i < 1; ++i) {
 		dst.order_chroma = intra_chroma_pred_dir(chroma_mode_idx, dst.order_luma[i]);
 	}
-	transform_tree(dst, st, size_log2, 0, 3, 0, 0);
+	transform_tree(dst, st, size_log2, 0, 3, offset_x, offset_y, 0, 0, avail);
 }
 
-static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	if ((dst.sps->ctb_info.size_log2_min < size_log2) && split_cu_flag(dst.cabac, st, (6 < size_log2 + left->depth) + (6 < size_log2 + top->depth))) {
 		size_log2 -= 1;
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, left, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y, left, top + info_offset);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, left + info_offset, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y + block_len, left + info_offset, top + info_offset);
+		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail, left, top);
+		quad_tree_normal(dst, st, size_log2, offset_x + block_len, avail | 1, offset_y, left, top + info_offset);
+		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2, left + info_offset, top);
+		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y + block_len, avail | 3, left + info_offset, top + info_offset);
 	} else {
 		intra_depth_fill(left, top, size_log2);
 		if (dst.pps->cu_qp_delta_enabled_flag) {
 			dst.qp_delta_req = 1;
 		}
-		return coding_unit(dst, st, size_log2, left, top, pred_mode_flag_ipic());
+		return coding_unit(dst, st, size_log2, offset_x, offset_y, avail, left, top, pred_mode_flag_ipic());
 	}
 }
 
-static void quad_tree_boundary(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+static void quad_tree_boundary(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	uint32_t block_len = 1 << size_log2;
 	uint32_t base_x = (dst.pos_x << dst.sps->ctb_info.size_log2) + offset_x;
 	uint32_t base_y = (dst.pos_y << dst.sps->ctb_info.size_log2) + offset_y;
@@ -1411,33 +1544,35 @@ static void quad_tree_boundary(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log
 		size_log2 -= 1;
 		uint32_t info_offset = 1 << (size_log2 - 2);
 		block_len >>= 1;
-		quad_tree_boundary(dst, st, size_log2, offset_x, offset_y, left, top);
+		quad_tree_boundary(dst, st, size_log2, offset_x, offset_y, avail, left, top);
 		bool right_skip = (dst.sps->pic_width_in_luma_samples <= base_x + block_len);
 		bool bottom_skip = (dst.sps->pic_height_in_luma_samples <= base_y + block_len);
 		if (!right_skip) {
-			quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y, left, top + info_offset);
+			quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y, avail | 1, left, top + info_offset);
 		}
 		if (!bottom_skip) {
-			quad_tree_boundary(dst, st, size_log2, offset_x, offset_y + block_len, left + info_offset, top);
+			quad_tree_boundary(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2, left + info_offset, top);
 			if (!right_skip) {
-				quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y + block_len, left + info_offset, top + info_offset);
+				quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y + block_len, avail | 3, left + info_offset, top + info_offset);
 			}
 		}
 	} else {
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, left, top);
+		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail, left, top);
 	}
 }
 
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
+	uint32_t avail = (dst.pos_y != 0) * 2 + (dst.pos_x != 0);
 	if ((dst.sps->ctb_info.columns - dst.pos_x < 2) || (dst.sps->ctb_info.rows - dst.pos_y < 2)) {
-		quad_tree_boundary(dst, st, dst.sps->ctb_info.size_log2, 0, 0, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
+		quad_tree_boundary(dst, st, dst.sps->ctb_info.size_log2, 0, 0, avail, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
 	} else {
-		quad_tree_normal(dst, st, dst.sps->ctb_info.size_log2, 0, 0, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
+		quad_tree_normal(dst, st, dst.sps->ctb_info.size_log2, 0, 0, avail, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
 	}
 }
 
-static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h265d_pps_t& pps, const h265d_sps_t& sps) {
+static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps, const h265d_sps_t& sps) {
+	const h265d_slice_header_t& hdr = h2d.slice_header;
 	const h265d_slice_header_body_t& header = hdr.body;
 	int slice_type = header.slice_type;
 	int idc = (slice_type < 2) ? ((slice_type ^ header.cabac_init_flag) + 1) : 0;
@@ -1446,11 +1581,17 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 	dst.sps = &sps;
 	int ctu_address = hdr.slice_segment_address;
 	dst.idx_in_slice = 0;
-	dst.pos_y = (ctu_address / sps.ctb_info.columns) << sps.ctb_info.size_log2;
-	dst.pos_x = (ctu_address - sps.ctb_info.columns * dst.pos_y) << sps.ctb_info.size_log2;
+	dst.pos_y = ctu_address / sps.ctb_info.columns;
+	uint32_t y_offset = sps.ctb_info.columns * dst.pos_y;
+	dst.pos_x = ctu_address - y_offset;
+	uint32_t luma_offset = ((y_offset << sps.ctb_info.size_log2) + dst.pos_x) << sps.ctb_info.size_log2;
+	dst.luma = dst.frames[0].luma + luma_offset;
+	dst.chroma = dst.frames[0].chroma + (luma_offset >> 1);
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
-	dst.qp = pps.init_qp_minus26 + 26;
+	dst.qp = header.slice_qpy;
+	dst.qpcb_delta = header.slice_qpcb_delta;
+	dst.qpcr_delta = header.slice_qpcr_delta;
 	memset(dst.neighbour_left, INTRA_DC, sizeof(dst.neighbour_left));
 	uint32_t neighbour_flags_top_len = sps.ctb_info.columns * sizeof(dst.neighbour_left);
 	memset(dst.neighbour_top, INTRA_DC, neighbour_flags_top_len);
@@ -1459,11 +1600,18 @@ static void ctu_init(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h2
 
 static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	uint32_t pos_x = dst.pos_x + 1;
+	uint32_t size_log2 = dst.sps->ctb_info.size_log2;
 	if (dst.sps->ctb_info.columns <= pos_x) {
 		dst.pos_y++;
 		memset(dst.neighbour_left, INTRA_DC, sizeof(dst.neighbour_left));
 		pos_x = 0;
+		uint32_t y_offset = dst.sps->ctb_info.columns << (size_log2 * 2);
+		uint32_t line_offset = dst.sps->ctb_info.columns << size_log2;
+		dst.luma = dst.luma + y_offset - line_offset;
+		dst.chroma = dst.chroma + (y_offset >> 1) - line_offset;
 	}
+	dst.luma += 1 << size_log2;
+	dst.chroma += 1 << size_log2;
 	dst.pos_x = pos_x;
 	dst.idx_in_slice++;
 	uint32_t num = NUM_ELEM(dst.neighbour_left);
@@ -1474,8 +1622,8 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	return (dst.sps->ctb_info.rows <= dst.pos_y);
 }
 
-static void slice_data(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
-	ctu_init(dst, hdr, pps, sps);
+static void slice_data(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	ctu_init(dst, h2d, pps, sps);
 	init_cabac_engine(&dst.cabac, &st);
 	do {
 		coding_tree_unit(dst, st);
@@ -1496,7 +1644,7 @@ static void slice_layer(h265d_data_t& h2d, dec_bits& st) {
 	const h265d_pps_t& pps = h2d.pps[header.pps_id];
 	const h265d_sps_t& sps = h2d.sps[pps.sps_id];
 	slice_header(header, pps, sps, st);
-	slice_data(h2d.coding_tree_unit, header, pps, sps, st);
+	slice_data(h2d.coding_tree_unit, h2d, pps, sps, st);
 }
 
 static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {
