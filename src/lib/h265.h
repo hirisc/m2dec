@@ -295,8 +295,8 @@ typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
-	int8_t slice_qpcb;
-	int8_t slice_qpcr;
+	int8_t slice_qpcb_delta;
+	int8_t slice_qpcr_delta;
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
 	uint32_t pic_output_flag : 1;
@@ -335,7 +335,7 @@ typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint32_t idx_in_slice;
-	int8_t qp, qp_delta_req;
+	int8_t qp_delta_req, qpy, qpcb_delta, qpcr_delta;
 	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
 	int8_t order_luma[4], order_chroma;
