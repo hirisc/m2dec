@@ -505,8 +505,10 @@ static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t&
 		READ_CHECK_RANGE2(se_golomb(&st), cr_qp_offset, -12, 12, st);
 	}
 	cb_qp_offset += pps.pps_cb_qp_offset;
+	dst.slice_qpcb_delta = cb_qp_offset;
 	CHECK_RANGE2(cb_qp_offset, -12, 12, st);
 	cr_qp_offset += pps.pps_cr_qp_offset;
+	dst.slice_qpcr_delta = cr_qp_offset;
 	CHECK_RANGE2(cr_qp_offset, -12, 12, st);
 	dst.deblocking_filter_disabled_flag = pps.pps_deblocking_filter_disabled_flag;
 	dst.deblocking_filter_override_flag = pps.deblocking_filter_override_enabled_flag ? get_onebit(&st) : 0;
@@ -1245,7 +1247,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx) {
 	if (dst.qp_delta_req) {
 		dst.qp_delta_req = 0;
-		dst.qp += cu_qp_delta(dst.cabac, st);
+		dst.qpy += cu_qp_delta(dst.cabac, st);
 	}
 	if (cbf & 1) {
 		residual_coding(dst, st, size_log2, 0, pred_idx);
@@ -1589,7 +1591,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	dst.chroma = dst.frames[0].chroma + (luma_offset >> 1);
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
-	dst.qp = header.slice_qpy;
+	dst.qpy = header.slice_qpy;
 	dst.qpcb_delta = header.slice_qpcb_delta;
 	dst.qpcr_delta = header.slice_qpcr_delta;
 	memset(dst.neighbour_left, INTRA_DC, sizeof(dst.neighbour_left));
