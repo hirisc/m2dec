@@ -25,6 +25,7 @@
 #ifndef __H264_H__
 #define __H264_H__
 
+#include "m2d.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,7 +45,6 @@ extern "C" {
 #include <stdio.h>
 #endif
 
-#include "m2d.h"
 #define __LIBH264DEC_API
 
 enum {

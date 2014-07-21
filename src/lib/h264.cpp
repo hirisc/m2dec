@@ -3928,48 +3928,6 @@ static int (* const intra8x8pred_func[9])(uint8_t *dst, int stride, int avail) =
 	intra8x8pred_hu
 };
 
-struct AddSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) const {
-		uint32_t msk;
-		msk = ((x & y) + (((x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
-		msk = (msk << 1) - (msk >> 7);
-		return ((x + y) - msk) | msk;
-	}
-};
-
-struct SubSaturate {
-	uint32_t operator()(uint32_t x, uint32_t y) const {
-		uint32_t msk;
-		msk = ((~x & y) + (((~x ^ y) >> 1) & 0x7f7f7f7f)) & ~0x7f7f7f7f;
-		msk = (msk << 1) - (msk >> 7);
-		return (x | msk) - (y | msk);
-	}
-};
-
-template<int N, typename T>
-static inline void acNxNtransform_dconly_base(uint8_t *dst, uint32_t dc, int stride, T saturate)
-{
-	int y = N;
-	dc = dc * 0x01010101;
-	do {
-		for (int x = 0; x < N / 4; ++x) {
-			((uint32_t *)dst)[x] = saturate(((uint32_t *)dst)[x], dc);
-		}
-		dst += stride;
-	} while (--y);
-}
-
-template<int N>
-static void acNxNtransform_dconly(uint8_t *dst, int dc, int stride)
-{
-	dc = (dc + 32) >> 6;
-	if (dc < 0) {
-		acNxNtransform_dconly_base<N>(dst, (uint32_t)(-dc), stride, SubSaturate());
-	} else {
-		acNxNtransform_dconly_base<N>(dst, (uint32_t)dc, stride, AddSaturate());
-	}
-}
-
 // t0 = src[0] + src[4];
 // t1 = src[5] - src[3] - src[7] - (src[7] >> 1);
 // t2 = src[0] - src[4];
@@ -4115,7 +4073,7 @@ static void ac8x8transform(uint8_t *dst, const int *coeff, int stride, int coeff
 {
 	int c0;
 	if ((coeff_num == 1) && ((c0 = coeff[0]) != 0)) {
-		acNxNtransform_dconly<8>(dst, c0, stride);
+		acNxNtransform_dconly<8, 6, 0, cache_t>(dst, c0, stride);
 	} else {
 		ac8x8transform_acdc(dst, coeff, stride);
 	}
@@ -4419,7 +4377,7 @@ static inline void ac4x4transform(uint8_t *dst, int *coeff, int stride, int num_
 		coeff[0] = dc;
 		ac4x4transform_acdc_luma(dst, coeff, stride);
 	} else {
-		acNxNtransform_dconly<4>(dst, dc, stride);
+		acNxNtransform_dconly<4, 6, 0, cache_t>(dst, dc, stride);
 	}
 }
 
@@ -4477,7 +4435,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 		intra16x16_dc_transform(coeff, dc);
 		offset = mb->offset4x4;
 		for (int i = 0; i < 16; ++i) {
-			acNxNtransform_dconly<4>(luma + *offset++, dc[i], stride);
+			acNxNtransform_dconly<4, 6, 0, cache_t>(luma + *offset++, dc[i], stride);
 		}
 	}
 	mb->left4x4coef &= 0xffff0000;
