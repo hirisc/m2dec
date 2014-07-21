@@ -100,6 +100,7 @@ typedef struct {
 	uint8_t transform_log2;
 	uint8_t transform_log2_min;
 	uint8_t num_ctb_log2;
+	uint16_t stride;
 	uint16_t columns;
 	uint16_t rows;
 } h265d_sps_ctb_info_t;
@@ -295,8 +296,7 @@ typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
-	int8_t slice_qpcb_delta;
-	int8_t slice_qpcr_delta;
+	int8_t slice_qpc_delta[2];
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
 	uint32_t pic_output_flag : 1;
@@ -331,11 +331,20 @@ typedef struct {
 	uint8_t depth : 2;
 } h265d_neighbour_t;
 
+typedef struct {
+	int32_t scale;
+	uint8_t** matrix;
+} h265d_scaling_info_t;
+
+typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t& scale, int idx);
+
 typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint32_t idx_in_slice;
-	int8_t qp_delta_req, qpy, qpcb_delta, qpcr_delta;
+	int8_t qp_delta_req, qpy;
+	int8_t qpc_delta[2];
+	h265d_scaling_info_t qp_scale[3];
 	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
 	int8_t order_luma[4], order_chroma;
@@ -344,6 +353,8 @@ typedef struct h265d_ctu_t {
 	const h265d_pps_t* pps;
 	h265d_neighbour_t neighbour_left[16];
 	h265d_neighbour_t* neighbour_top; // use 16 bytes for each CTU
+	uint8_t qp_history[2][16];
+	const h265d_scaling_func_t* scaling_func;
 	h265d_sao_map_t* sao_map;
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	uint8_t* luma;
