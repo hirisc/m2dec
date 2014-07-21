@@ -284,6 +284,64 @@ static int header_dummyfunc(void *arg, void *seq_id) {return 0;}
 
 #ifdef __cplusplus
 }
+
+template <typename T>
+struct AddSaturate {
+	T operator()(T x, T y) const {
+		T msk;
+		msk = ((x & y) + (((x ^ y) >> 1) & 0x7f7f7f7f7f7f7f7fULL)) & ~0x7f7f7f7f7f7f7f7fULL;
+		msk = (msk << 1) - (msk >> 7);
+		return ((x + y) - msk) | msk;
+	}
+};
+
+template <typename T>
+struct SubSaturate {
+	T operator()(T x, T y) const {
+		T msk;
+		msk = ((~x & y) + (((~x ^ y) >> 1) & 0x7f7f7f7f7f7f7f7fULL)) & ~0x7f7f7f7f7f7f7f7fULL;
+		msk = (msk << 1) - (msk >> 7);
+		return (x | msk) - (y | msk);
+	}
+};
+
+template<int N, int colour, typename T, typename F>
+static inline void acNxNtransform_dconly_base(uint8_t *dst, T dc, int stride, F saturate)
+{
+	int y = N;
+	dc *= static_cast<T>((colour == 0) ? 0x0101010101010101ULL : ((colour == 1) ? 0x0001000100010001ULL : 0x0100010001000100ULL));
+	const int max = ((colour == 0 ? N : N * 2) / sizeof(T)) ? ((colour == 0 ? N : N * 2) / sizeof(T)) : 1;
+	do {
+		for (int x = 0; x < max; ++x) {
+			((T*)dst)[x] = saturate(((T*)dst)[x], dc);
+		}
+		dst += stride;
+	} while (--y);
+}
+
+template <int N, int SHIFT>
+struct IdctAdjust {
+	int operator()(int dc) const {
+		return (dc + (1 << (SHIFT - 1))) >> SHIFT;
+	}
+};
+
+template<int N, int colour, typename T, typename F>
+static void acNxNtransform_dconly_generic(uint8_t *dst, int dc, int stride, F Adjust)
+{
+	dc = Adjust(dc);
+	if (dc < 0) {
+		acNxNtransform_dconly_base<N, colour>(dst, static_cast<T>(-dc), stride, SubSaturate<T>());
+	} else {
+		acNxNtransform_dconly_base<N, colour>(dst, static_cast<T>(dc), stride, AddSaturate<T>());
+	}
+}
+
+template<int N, int SHIFT, int colour, typename T>
+static void acNxNtransform_dconly(uint8_t *dst, int dc, int stride) {
+	acNxNtransform_dconly_generic<N, colour, T>(dst, dc, stride, IdctAdjust<N, SHIFT>());
+}
+
 #endif
 
 #endif /* __M2D_H__ */
