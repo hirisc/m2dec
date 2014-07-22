@@ -1257,21 +1257,126 @@ static const h265d_scaling_func_t scaling_default_func[4] = {
 };
 
 template<int N, int SHIFT, int colour, typename T>
-static inline void NxNtransform_dconly(uint8_t *dst, const int16_t* coeff, int stride) {
+static inline void NxNtransform_dconly(uint8_t *dst, int16_t* coeff, int stride) {
 	acNxNtransform_dconly<N, SHIFT, colour, T>(dst, coeff[0], stride);
 }
 
-static inline void NxNtransform_horiz(uint8_t *dst, const int16_t* coeff, int stride) {
-	static const int16_t odd[] = {
+template <int LOG2, typename F>
+static inline void transform_horiz4(int16_t *dst, const int16_t* coeff, F Saturate) {
+	int c0 = coeff[0];
+	int c1 = coeff[1 << (LOG2 - 2)];
+	int c2 = coeff[2 << (LOG2 - 2)];
+	int c3 = coeff[3 << (LOG2 - 2)];
+	int odd0 = c1 * 83 + c3 * 36;
+	int even0 = (c0 + c2) * 64;
+	int odd1 = c1 * 36 - c3 * 83;
+	int even1 = (c0 - c2) * 64;
+	dst[0] = Saturate(even0 + odd0);
+	dst[1] = Saturate(even1 + odd1);
+	dst[2] = Saturate(even1 - odd1);
+	dst[3] = Saturate(even0 - odd0);
+}
+
+struct nosat16 {
+	int operator()(int val) const {
+		return val;
+	}
+};
+
+template <int LOG2, typename F>
+static inline void transform_horiz8(int16_t *dst, const int16_t* coeff, F Saturate) {
+	int16_t tmp[4];
+	transform_horiz4<LOG2>(tmp, coeff, nosat16());
+	int c1 = coeff[1 << (LOG2 - 3)];
+	int c3 = coeff[3 << (LOG2 - 3)];
+	int c5 = coeff[5 << (LOG2 - 3)];
+	int c7 = coeff[7 << (LOG2 - 3)];
+	int eo0 = c1 * 89 + c3 * 75 + c5 * 50 + c7 * 18;
+	int eo1 = c1 * 75 - c3 * 18 - c5 * 89 - c7 * 50;
+	int eo2 = c1 * 50 - c3 * 89 + c5 * 18 + c7 * 75;
+	int eo3 = c1 * 18 - c3 * 50 + c5 * 75 + c7 * 89;
+	dst[0] = Saturate(tmp[0] + eo0);
+	dst[4] = Saturate(tmp[0] - eo0);
+	dst[1] = Saturate(tmp[1] + eo1);
+	dst[5] = Saturate(tmp[1] - eo1);
+	dst[2] = Saturate(tmp[2] + eo2);
+	dst[6] = Saturate(tmp[2] - eo2);
+	dst[3] = Saturate(tmp[3] + eo3);
+	dst[7] = Saturate(tmp[3] - eo3);
+}
+
+template <int LOG2, typename F>
+static inline void transform_horiz16(int16_t *dst, const int16_t* coeff, F Saturate) {
+	static const int16_t oddc[] = {
 		90, 87, 80, 70, 57, 43, 25, 9,
 		87, 57, 9, -43, -80, -90, -70, -25,
 		80, 9, -70, -87, -25, 57, 90, 43,
-		70, -43,
+		70, -43, -90, -22, 82, 54, -61, -78,
+		57, -80, -25, 90, -9, -87, 43, 70,
+		43, -90, 57, 25, -87, 70, 9, -80,
+		25, -70, 90, -80, 43, 9, -57, 87,
+		9, -25, 43, -57, 70, -80, 87, -90
 	};
-	(coeff[1] >> 1) * 90 + (coeff[3] >> 1) * 87 + (coeff[5] >> 1) * 80 + (coeff[7] >> 1) * 70 + (coeff[9] >> 1) * 57 + (coeff[11] >> 1) * 43 + (coeff[13] >> 1) * 25 + (coeff[15] >> 1) * 9;
+	int16_t even[8];
+	transform_horiz8<LOG2>(even, coeff, nosat16());
+	const int16_t* c = oddc;
+	coeff += 1 << (LOG2 - 4);
+	for (int i = 0; i < 8; ++i) {
+		int sum = 0;
+		for (int j = 0; j < 8; ++j) {
+			sum += coeff[j * (1 << (LOG2 - 3))] * *c++;
+		}
+		int ev = even[i];
+		dst[i] = Saturate(ev + sum);
+		dst[15 - i] = Saturate(ev - sum);
+	}
 }
 
-static void (* const transform_func[3][3][4])(uint8_t *dst, const int16_t* coeff, int stride) = {
+template <int LOG2, typename F>
+static inline void transform_horiz32(int16_t *dst, const int16_t* coeff, F Saturate) {
+	static const int16_t oddc[] = {
+		90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4,
+		90, 82, 67, 46, 22, -4, -31, -54, -73, -85, -90, -88, -78, -61,-38, -13,
+		88, 67, 31, -13, -54, -82, -90, -78, -46, -4, 38, 73, 90, 85, 61, 22,
+	};
+}
+
+template <int LOG2>
+static inline void transform_horiz_pretruncate(int16_t *dst) {
+	for (int i = 0; i < (1 << LOG2); ++i) {
+		dst[i] = (dst[i] + 1) >> 1;
+	}
+}
+
+template <int LOG2>
+struct sat16 {
+	int16_t operator()(int val) const {
+		val = (val + (1 << (LOG2 + 7))) >> (LOG2 + 8);
+		return SATURATE16BIT(val);
+	}
+};
+
+template <int LOG2>
+static inline void transform_horiz(uint8_t* dst, int16_t* coeff, int stride) {
+	transform_horiz_pretruncate<LOG2>(coeff);
+	if (LOG2 == 2) {
+		transform_horiz4<LOG2>(coeff, coeff, sat16<LOG2>());
+	} else if (LOG2 == 3) {
+		transform_horiz8<LOG2>(coeff, coeff, sat16<LOG2>());
+	} else if (LOG2 == 4) {
+		transform_horiz16<LOG2>(coeff, coeff, sat16<LOG2>());
+	} else {
+	}
+	for (int y = 0; y < (1 << LOG2); ++y) {
+		for (int x = 0; x < (1 << LOG2); ++x) {
+			int v = dst[x] + coeff[x];
+			dst[x] = CLIP255C(v);
+		}
+		dst += stride;
+	}
+}
+
+static void (* const transform_func[3][3][4])(uint8_t *dst, int16_t* coeff, int stride) = {
 	{
 		{
 			NxNtransform_dconly<4, 5, 0, uint64_t>,
@@ -1292,9 +1397,17 @@ static void (* const transform_func[3][3][4])(uint8_t *dst, const int16_t* coeff
 			NxNtransform_dconly<32, 8, 2, uint64_t>
 		}
 	},
+	{
+		{
+			transform_horiz<2>,
+			transform_horiz<3>,
+			transform_horiz<4>,
+			transform_horiz<5>
+		},
+	}
 };
 
-static inline void transform(const int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t x_coeff, uint32_t y_coeff) {
+static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t x_coeff, uint32_t y_coeff) {
 	transform_func[(y_coeff != 0) * 2 + (x_coeff != 0)][colour][size_log2 - 2](frame, coeff, stride);
 }
 
