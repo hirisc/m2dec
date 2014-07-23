@@ -341,12 +341,14 @@ typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t
 typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
+	uint16_t pos_in_slice;
 	uint32_t idx_in_slice;
 	int8_t qp_delta_req, qpy;
 	int8_t qpc_delta[2];
 	h265d_scaling_info_t qp_scale[3];
 	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
+	uint8_t not_first_row : 1;
 	int8_t order_luma[4], order_chroma;
 	const h265d_sps_t* sps;
 	const h265d_slice_header_t* slice_header;
@@ -363,7 +365,7 @@ typedef struct h265d_ctu_t {
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
 	h265d_cabac_context_t context;
-	int16_t coeff_buf[32 * 32];
+	int16_t coeff_buf[32 * 32 * 2];
 } h265d_ctu_t;
 
 typedef struct {

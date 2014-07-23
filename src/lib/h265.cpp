@@ -1191,11 +1191,12 @@ static inline uint32_t sig_coeff_greater(int colour, int subblock_idx, uint8_t& 
 	return max_flags;
 }
 
-static inline void sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t coeff[], uint32_t max_coeffs, uint8_t hidden_sign, uint16_t sign_flags, const int8_t xy_pos[], int16_t* dst, uint32_t write_pos, const h265d_scaling_func_t scaling, const h265d_scaling_info_t& scale, m2d_cabac_t& cabac, dec_bits& st) {
+static inline uint32_t sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t coeff[], uint32_t max_coeffs, uint8_t hidden_sign, uint16_t sign_flags, const int8_t xy_pos[], int16_t* dst, uint32_t write_pos, const h265d_scaling_func_t scaling, const h265d_scaling_info_t& scale, m2d_cabac_t& cabac, dec_bits& st) {
 	uint32_t rice_param = 0;
 	uint32_t sign_mask = 1 << (num_coeff - 1 - hidden_sign);
 	uint32_t last_write_pos;
 	int32_t level_sum = 0;
+	uint32_t xy_pos_sum = 0;
 	for (uint32_t i = 0; i < num_coeff; ++i) {
 		uint32_t abs_level = coeff[i].val;
 		if (max_coeffs & 1) {
@@ -1204,6 +1205,7 @@ static inline void sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t coef
 		}
 		level_sum += abs_level;
 		last_write_pos = write_pos + xy_pos[coeff[i].pos];
+		xy_pos_sum |= last_write_pos;
 		uint32_t sign = (sign_flags & sign_mask) != 0;
 		dst[last_write_pos] = scaling(NEGATE(abs_level, sign), scale, last_write_pos);
 		sign_mask >>= 1;
@@ -1212,6 +1214,7 @@ static inline void sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t coef
 	if (hidden_sign && (level_sum & 1)) {
 		dst[last_write_pos] = -dst[last_write_pos];
 	}
+	return xy_pos_sum;
 }
 
 class sub_block_flags_t {
@@ -1291,10 +1294,10 @@ static inline void transform_horiz8(int16_t *dst, const int16_t* coeff, F Satura
 	int c3 = coeff[3 << (LOG2 - 3)];
 	int c5 = coeff[5 << (LOG2 - 3)];
 	int c7 = coeff[7 << (LOG2 - 3)];
-	int eo0 = c1 * 89 + c3 * 75 + c5 * 50 + c7 * 18;
-	int eo1 = c1 * 75 - c3 * 18 - c5 * 89 - c7 * 50;
-	int eo2 = c1 * 50 - c3 * 89 + c5 * 18 + c7 * 75;
-	int eo3 = c1 * 18 - c3 * 50 + c5 * 75 + c7 * 89;
+	int eo0 = 89 * c1 + 75 * c3 + 50 * c5 + 18 * c7;
+	int eo1 = 75 * c1 - 18 * c3 - 89 * c5 - 50 * c7;
+	int eo2 = 50 * c1 - 89 * c3 + 18 * c5 + 75 * c7;
+	int eo3 = 18 * c1 - 50 * c3 + 75 * c5 - 89 * c7;
 	dst[0] = Saturate(tmp[0] + eo0);
 	dst[4] = Saturate(tmp[0] - eo0);
 	dst[1] = Saturate(tmp[1] + eo1);
@@ -1305,40 +1308,82 @@ static inline void transform_horiz8(int16_t *dst, const int16_t* coeff, F Satura
 	dst[7] = Saturate(tmp[3] - eo3);
 }
 
+static const int8_t transform_oddc8[] = {
+	90, 87, 80, 70, 57, 43, 25, 9,
+	87, 57, 9, -43, -80, -90, -70, -25,
+	80, 9, -70, -87, -25, 57, 90, 43,
+	70, -43, -87, 9, 90, 25, -80, -57,
+	57, -80, -25, 90, -9, -87, 43, 70,
+	43, -90, 57, 25, -87, 70, 9, -80,
+	25, -70, 90, -80, 43, 9, -57, 87,
+	9, -25, 43, -57, 70, -80, 87, -90
+};
+
+static const int8_t transform_oddc16[] = {
+	90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4,
+	90, 82, 67, 46, 22, -4, -31, -54, -73, -85, -90, -88, -78, -61, -38, -13,
+	88, 67, 31, -13, -54, -82, -90, -78, -46, -4, 38, 73, 90, 85, 61, 22,
+	85, 46, -13, -67, -90, -73, -22, 38, 82, 88, 54, -4, -61, -90, -78, -31,
+	82, 22, -54, -90, -61, 13, 78, 85, 31, -46, -90, -67, 4, 73, 88, 38,
+	78, -4, -82, -73, 13, 85, 67, -22, -88, -61, 31, 90, 54, -38, -90, -46,
+	73, -31, -90, -22, 78, 67, -38, -90, -13, 82, 61, -46, -88, -4, 85, 54,
+	67, -54, -78, 38, 85, -22, -90, 4, 90, 13, -88, -31, 82, 46, -73, -61,
+	61, -73, -46, 82, 31, -88, -13, 90, -4, -90, 22, 85, -38, -78, 54, 67,
+	54, -85, -4, 88, -46, -61, 82, 13, -90, 38, 67, -78, -22, 90, -31, -73,
+	46, -90, 38, 54, -90, 31, 61, -88, 22, 67, -85, 13, 73, -82, 4, 78,
+	38, -88, 73, -4, -67, 90, -46, -31, 85, -78, 13, 61, -90, 54, 22, -82,
+	31, -78, 90, -61, 4, 54, -88, 82, -38, -22, 73, -90, 67, -13, -46, 85,
+	22, -61, 85, -90, 73, -38, -4, 46, -78, 90, -82, 54, -13, -31, 67, -88,
+	13, -38, 61, -78, 88, -90, 85, -73, 54, -31, 4, 22, -46, 67, -82, 90,
+	4, -13, 22, -31, 38, -46, 54, -61, 67, -73, 78, -82, 85, -88, 90, -90
+};
+
 template <int LOG2, typename F>
 static inline void transform_horiz16(int16_t *dst, const int16_t* coeff, F Saturate) {
-	static const int16_t oddc[] = {
-		90, 87, 80, 70, 57, 43, 25, 9,
-		87, 57, 9, -43, -80, -90, -70, -25,
-		80, 9, -70, -87, -25, 57, 90, 43,
-		70, -43, -90, -22, 82, 54, -61, -78,
-		57, -80, -25, 90, -9, -87, 43, 70,
-		43, -90, 57, 25, -87, 70, 9, -80,
-		25, -70, 90, -80, 43, 9, -57, 87,
-		9, -25, 43, -57, 70, -80, 87, -90
-	};
 	int16_t even[8];
 	transform_horiz8<LOG2>(even, coeff, nosat16());
-	const int16_t* c = oddc;
+	const int8_t* c = transform_oddc8;
 	coeff += 1 << (LOG2 - 4);
+	int c0 = coeff[0];
+	int c1 = coeff[1 << (LOG2 - 3)];
+	int c2 = coeff[2 << (LOG2 - 3)];
+	int c3 = coeff[3 << (LOG2 - 3)];
+	int c4 = coeff[4 << (LOG2 - 3)];
+	int c5 = coeff[5 << (LOG2 - 3)];
+	int c6 = coeff[6 << (LOG2 - 3)];
+	int c7 = coeff[7 << (LOG2 - 3)];
 	for (int i = 0; i < 8; ++i) {
-		int sum = 0;
-		for (int j = 0; j < 8; ++j) {
-			sum += coeff[j * (1 << (LOG2 - 3))] * *c++;
-		}
+		int sum = c0 * *c++;
+		sum += c1 * *c++;
+		sum += c2 * *c++;
+		sum += c3 * *c++;
+		sum += c4 * *c++;
+		sum += c5 * *c++;
+		sum += c6 * *c++;
+		sum += c7 * *c++;
 		int ev = even[i];
 		dst[i] = Saturate(ev + sum);
 		dst[15 - i] = Saturate(ev - sum);
 	}
 }
 
-template <int LOG2, typename F>
-static inline void transform_horiz32(int16_t *dst, const int16_t* coeff, F Saturate) {
-	static const int16_t oddc[] = {
-		90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13, 4,
-		90, 82, 67, 46, 22, -4, -31, -54, -73, -85, -90, -88, -78, -61,-38, -13,
-		88, 67, 31, -13, -54, -82, -90, -78, -46, -4, 38, 73, 90, 85, 61, 22,
-	};
+template <int LOG2>
+static inline void transform_horiz32(int16_t *dst, const int16_t* coeff) {
+	int16_t even[16];
+	transform_horiz16<LOG2>(even, coeff, nosat16());
+	const int8_t* c = transform_oddc16;
+	coeff += 1;
+	for (int i = 0; i < 16; ++i) {
+		int sum = 0;
+		for (int j = 0; j < 16; ++j) {
+			sum += coeff[j * 2] * *c++;
+		}
+		int ev = even[i];
+		int t0 = (ev + sum + (1 << 12)) >> 13;
+		int t1 = (ev - sum + (1 << 12)) >> 13;
+		dst[i] = SATURATE16BIT(t0);
+		dst[31 - i] = SATURATE16BIT(t1);
+	}
 }
 
 template <int LOG2>
@@ -1356,27 +1401,94 @@ struct sat16 {
 	}
 };
 
-template <int LOG2>
+template <int LOG2, int colour>
+static inline void add_transformed_coeff_line(uint8_t* dst, const int16_t* coeff) {
+	for (int x = 0; x < (1 << LOG2); ++x) {
+		int v = dst[x << ((colour + 1) >> 1)] + coeff[x];
+		dst[x << ((colour + 1) >> 1)] = CLIP255C(v);
+	}
+}
+
+template <int LOG2, int colour>
 static inline void transform_horiz(uint8_t* dst, int16_t* coeff, int stride) {
 	transform_horiz_pretruncate<LOG2>(coeff);
 	if (LOG2 == 2) {
-		transform_horiz4<LOG2>(coeff, coeff, sat16<LOG2>());
+		transform_horiz4<2>(coeff, coeff, sat16<2>());
 	} else if (LOG2 == 3) {
-		transform_horiz8<LOG2>(coeff, coeff, sat16<LOG2>());
+		transform_horiz8<3>(coeff, coeff, sat16<3>());
 	} else if (LOG2 == 4) {
-		transform_horiz16<LOG2>(coeff, coeff, sat16<LOG2>());
+		transform_horiz16<4>(coeff, coeff, sat16<4>());
 	} else {
+		transform_horiz32<5>(coeff, coeff);
 	}
+	dst += (colour >> 1);
 	for (int y = 0; y < (1 << LOG2); ++y) {
+		add_transformed_coeff_line<LOG2, colour>(dst, coeff);
+		dst += stride;
+	}
+}
+
+template <int LOG2>
+static inline void transform_vert_pretruncate(int16_t *dst) {
+	for (int i = 0; i < (1 << LOG2); ++i) {
+		dst[i << LOG2] = (dst[i << LOG2] + 1) >> 1;
+	}
+}
+
+template <int LOG2, int colour>
+static inline void transform_vert(uint8_t* dst, int16_t* coeff, int stride) {
+	transform_vert_pretruncate<LOG2>(coeff);
+	if (LOG2 == 2) {
+		transform_horiz4<4>(coeff, coeff, sat16<2>());
+	} else if (LOG2 == 3) {
+		transform_horiz8<6>(coeff, coeff, sat16<3>());
+	} else if (LOG2 == 4) {
+		transform_horiz16<8>(coeff, coeff, sat16<4>());
+	} else {
+		transform_horiz32<10>(coeff, coeff);
+	}
+	dst += (colour >> 1);
+	for (int y = 0; y < (1 << LOG2); ++y) {
+		int diff = coeff[y << LOG2];
 		for (int x = 0; x < (1 << LOG2); ++x) {
-			int v = dst[x] + coeff[x];
-			dst[x] = CLIP255C(v);
+			int v = dst[x << ((colour + 1) >> 1)] + diff;
+			dst[x << ((colour + 1) >> 1)] = CLIP255C(v);
 		}
 		dst += stride;
 	}
 }
 
-static void (* const transform_func[3][3][4])(uint8_t *dst, int16_t* coeff, int stride) = {
+template <int LOG2, int colour>
+static inline void transform_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
+	int16_t* tmp = coeff + (1 << (LOG2 * 2));
+	for (int x = 0; x < (1 << LOG2); ++x) {
+		if (LOG2 == 2) {
+			transform_horiz4<4>(tmp + x * 4, coeff + x, sat16<2>());
+		} else if (LOG2 == 3) {
+			transform_horiz8<6>(tmp + x * 8, coeff + x, sat16<3>());
+		} else if (LOG2 == 4) {
+			transform_horiz16<8>(tmp + x * 16, coeff + x, sat16<4>());
+		} else {
+			transform_horiz32<10>(tmp + x * 32, coeff + x);
+		}
+	}
+	for (int y = 0; y < (1 << LOG2); ++y) {
+		if (LOG2 == 2) {
+			transform_horiz4<2>(coeff, tmp, sat16<2>());
+		} else if (LOG2 == 3) {
+			transform_horiz8<3>(coeff, tmp, sat16<3>());
+		} else if (LOG2 == 4) {
+			transform_horiz16<4>(coeff, tmp, sat16<4>());
+		} else {
+			transform_horiz32<5>(coeff, coeff);
+		}
+		add_transformed_coeff_line<LOG2, colour>(dst, coeff);
+		dst += stride;
+		tmp += 1 << LOG2;
+	}
+}
+
+static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int stride) = {
 	{
 		{
 			NxNtransform_dconly<4, 5, 0, uint64_t>,
@@ -1399,16 +1511,68 @@ static void (* const transform_func[3][3][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transform_horiz<2>,
-			transform_horiz<3>,
-			transform_horiz<4>,
-			transform_horiz<5>
+			transform_horiz<2, 0>,
+			transform_horiz<3, 0>,
+			transform_horiz<4, 0>,
+			transform_horiz<5, 0>
 		},
+		{
+			transform_horiz<2, 1>,
+			transform_horiz<3, 1>,
+			transform_horiz<4, 1>,
+			transform_horiz<5, 1>
+		},
+		{
+			transform_horiz<2, 2>,
+			transform_horiz<3, 2>,
+			transform_horiz<4, 2>,
+			transform_horiz<5, 2>
+		}
+	},
+	{
+		{
+			transform_vert<2, 0>,
+			transform_vert<3, 0>,
+			transform_vert<4, 0>,
+			transform_vert<5, 0>
+		},
+		{
+			transform_vert<2, 1>,
+			transform_vert<3, 1>,
+			transform_vert<4, 1>,
+			transform_vert<5, 1>
+		},
+		{
+			transform_vert<2, 2>,
+			transform_vert<3, 2>,
+			transform_vert<4, 2>,
+			transform_vert<5, 2>
+		}
+	},
+	{
+		{
+			transform_acNxN<2, 0>,
+			transform_acNxN<3, 0>,
+			transform_acNxN<4, 0>,
+			transform_acNxN<5, 0>
+		},
+		{
+			transform_acNxN<2, 1>,
+			transform_acNxN<3, 1>,
+			transform_acNxN<4, 1>,
+			transform_acNxN<5, 1>
+		},
+		{
+			transform_acNxN<2, 2>,
+			transform_acNxN<3, 2>,
+			transform_acNxN<4, 2>,
+			transform_acNxN<5, 2>
+		}
 	}
 };
 
-static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t x_coeff, uint32_t y_coeff) {
-	transform_func[(y_coeff != 0) * 2 + (x_coeff != 0)][colour][size_log2 - 2](frame, coeff, stride);
+static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t xy_pos_sum) {
+	transform_func[((xy_pos_sum & 0xc) != 0) * 2 + ((xy_pos_sum & ~3) != 0)][colour][size_log2 - 2](frame, coeff, stride);
 }
 
 static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour, int pred_idx, uint8_t* frame) {
@@ -1434,6 +1598,9 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	uint32_t y = last_sig_coeff_prefix_luma(dst.cabac, st, reinterpret_cast<h265d_cabac_context_t*>(dst.cabac.context)->last_sig_coeff_y_prefix + offset, shift, max);
 	uint32_t last_sig_coeff_x = last_sig_coeff_suffix_add(dst.cabac, st, x);
 	uint32_t last_sig_coeff_y = last_sig_coeff_suffix_add(dst.cabac, st, y);
+	if ((last_sig_coeff_x != 0) || (last_sig_coeff_y != 0)) {
+		memset(dst.coeff_buf, 0, sizeof(dst.coeff_buf[0]) << (size_log2 * 2));
+	}
 	sub_block_flags_t sub_block_info(size_log2);
 	uint32_t order_idx = 0;
 	if (colour == 0) {
@@ -1454,6 +1621,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 	uint32_t num = order.inner_pos_num[scan_order_index(last_sig_coeff_x & 3, last_sig_coeff_y & 3, 2)];
 	const h265d_scaling_func_t scaling = dst.scaling_func[size_log2 - 2];
 	const h265d_scaling_info_t& scaling_info = dst.qp_scale[colour];
+	uint32_t xy_pos_sum = 0;
 	do {
 		uint32_t sxy = order.sub_block_pos[i];
 		uint32_t prev_sbf = sub_block_info.prev_flags(sxy);
@@ -1467,11 +1635,11 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			uint32_t max_coeffs = sig_coeff_greater(colour, i, greater1ctx, sig_coeff_flags, num_coeff, dst.cabac, st);
 			uint8_t hidden_bit = (dst.pps->sign_data_hiding_enabled_flag && (3 < sig_coeff_flags[0].pos - sig_coeff_flags[num_coeff - 1].pos));
 			uint16_t sign_flags = coeff_sign_flags(dst.cabac, st, num_coeff - hidden_bit);
-			sig_coeff_writeback(num_coeff, sig_coeff_flags, max_coeffs, hidden_bit, sign_flags, order.macro_xy_pos, dst.coeff_buf, sub_block_info.offset(), scaling, scaling_info, dst.cabac, st);
+			xy_pos_sum |= sig_coeff_writeback(num_coeff, sig_coeff_flags, max_coeffs, hidden_bit, sign_flags, order.macro_xy_pos, dst.coeff_buf, sub_block_info.offset(), scaling, scaling_info, dst.cabac, st);
 		}
 		num = 15;
 	} while (0 <= --i);
-	transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, last_sig_coeff_x, last_sig_coeff_y);
+	transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
 }
 
 static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx, uint32_t offset_luma, uint32_t offset_chroma) {
@@ -1604,14 +1772,44 @@ static void intra_pred_dc(uint8_t* dst, uint32_t size_log2, uint32_t stride, uin
 	}
 }
 
+static const uint8_t unavail_top[34] = {
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+	128, 128
+};
+
+template <int N>
+static void intra_pred_planar(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
+	const uint8_t* top = (avail & 2) ? dst - stride : unavail_top;
+	unsigned size = 1 << size_log2;
+	unsigned leftbottom = (avail & 4) ? dst[stride * size - N] : unavail_top[0];
+	unsigned righttop = (avail & 8) ? top[size] : unavail_top[0];
+	unsigned base = size;
+	unsigned y = size;
+	do {
+		unsigned left = (avail & 1) ? dst[-N] : 128;
+		base += leftbottom;
+		unsigned bs = (left << size_log2) + base;
+		uint32_t yscale = y - 1;
+		for (unsigned x = 0; x < size; ++x) {
+			bs = bs - left + righttop;
+			dst[x * N] = (bs + yscale * top[x * N]) >> (size_log2 + 1);
+		}
+		dst += stride;
+	} while (--y);
+}
+
 template <int N>
 static inline void intra_prediction_dispatch(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode) {
 	switch (mode) {
+	case 0:
+		intra_pred_planar<N>(dst, size_log2, stride, avail);
+		break;
 	case 1:
 		intra_pred_dc<N>(dst, size_log2, stride, avail);
 		break;
 	default:
-//		assert(0);
+		assert(0);
 		break;
 	}
 }
@@ -1702,10 +1900,10 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		size_log2 -= 1;
 		depth += 1;
 		uint32_t block_len = 1 << size_log2;
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y, 0, pi0, avail);
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y, 1, pi1, avail | 1);
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y + block_len, 2, pi2, avail | 2);
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y + block_len, 3, pi3, avail | 3);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y, 0, pi0, avail | ((avail & 3) << 2));
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y, 1, pi1, (avail | 1) & ~4);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y + block_len, 2, pi2, avail | 2 | 8);
+		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y + block_len, 3, pi3, (avail | 3) & ~8);
 	} else {
 		uint32_t stride = dst.sps->ctb_info.stride;
 		uint32_t offset_luma = offset_y * stride + offset_x;
@@ -1796,10 +1994,10 @@ static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2,
 		size_log2 -= 1;
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail, left, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, avail | 1, offset_y, left, top + info_offset);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2, left + info_offset, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y + block_len, avail | 3, left + info_offset, top + info_offset);
+		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail | ((avail & 3) << 2), left, top);
+		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y, (avail | 1) & ~4, left, top + info_offset);
+		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2 | 8, left + info_offset, top);
+		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y + block_len, (avail | 3) & ~8, left + info_offset, top + info_offset);
 	} else {
 		intra_depth_fill(left, top, size_log2);
 		if (dst.pps->cu_qp_delta_enabled_flag) {
@@ -1836,7 +2034,7 @@ static void quad_tree_boundary(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log
 
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
-	uint32_t avail = (dst.pos_y != 0) * 2 + (dst.pos_x != 0);
+	uint32_t avail = (dst.not_first_row ? (8 + 2) : 0) + (dst.pos_x != 0);
 	if ((dst.sps->ctb_info.columns - dst.pos_x < 2) || (dst.sps->ctb_info.rows - dst.pos_y < 2)) {
 		quad_tree_boundary(dst, st, dst.sps->ctb_info.size_log2, 0, 0, avail, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
 	} else {
