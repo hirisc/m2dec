@@ -684,7 +684,7 @@ struct UniSurface {
 //		SDL_LockYUVOverlay(yuv);
 //		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
 //		SDL_UnlockYUVOverlay(yuv);
-		deinterleave(out.chroma, &cbcr_[0], out.width, out.height >> 1);
+		deinterleave(out.chroma, &cbcr_[0], out.width, (out.height - out.crop[3]) >> 1);
 		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], out.width, &cbcr_[out.width >> 1], out.width);
 		SDL_RenderClear(renderer_);
 		SDL_RenderCopy(renderer_, texture_, NULL, NULL);
