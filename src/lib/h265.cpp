@@ -1375,7 +1375,7 @@ static inline void transform_line32(int16_t *dst, const int16_t* coeff, F Satura
 	for (int i = 0; i < 16; ++i) {
 		int sum = 0;
 		for (int j = 0; j < 16; ++j) {
-			sum += coeff[j << (LOG2 + 1)] * *c++;
+			sum += co[j << (LOG2 + 1)] * *c++;
 		}
 		int ev = even[i];
 		dst[i] = Saturate(ev + sum);
@@ -1410,13 +1410,13 @@ template <int LOG2, int colour>
 static inline void transform_horiz(uint8_t* dst, int16_t* coeff, int stride) {
 	transform_horiz_pretruncate<LOG2>(coeff);
 	if (LOG2 == 2) {
-		transform_line4<0>(coeff, coeff, sat16<2>());
+		transform_line4<0>(coeff, coeff, sat16<12>());
 	} else if (LOG2 == 3) {
-		transform_line8<1>(coeff, coeff, sat16<3>());
+		transform_line8<0>(coeff, coeff, sat16<12>());
 	} else if (LOG2 == 4) {
-		transform_line16<2>(coeff, coeff, sat16<4>());
+		transform_line16<0>(coeff, coeff, sat16<12>());
 	} else {
-		transform_line32<3>(coeff, coeff, sat16<5>());
+		transform_line32<0>(coeff, coeff, sat16<12>());
 	}
 	dst += (colour >> 1);
 	for (int y = 0; y < (1 << LOG2); ++y) {
@@ -1436,13 +1436,13 @@ template <int LOG2, int colour>
 static inline void transform_vert(uint8_t* dst, int16_t* coeff, int stride) {
 	transform_vert_pretruncate<LOG2>(coeff);
 	if (LOG2 == 2) {
-		transform_line4<2>(coeff, coeff, sat16<2>());
+		transform_line4<2>(coeff, coeff, sat16<12>());
 	} else if (LOG2 == 3) {
-		transform_line8<3>(coeff, coeff, sat16<3>());
+		transform_line8<3>(coeff, coeff, sat16<12>());
 	} else if (LOG2 == 4) {
-		transform_line16<4>(coeff, coeff, sat16<4>());
+		transform_line16<4>(coeff, coeff, sat16<12>());
 	} else {
-		transform_line32<5>(coeff, coeff, sat16<5>());
+		transform_line32<5>(coeff, coeff, sat16<12>());
 	}
 	dst += (colour >> 1);
 	for (int y = 0; y < (1 << LOG2); ++y) {
@@ -1488,22 +1488,22 @@ static inline void transform_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
 static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int stride) = {
 	{
 		{
-			NxNtransform_dconly<4, 5, 0, uint64_t>,
-			NxNtransform_dconly<8, 6, 0, uint64_t>,
+			NxNtransform_dconly<4, 7, 0, uint64_t>,
+			NxNtransform_dconly<8, 7, 0, uint64_t>,
 			NxNtransform_dconly<16, 7, 0, uint64_t>,
-			NxNtransform_dconly<32, 8, 0, uint64_t>
+			NxNtransform_dconly<32, 7, 0, uint64_t>
 		},
 		{
-			NxNtransform_dconly<4, 5, 1, uint64_t>,
-			NxNtransform_dconly<8, 6, 1, uint64_t>,
+			NxNtransform_dconly<4, 7, 1, uint64_t>,
+			NxNtransform_dconly<8, 7, 1, uint64_t>,
 			NxNtransform_dconly<16, 7, 1, uint64_t>,
-			NxNtransform_dconly<32, 8, 1, uint64_t>
+			NxNtransform_dconly<32, 7, 1, uint64_t>
 		},
 		{
-			NxNtransform_dconly<4, 5, 2, uint64_t>,
-			NxNtransform_dconly<8, 6, 2, uint64_t>,
+			NxNtransform_dconly<4, 7, 2, uint64_t>,
+			NxNtransform_dconly<8, 7, 2, uint64_t>,
 			NxNtransform_dconly<16, 7, 2, uint64_t>,
-			NxNtransform_dconly<32, 8, 2, uint64_t>
+			NxNtransform_dconly<32, 7, 2, uint64_t>
 		}
 	},
 	{
@@ -1773,7 +1773,7 @@ static inline void intra_pred_dc(uint8_t* dst, uint32_t size_log2, uint32_t stri
 
 template <int N>
 static void intra_pred_planar_notop(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	const uint8_t* left_bottom_pos = dst + (stride << size_log2) - N - ((avail & 4) ? stride : 0);
+	const uint8_t* left_bottom_pos = dst + (stride << size_log2) - N - ((avail & 4) ? 0 : stride);
 	uint32_t left_bottom = left_bottom_pos[0];
 	uint32_t top = dst[-N];
 	for (int i = 1; i < N; ++i) {
@@ -1877,6 +1877,54 @@ static void intra_pred_planar(uint8_t* dst, uint32_t size_log2, uint32_t stride,
 	planar_func[avail & 3](dst, size_log2, stride, avail);
 }
 
+static inline bool intra_pred_filter_active(uint32_t size_log2, uint32_t mode) {
+	static const int8_t filter_needed[35 - 2] = {
+		14, 12, 12, 12, 12, 12, 12, 8, 0, 8, 12, 12, 12, 12, 12, 12,
+		14, 12, 12, 12, 12, 12, 12, 8, 0, 8, 12, 12, 12, 12, 12, 12,
+		14
+	};
+	return (filter_needed[mode - 2] >> (size_log2 - 2)) & 1;
+}
+
+static inline void intra_pred_filter_left(uint8_t* dst, const uint8_t* src, uint32_t size_log2, uint32_t len, uint32_t stride, uint32_t avail) {
+	if (avail & 1) {
+		src -= 1;
+		uint32_t c1 = src[0];
+		uint32_t c0 = (avail & 2) ? *(src - stride) : c1;
+		uint32_t left_size = (1 << size_log2) - 1;
+		uint32_t y0, y1;
+		if ((left_size < len) && !(avail & 4)) {
+			y0 = left_size;
+			y1 = len - left_size;
+		} else {
+			y0 = len;
+			y1 = 0;
+		}
+		do {
+			src += stride;
+			uint32_t c2 = *src;
+			*dst++ = (c0 + c1 * 2 + c2 + 2) >> 2;
+			c0 = c1;
+			c1 = c2;
+		} while (--y0);
+		if (y1) {
+			*dst++ = (c0 + c1 * 3 + 2) >> 2;
+			while (--y1) {
+				*dst++ = c1;
+			}
+		}
+	} else {
+		memset(dst, 128, len);
+	}
+}
+
+template <int N>
+static void intra_pred_dir22(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
+	uint8_t left[32];
+	uint8_t top[32];
+	intra_pred_filter_left(left, dst, size_log2, 1 << size_log2, stride, avail);
+}
+
 template <int N>
 static inline void intra_prediction_dispatch(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode) {
 	switch (mode) {
@@ -1885,6 +1933,9 @@ static inline void intra_prediction_dispatch(uint8_t* dst, uint32_t size_log2, u
 		break;
 	case 1:
 		intra_pred_dc<N>(dst, size_log2, stride, avail);
+		break;
+	case 22:
+		intra_pred_dir22<N>(dst, size_log2, stride, avail);
 		break;
 	default:
 //		assert(0);
