@@ -319,7 +319,7 @@ static inline void acNxNtransform_dconly_base(uint8_t *dst, T dc, int stride, F 
 	} while (--y);
 }
 
-template <int N, int SHIFT>
+template <int SHIFT>
 struct IdctAdjust {
 	int operator()(int dc) const {
 		return (dc + (1 << (SHIFT - 1))) >> SHIFT;
@@ -339,7 +339,7 @@ static void acNxNtransform_dconly_generic(uint8_t *dst, int dc, int stride, F Ad
 
 template<int N, int SHIFT, int colour, typename T>
 static void acNxNtransform_dconly(uint8_t *dst, int dc, int stride) {
-	acNxNtransform_dconly_generic<N, colour, T>(dst, dc, stride, IdctAdjust<N, SHIFT>());
+	acNxNtransform_dconly_generic<N, colour, T>(dst, dc, stride, IdctAdjust<SHIFT>());
 }
 
 #endif
