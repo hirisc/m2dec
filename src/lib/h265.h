@@ -249,7 +249,8 @@ typedef enum {
 	INTRA_ANGULAR31,
 	INTRA_ANGULAR32,
 	INTRA_ANGULAR33,
-	INTRA_ANGULAR34
+	INTRA_ANGULAR34,
+	INTRA_STRONG_FILTER = 64
 } h265d_intra_pred_mode_t;
 
 typedef struct {
