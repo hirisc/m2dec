@@ -9,12 +9,12 @@ class PrintableArray < Array
     self.each_with_index do |v, i|
       e = elem(v)
       mod = i % line_max
-      if mod == 0 then
+      if mod == line_max - 1 then
+        print(" ", e, ",\n")
+      elsif mod == 0 then
         print(prefix, e, ",")
       elsif i == max then
         print(" ", e, "\n")
-      elsif mod == line_max - 1 then
-        print(" ", e, ",\n")
       else
         print(" ", e, ",")
       end
