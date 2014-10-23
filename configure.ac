@@ -1,8 +1,8 @@
-AC_INIT([m2dec],
-        m4_esyscmd([./git-version-gen .tarball-version]),
-        [bug@example])
+AC_INIT([m2dec], 0.1.15)
+dnl        m4_esyscmd([./git-version-gen .tarball-version]),
+dnl        [bug@example])
 LT_INIT
-AM_INIT_AUTOMAKE(foreign dist-bzip2 no-dist-gzip)
+AM_INIT_AUTOMAKE(foreign dist-xz no-dist-gzip)
 AC_CONFIG_SRCDIR(src/lib/mpeg2.cpp)
 AC_ENABLE_SHARED
 AC_DISABLE_STATIC
@@ -19,6 +19,8 @@ AC_CHECK_SIZEOF(int *)
 dnl AC_EXEEXT
 AC_LANG_CPLUSPLUS
 AC_C_BIGENDIAN
+LDDISP=`sdl2-config --libs`
+AC_SUBST([LDDISP])
 
 AC_ARG_ENABLE(debug,
 [  --enable-debug    Turn on debug info.],
