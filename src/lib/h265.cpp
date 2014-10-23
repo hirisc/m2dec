@@ -2108,9 +2108,8 @@ static void intra_pred_angular_vert(uint8_t* dst, const uint8_t* ref, uint32_t s
 		uint32_t d0 = Load(src);
 		const uint8_t* s = src;
 		for (uint32_t x = 0; x < size; ++x) {
-			s += N;
-			uint32_t d1 = Load(s);
-			Store(dst + x, (d0 * c0 + d1 * c1 + 16) >> 5);
+			uint32_t d1 = Load(s + x * N);
+			Store(dst + x * N, (d0 * c0 + d1 * c1 + 16) >> 5);
 			d0 = d1;
 		}
 		src += inc[y];
