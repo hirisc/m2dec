@@ -1,6 +1,6 @@
-AC_INIT([m2dec], 0.1.15)
-dnl        m4_esyscmd([./git-version-gen .tarball-version]),
-dnl        [bug@example])
+AC_INIT([m2dec],
+        m4_esyscmd([./git-version-gen .tarball-version]),
+        [bug@example])
 LT_INIT
 AM_INIT_AUTOMAKE(foreign dist-xz no-dist-gzip)
 AC_CONFIG_SRCDIR(src/lib/mpeg2.cpp)
