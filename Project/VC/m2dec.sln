@@ -1,5 +1,5 @@
-Microsoft Visual Studio Solution File, Format Version 11.00
-# Visual C++ Express 2010
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Express 2012 for Windows Desktop
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "m2dec", "m2dec.vcxproj", "{80E327AE-A6ED-406E-8AF3-5BC7BB231084}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libm2dec", "libm2dec.vcxproj", "{C48FB072-11DD-4FD8-87AA-D9D20637AC23}"
@@ -20,7 +20,6 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Debug|Win32.ActiveCfg = Debug|x64
 		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Debug|x64.ActiveCfg = Debug|x64
-		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Debug|x64.Build.0 = Debug|x64
 		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Release|Win32.ActiveCfg = Release|x64
 		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Release|x64.ActiveCfg = Release|x64
 		{80E327AE-A6ED-406E-8AF3-5BC7BB231084}.Release|x64.Build.0 = Release|x64
@@ -44,7 +43,6 @@ Global
 		{C0680463-2ABB-45B6-B2CA-AAE9FAF563B9}.Release|x64.Build.0 = Release|x64
 		{26572B45-DC91-498E-8637-07DE48FF452B}.Debug|Win32.ActiveCfg = Debug|x64
 		{26572B45-DC91-498E-8637-07DE48FF452B}.Debug|x64.ActiveCfg = Debug|x64
-		{26572B45-DC91-498E-8637-07DE48FF452B}.Debug|x64.Build.0 = Debug|x64
 		{26572B45-DC91-498E-8637-07DE48FF452B}.Release|Win32.ActiveCfg = Release|x64
 		{26572B45-DC91-498E-8637-07DE48FF452B}.Release|x64.ActiveCfg = Release|x64
 		{26572B45-DC91-498E-8637-07DE48FF452B}.Release|x64.Build.0 = Release|x64

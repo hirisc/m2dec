@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <vector>
+#include <queue>
 #include <list>
 #include <map>
 #include "frames.h"
@@ -29,92 +30,143 @@ private:
 
 class Lock: private Uncopyable {
 public:
-	explicit Lock(UniMutex *m) : mutex_(m) {
+	explicit Lock(UniMutex m) : mutex_(m) {
 		UniLockMutex(m);
 	}
 	~Lock() {
 		UniUnlockMutex(mutex_);
 	}
 private:
-	UniMutex *mutex_;
+	UniMutex mutex_;
 };
 
-template <typename T>
-class Queue {
-	T *data_;
-	int max_;
-	int size_;
-	int head_;
-	int tail_;
-	UniMutex *mutex_;
-	UniCond *cond_;
-	bool terminated_;
-	int next(int idx) const {
-		++idx;
-		return idx < max_ ? idx : 0;
-	}
+template <typename T, typename CONTAINER>
+class AsyncContainer: private Uncopyable {
+	typedef CONTAINER container_type;
+	const typename container_type::size_type max_;
+	UniMutex mutex_;
+	UniCond cond_;
+	container_type container_;
 public:
-	Queue(T *data, int buf_num)
-		: data_(data), max_(buf_num), size_(1), head_(0), tail_(buf_num - 1),
+	AsyncContainer(int max)
+		: max_(static_cast<typename container_type::size_type>(max)),
 		  mutex_(UniCreateMutex()),
-		  cond_(UniCreateCond()),
-		  terminated_(false) {}
-	~Queue() {
+		  cond_(UniCreateCond()) {}
+	virtual ~AsyncContainer() {
 		UniDestroyCond(cond_);
 		UniDestroyMutex(mutex_);
 	}
-	bool full() const {
-		return (head_ == tail_) && (size_ != 0);
+	void push_nolock(const T& data) {
+		container_.push(data);
 	}
-	bool empty() const {
-		return (head_ == tail_) && (size_ == 0);
-	}
-	int size() const {
-		return max_;
-	}
-	bool terminated() const {
-		return terminated_;
-	}
-	void terminate() {
+	void push(const T& data) {
 		Lock lk(mutex_);
-		terminated_ = true;
-		UniCondSignal(cond_);
-	}
-	T& front() {
-		Lock lk(mutex_);
-		while (full()) {
+		while (max_ <= container_.size()) {
 			UniCondWait(cond_, mutex_);
 		}
-		return data_[head_];
-	}
-	void push_front(const T& dat) {
-		Lock lk(mutex_);
-		while (full()) {
-			UniCondWait(cond_, mutex_);
-		}
-		size_++;
-		data_[head_] = dat;
-		head_ = next(head_);
+		container_.push(data);
 		UniCondSignal(cond_);
 	}
-	T& back() {
+	T pop() {
 		Lock lk(mutex_);
-		while (empty() && !terminated()) {
+		while (container_.empty()) {
 			UniCondWait(cond_, mutex_);
 		}
-		return data_[tail_];
-	}
-	bool pop_back() {
-		Lock lk(mutex_);
-		if (empty() && terminated()) {
-			UniUnlockMutex(mutex_);
-			return false;
-		}
-		assert(!empty());
-		size_--;
-		tail_ = next(tail_);
+		T result = container_.front();
+		container_.pop();
 		UniCondSignal(cond_);
-		return true;
+		return result;
+	}
+	size_t size() const {
+		return container_.size();
+	}
+	void clear() {
+		while (!container_.empty()) {
+			container_.pop();
+		}
+	}
+};
+
+template <typename T>
+class AsyncQueue: public AsyncContainer<T, std::queue<T> > {
+public:
+	AsyncQueue(int max) : AsyncContainer<T, std::queue<T> >(max) {}
+};
+
+template <typename T> class WritableFrame;
+template <typename T> class ReadableFrame;
+
+template <typename T>
+class QueuedBuffer : private Uncopyable {
+	friend class WritableFrame<T>;
+	friend class ReadableFrame<T>;
+	int num_;
+	int filled_num_;
+	std::vector<T> frames_;
+	AsyncQueue<T> empty_frames_;
+	AsyncQueue<T> stuffed_frames_;
+	T reserveFrame() {
+		return empty_frames_.pop();
+	}
+	void pushFrame(T frm) {
+		stuffed_frames_.push(frm);
+	}
+	T popFrame() {
+		return stuffed_frames_.pop();
+	}
+	void discardFrame(T frm) {
+		empty_frames_.push(frm);
+	}
+public:
+	QueuedBuffer(int num)
+		: num_(num), filled_num_(0),
+		  frames_(num),
+		  empty_frames_(num),
+		  stuffed_frames_(num)
+	{
+		for (int i = 0; i < num_; ++i) {
+			empty_frames_.push(frames_[i]);
+		}
+	}
+	~QueuedBuffer() {}
+	void assign(std::vector<T> dat) {
+		frames_.assign(dat.begin(), dat.end());
+		drop();
+		for (int i = 0; i < num_; ++i) {
+			empty_frames_.push(frames_[i]);
+		}
+	}
+	void drop() {
+		stuffed_frames_.clear();
+		empty_frames_.clear();
+	}
+};
+
+template <typename T>
+class ReadableFrame: private Uncopyable {
+	QueuedBuffer<T>& buffer_;
+	T frame_;
+public:
+	ReadableFrame(QueuedBuffer<T>& buf) : buffer_(buf), frame_(buffer_.popFrame()) {}
+	~ReadableFrame() {
+		buffer_.discardFrame(frame_);
+	}
+	const T& get() {
+		return frame_;
+	}
+};
+
+template <typename T>
+class WritableFrame: private Uncopyable {
+	QueuedBuffer<T>& buffer_;
+	T frame_;
+public:
+	WritableFrame(QueuedBuffer<T>& buf) : buffer_(buf), frame_(buffer_.reserveFrame()) {}
+	~WritableFrame() {
+		buffer_.pushFrame(frame_);
+	}
+	T& get() {
+		return frame_;
 	}
 };
 
@@ -123,6 +175,28 @@ struct Buffer {
 	int len;
 	int type;
 	void *id;
+};
+
+class BufferArray {
+	std::vector<Buffer> buf_;
+public:
+	BufferArray(int num, int insize) : buf_(num) {
+		if (insize <= 0) {
+			return;
+		}
+		for (int i = 0; i < num; ++i) {
+			buf_[i].data = new unsigned char[insize];
+			buf_[i].len = insize;
+		}
+	}
+	~BufferArray() {
+		for (int i = 0; i < buf_.size(); ++i) {
+			delete[] buf_[i].data;
+		}
+	}
+	std::vector<Buffer>& get() {
+		return buf_;
+	}
 };
 
 class FileReader {
@@ -165,10 +239,7 @@ public:
 		dst.len = read_size;
 		if (read_size == 0) {
 			fclose(fd_);
-			if (file_open() < 0) {
-				return -1;
-			}
-			dst.len = read_size = fread(dst.data, 1, insize_, fd_);
+			fd_ = 0;
 		}
 		dst.id = (void *)filename_;
 		dst.type = (int)codec_;
@@ -216,19 +287,12 @@ public:
 
 class FileReaderUnit {
 public:
-	typedef Queue<Buffer> QueueType;
+	typedef QueuedBuffer<Buffer> QueueType;
 	FileReaderUnit(int insize, int inbufnum, std::list<const char *> &infiles)
-		: fr_(infiles, insize), dst_(inbufnum), outqueue_(&dst_[0], inbufnum) {
-		for (int i = 0; i < inbufnum; ++i) {
-			dst_[i].data = new unsigned char[insize];
-			dst_[i].len = insize;
-		}
+		: fr_(infiles, insize), dst_(inbufnum, insize), outqueue_(inbufnum) {
+		outqueue_.assign(dst_.get());
 	}
-	~FileReaderUnit() {
-		for (size_t i = 0; i < dst_.size(); ++i) {
-			delete[] dst_[i].data;
-		}
-	}
+	~FileReaderUnit() {}
 	FileReaderUnit::QueueType& outqueue() {
 		return outqueue_;
 	}
@@ -240,34 +304,36 @@ public:
 	}
 private:
 	FileReader fr_;
-	std::vector<Buffer> dst_;
+	BufferArray dst_;
 	QueueType outqueue_;
 	int run_impl() {
 		int err;
 		RecordTime(1);
 		for (;;) {
-			Buffer& buf = outqueue_.front();
+			WritableFrame<Buffer> wr(outqueue_);
+			Buffer& buf = wr.get();
 			err = fr_.read_block(buf);
 			if (err < 0) {
 				break;
 			}
-			outqueue_.push_front(buf);
 		}
-		outqueue_.terminate();
 		fprintf(stderr, "File terminate.\n");
 		RecordTime(0);
+		WritableFrame<Buffer> wr(outqueue_);
+		wr.get().len = -1;
 		return 0;
 	}
 };
 
 class M2DecoderUnit {
 public:
-	typedef Queue<Frame> QueueType;
+	typedef QueuedBuffer<Frame> QueueType;
 	M2DecoderUnit(M2Decoder::type_t codec, FileReaderUnit::QueueType& inqueue, int dstnum, bool dpb_emptify)
 		: m2dec_(codec, dstnum, reread_file, this),
 		  dst_align_(dstnum),
-		  inqueue_(inqueue), outqueue_(QueueType(&dst_align_[0], dstnum)),
-		  src_next_(0), dpb_emptify_(dpb_emptify) {}
+		  inqueue_(inqueue), outqueue_(dstnum),
+		  src_next_(0), dpb_emptify_(dpb_emptify), terminated_(false) {
+	}
 	~M2DecoderUnit() {}
 	FileReaderUnit::QueueType& inqueue() {
 		return inqueue_;
@@ -286,50 +352,43 @@ private:
 	std::vector<Frame> dst_align_;
 	FileReaderUnit::QueueType& inqueue_;
 	M2DecoderUnit::QueueType outqueue_;
-	Buffer *src_next_;
+	const Buffer* src_next_;
 	bool dpb_emptify_;
+	bool terminated_;
 	static void post_dst(void *obj, Frame& frm) {
-		M2DecoderUnit *ths = (M2DecoderUnit *)obj;
-		ths->outqueue().push_front(frm);
+		((M2DecoderUnit *)obj)->post_dst_impl(frm);
 	}
 	static int reread_file(void *arg) {
 		return ((M2DecoderUnit *)arg)->reread_file_impl();
 	}
+	void post_dst_impl(Frame& frm) {
+		WritableFrame<Frame> wr(outqueue_);
+		wr.get() = frm;
+	}
 	int reread_file_impl() {
-		Buffer *src;
-		if (!src_next_) {
-			if (!inqueue().pop_back() || inqueue().empty()) {
-				return -1;
-			}
-			src = &inqueue().back();
-			M2Decoder::type_t codec = static_cast<M2Decoder::type_t>(src->type);
-			if (codec != m2dec_.codec_mode()) {
-				m2dec_.change_codec(codec);
-				src_next_ = src;
-				return -1;
-			}
-		} else {
-			src = src_next_;
-			src_next_ = 0;
-		}
+		ReadableFrame<Buffer> rd(inqueue_);
+		const Buffer* src = &rd.get();
 		if (src->len <= 0) {
+			terminated_ = true;
 			return -1;
-		} else {
-			dec_bits *stream = dec().demuxer()->stream;
-			stream = stream ? stream : dec().stream();
-			dec_bits_set_data(stream, src->data, src->len, src->id);
-			return 0;
 		}
+		M2Decoder::type_t codec = static_cast<M2Decoder::type_t>(src->type);
+		if (codec != m2dec_.codec_mode()) {
+			m2dec_.change_codec(codec);
+		}
+		dec_bits *stream = dec().demuxer()->stream;
+		stream = stream ? stream : dec().stream();
+		dec_bits_set_data(stream, src->data, src->len, src->id);
+		return 0;
 	}
 	int run_impl() {
 		RecordTime(1);
 		do {
 			while (0 <= dec().decode(this, post_dst, dpb_emptify_)) {}
 			dec().decode_residual(this, post_dst);
-		} while (src_next_);
+		} while (!terminated_);
 		static Frame nullframe = {0,};
 		post_dst(this, nullframe);
-		outqueue().terminate();
 		RecordTime(0);
 		return 0;
 	}
@@ -786,17 +845,15 @@ int run_loop(Options& opt, int outbuf) {
 	}
  	M2DecoderUnit m2dec(fr.next_codec(), fr.outqueue(), outbuf, opt.dpb_mode_);
 
-	UniThread *thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr, "FileLoader");
-	UniThread *thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec, "Decoder");
+	UniThread thr_file = UniCreateThread(FileReaderUnit::run, (void *)&fr, "FileLoader");
+	UniThread thr_m2d = UniCreateThread(M2DecoderUnit::run, (void *)&m2dec, "Decoder");
 
 	UniSurface surface;
 	while (1) {
 		if (!surface.suspended()) {
-			if (!m2dec.outqueue().pop_back()) {
-				break;
-			}
-			const Frame& out = m2dec.outqueue().back();
-			if (out.luma == 0) {
+			ReadableFrame<Frame> rd(m2dec.outqueue());
+			const Frame& out = rd.get();
+			if (!out.luma) {
 				break;
 			}
 			surface.display(out);
@@ -839,19 +896,21 @@ void logOut(void* p, int category, SDL_LogPriority priority, const char* message
 
 int main(int argc, char **argv)
 {
-#if defined(_M_IX86) && !defined(NDEBUG)
+#if defined(_MSC_VER) && !defined(NDEBUG)
 	_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_WNDW);
 //	_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_WNDW);
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF|_CRTDBG_LEAK_CHECK_DF);
 	atexit((void (*)(void))_CrtCheckMemory);
 #endif
-#ifdef ENABLE_DISPLAY
 	SDL_TimerID timer;
-	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO) < 0) {
+	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_EVENTS
+#ifdef ENABLE_DISPLAY
+			| SDL_INIT_VIDEO
+#endif /* ENABLE_DISPLAY */
+			) < 0) {
 		return -1;
 	}
 	atexit(SDL_Quit);
-#endif /* ENABLE_DISPLAY */
 	Options opt(argc, argv);
 	LogInit();
 	atexit(LogFin);

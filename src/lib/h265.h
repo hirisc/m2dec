@@ -343,6 +343,7 @@ typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint16_t pos_in_slice;
+	uint32_t valid_x, valid_y;
 	uint32_t idx_in_slice;
 	int8_t qp_delta_req, qpy;
 	int8_t qpc_delta[2];

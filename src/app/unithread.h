@@ -11,9 +11,9 @@ static void RecordTime(int mark);
 #else
 #include <SDL2/SDL.h>
 
-typedef SDL_Thread UniThread;
-typedef SDL_mutex UniMutex;
-typedef SDL_cond UniCond;
+typedef SDL_Thread *UniThread;
+typedef SDL_mutex *UniMutex;
+typedef SDL_cond *UniCond;
 typedef SDL_Event UniEvent;
 
 #define UniCreateThreadRaw(x, y) SDL_CreateThread((x), "", (y))
@@ -43,8 +43,8 @@ typedef SDL_Event UniEvent;
 typedef std::map<int, const char *> Logmap;
 static Logmap LogTags;
 
-static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *label) {
-	UniThread *t = UniCreateThreadRaw(run, arg);
+static UniThread UniCreateThread(int (*run)(void *), void *arg, const char *label) {
+	UniThread t = UniCreateThreadRaw(run, arg);
 	LogTags.insert(std::pair<int, const char *> (UniGetThreadID(t), label));
 	return t;
 }
@@ -55,7 +55,7 @@ static UniThread *UniCreateThread(int (*run)(void *), void *arg, const char *lab
 //}
 //#endif
 
-static UniMutex *LogMutex;
+static UniMutex LogMutex;
 struct LogRecord {
 	unsigned long long time;
 	int threadid;

@@ -1259,13 +1259,109 @@ static const h265d_scaling_func_t scaling_default_func[4] = {
 	scaling_default_base<5>
 };
 
-template<int N, int SHIFT, int colour, typename T>
+template<int N, int SHIFT, int GAP, typename T>
 static inline void NxNtransform_dconly(uint8_t *dst, int16_t* coeff, int stride) {
-	acNxNtransform_dconly<N, SHIFT, colour, T>(dst, coeff[0], stride);
+	acNxNtransform_dconly<N, SHIFT, GAP - 1, T>(dst, coeff[0], stride);
 }
 
-template <int LOG2, typename F>
-static inline void transform_line4(int16_t *dst, const int16_t* coeff, F Saturate) {
+template <int LOG2>
+struct sat16 {
+	int16_t operator()(int val) const {
+		val = (val + (1 << (LOG2 - 1))) >> LOG2;
+		return SATURATE16BIT(val);
+	}
+};
+
+template <int LOG2, int N>
+static inline void add_transformed_coeff_line(uint8_t* dst, const int16_t* coeff) {
+	for (int x = 0; x < (1 << LOG2); ++x) {
+		int v = dst[x * N] + coeff[x];
+		dst[x * N] = CLIP255C(v);
+	}
+}
+
+template <int LOG2>
+static inline void transform_horiz_pretruncate(int16_t *dst) {
+	for (int i = 0; i < (1 << LOG2); ++i) {
+		dst[i] = (dst[i] + 1) >> 1;
+	}
+}
+
+template <int LOG2>
+static inline void transform_vert_pretruncate(int16_t *dst) {
+	for (int i = 0; i < (1 << LOG2); ++i) {
+		dst[i << LOG2] = (dst[i << LOG2] + 1) >> 1;
+	}
+}
+
+template <typename T, typename F>
+static inline void transformdst_dc_line(int dc, T& d0, T& d1, T& d2, T& d3, F Saturate) {
+	d0 = Saturate(dc * 29);
+	d1 = Saturate(dc * 55);
+	d2 = Saturate(dc * 74);
+	d3 = Saturate(dc * (55 + 29));
+}
+
+static inline void transformdst_dconly(uint8_t *dst, int16_t* coeff, int stride) {
+	int d0, d1, d2, d3;
+	int e0, e1, e2, e3;
+	transformdst_dc_line(coeff[0], d0, d1, d2, d3, sat16<7>());
+	transformdst_dc_line(d0, e0, e1, e2, e3, sat16<12>());
+	dst[0] = CLIP255C(dst[0] + e0);
+	dst[1] = CLIP255C(dst[1] + e1);
+	dst[2] = CLIP255C(dst[2] + e2);
+	dst[3] = CLIP255C(dst[3] + e3);
+	dst += stride;
+	transformdst_dc_line(d1, e0, e1, e2, e3, sat16<12>());
+	dst[0] = CLIP255C(dst[0] + e0);
+	dst[1] = CLIP255C(dst[1] + e1);
+	dst[2] = CLIP255C(dst[2] + e2);
+	dst[3] = CLIP255C(dst[3] + e3);
+	dst += stride;
+	transformdst_dc_line(d2, e0, e1, e2, e3, sat16<12>());
+	dst[0] = CLIP255C(dst[0] + e0);
+	dst[1] = CLIP255C(dst[1] + e1);
+	dst[2] = CLIP255C(dst[2] + e2);
+	dst[3] = CLIP255C(dst[3] + e3);
+	dst += stride;
+	transformdst_dc_line(d3, e0, e1, e2, e3, sat16<12>());
+	dst[0] = CLIP255C(dst[0] + e0);
+	dst[1] = CLIP255C(dst[1] + e1);
+	dst[2] = CLIP255C(dst[2] + e2);
+	dst[3] = CLIP255C(dst[3] + e3);
+}
+
+template <typename F>
+static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Saturate) {
+	int c0 = coeff[0];
+	int c1 = coeff[4];
+	int c2 = coeff[8];
+	int c3 = coeff[12];
+	int d0 = c0 + c2;
+	int d1 = c2 + c3;
+	int d2 = c0 - c3;
+	int d3 = c1 * 74;
+	dst[0] = Saturate(d0 * 29 + d1 * 55 + d3);
+	dst[1] = Saturate(d2 * 55 - d1 * 29 + d3);
+	dst[2] = Saturate((c0 - c2 + c3) * 74);
+	dst[3] = Saturate(d0 * 55 + d2 * 29 - d3);
+}
+
+static inline void transformdst_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
+	int16_t* tmp = coeff + 16;
+	for (int x = 0; x < 4; ++x) {
+		transformdst_line4(tmp + x * 4, coeff + x, sat16<7>());
+	}
+	for (int y = 0; y < 4; ++y) {
+		transformdst_line4(coeff, tmp, sat16<12>());
+		add_transformed_coeff_line<2, 1>(dst, coeff);
+		dst += stride;
+		tmp++;
+	}
+}
+
+template <int LOG2, typename T0, typename F>
+static inline void transform_line4(T0 *dst, const int16_t* coeff, F Saturate) {
 	int c0 = coeff[0];
 	int c1 = coeff[1 << LOG2];
 	int c2 = coeff[2 << LOG2];
@@ -1286,9 +1382,9 @@ struct nosat16 {
 	}
 };
 
-template <int LOG2, typename F>
-static inline void transform_line8(int16_t *dst, const int16_t* coeff, F Saturate) {
-	int16_t tmp[4];
+template <int LOG2, typename T0, typename F>
+static inline void transform_line8(T0 *dst, const int16_t* coeff, F Saturate) {
+	int32_t tmp[4];
 	transform_line4<(LOG2 + 1)>(tmp, coeff, nosat16());
 	int c1 = coeff[1 << LOG2];
 	int c3 = coeff[3 << LOG2];
@@ -1299,13 +1395,13 @@ static inline void transform_line8(int16_t *dst, const int16_t* coeff, F Saturat
 	int eo2 = 50 * c1 - 89 * c3 + 18 * c5 + 75 * c7;
 	int eo3 = 18 * c1 - 50 * c3 + 75 * c5 - 89 * c7;
 	dst[0] = Saturate(tmp[0] + eo0);
-	dst[4] = Saturate(tmp[0] - eo0);
+	dst[7] = Saturate(tmp[0] - eo0);
 	dst[1] = Saturate(tmp[1] + eo1);
-	dst[5] = Saturate(tmp[1] - eo1);
+	dst[6] = Saturate(tmp[1] - eo1);
 	dst[2] = Saturate(tmp[2] + eo2);
-	dst[6] = Saturate(tmp[2] - eo2);
+	dst[5] = Saturate(tmp[2] - eo2);
 	dst[3] = Saturate(tmp[3] + eo3);
-	dst[7] = Saturate(tmp[3] - eo3);
+	dst[4] = Saturate(tmp[3] - eo3);
 }
 
 static const int8_t transform_oddc8[] = {
@@ -1338,9 +1434,9 @@ static const int8_t transform_oddc16[] = {
 	4, -13, 22, -31, 38, -46, 54, -61, 67, -73, 78, -82, 85, -88, 90, -90
 };
 
-template <int LOG2, typename F>
-static inline void transform_line16(int16_t *dst, const int16_t* coeff, F Saturate) {
-	int16_t even[8];
+template <int LOG2, typename T0, typename F>
+static inline void transform_line16(T0 *dst, const int16_t* coeff, F Saturate) {
+	int32_t even[8];
 	transform_line8<(LOG2 + 1)>(even, coeff, nosat16());
 	const int8_t* c = transform_oddc8;
 	int c0 = coeff[1 << LOG2];
@@ -1368,7 +1464,7 @@ static inline void transform_line16(int16_t *dst, const int16_t* coeff, F Satura
 
 template <int LOG2, typename F>
 static inline void transform_line32(int16_t *dst, const int16_t* coeff, F Saturate) {
-	int16_t even[16];
+	int32_t even[16];
 	transform_line16<(LOG2 + 1)>(even, coeff, nosat16());
 	const int8_t* c = transform_oddc16;
 	const int16_t* co = coeff + (1 << LOG2);
@@ -1383,79 +1479,48 @@ static inline void transform_line32(int16_t *dst, const int16_t* coeff, F Satura
 	}
 }
 
-template <int LOG2>
-static inline void transform_horiz_pretruncate(int16_t *dst) {
-	for (int i = 0; i < (1 << LOG2); ++i) {
-		dst[i] = (dst[i] + 1) >> 1;
-	}
-}
-
-template <int LOG2>
-struct sat16 {
-	int16_t operator()(int val) const {
-		val = (val + (1 << (LOG2 - 1))) >> LOG2;
-		return SATURATE16BIT(val);
-	}
-};
-
-template <int LOG2, int colour>
-static inline void add_transformed_coeff_line(uint8_t* dst, const int16_t* coeff) {
-	for (int x = 0; x < (1 << LOG2); ++x) {
-		int v = dst[x << ((colour + 1) >> 1)] + coeff[x];
-		dst[x << ((colour + 1) >> 1)] = CLIP255C(v);
-	}
-}
-
-template <int LOG2, int colour>
+template <int LOG2, int N>
 static inline void transform_horiz(uint8_t* dst, int16_t* coeff, int stride) {
 	transform_horiz_pretruncate<LOG2>(coeff);
+	int16_t* tmp = coeff + (1 << LOG2);
 	if (LOG2 == 2) {
-		transform_line4<0>(coeff, coeff, sat16<12>());
+		transform_line4<0>(tmp, coeff, sat16<12>());
 	} else if (LOG2 == 3) {
-		transform_line8<0>(coeff, coeff, sat16<12>());
+		transform_line8<0>(tmp, coeff, sat16<12>());
 	} else if (LOG2 == 4) {
-		transform_line16<0>(coeff, coeff, sat16<12>());
+		transform_line16<0>(tmp, coeff, sat16<12>());
 	} else {
-		transform_line32<0>(coeff, coeff, sat16<12>());
+		transform_line32<0>(tmp, coeff, sat16<12>());
 	}
-	dst += (colour >> 1);
 	for (int y = 0; y < (1 << LOG2); ++y) {
-		add_transformed_coeff_line<LOG2, colour>(dst, coeff);
+		add_transformed_coeff_line<LOG2, N>(dst, tmp);
 		dst += stride;
 	}
 }
 
-template <int LOG2>
-static inline void transform_vert_pretruncate(int16_t *dst) {
-	for (int i = 0; i < (1 << LOG2); ++i) {
-		dst[i << LOG2] = (dst[i << LOG2] + 1) >> 1;
-	}
-}
-
-template <int LOG2, int colour>
+template <int LOG2, int N>
 static inline void transform_vert(uint8_t* dst, int16_t* coeff, int stride) {
-	transform_vert_pretruncate<LOG2>(coeff);
+	int16_t* tmp = coeff + (1 << (LOG2 * 2));
 	if (LOG2 == 2) {
-		transform_line4<2>(coeff, coeff, sat16<12>());
+		transform_line4<2>(tmp, coeff, sat16<7>());
 	} else if (LOG2 == 3) {
-		transform_line8<3>(coeff, coeff, sat16<12>());
+		transform_line8<3>(tmp, coeff, sat16<7>());
 	} else if (LOG2 == 4) {
-		transform_line16<4>(coeff, coeff, sat16<12>());
+		transform_line16<4>(tmp, coeff, sat16<7>());
 	} else {
-		transform_line32<5>(coeff, coeff, sat16<12>());
+		transform_line32<5>(tmp, coeff, sat16<7>());
 	}
-	dst += (colour >> 1);
 	for (int y = 0; y < (1 << LOG2); ++y) {
-		int diff = coeff[y << LOG2];
+		int diff = (tmp[y] + 32) >> 6;
 		for (int x = 0; x < (1 << LOG2); ++x) {
-			int v = dst[x << ((colour + 1) >> 1)] + diff;
-			dst[x << ((colour + 1) >> 1)] = CLIP255C(v);
+			int v = dst[x * N] + diff;
+			dst[x * N] = CLIP255C(v);
 		}
 		dst += stride;
 	}
 }
 
-template <int LOG2, int colour>
+template <int LOG2, int N>
 static inline void transform_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
 	int16_t* tmp = coeff + (1 << (LOG2 * 2));
 	for (int x = 0; x < (1 << LOG2); ++x) {
@@ -1479,22 +1544,16 @@ static inline void transform_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
 		} else {
 			transform_line32<5>(coeff, tmp, sat16<12>());
 		}
-		add_transformed_coeff_line<LOG2, colour>(dst, coeff);
+		add_transformed_coeff_line<LOG2, N>(dst, coeff);
 		dst += stride;
 		tmp++;
 	}
 }
 
-static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int stride) = {
+static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int stride) = {
 	{
 		{
-			NxNtransform_dconly<4, 7, 0, uint64_t>,
-			NxNtransform_dconly<8, 7, 0, uint64_t>,
-			NxNtransform_dconly<16, 7, 0, uint64_t>,
-			NxNtransform_dconly<32, 7, 0, uint64_t>
-		},
-		{
-			NxNtransform_dconly<4, 7, 1, uint64_t>,
+			transformdst_dconly,
 			NxNtransform_dconly<8, 7, 1, uint64_t>,
 			NxNtransform_dconly<16, 7, 1, uint64_t>,
 			NxNtransform_dconly<32, 7, 1, uint64_t>
@@ -1508,13 +1567,7 @@ static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transform_horiz<2, 0>,
-			transform_horiz<3, 0>,
-			transform_horiz<4, 0>,
-			transform_horiz<5, 0>
-		},
-		{
-			transform_horiz<2, 1>,
+			transformdst_acNxN,
 			transform_horiz<3, 1>,
 			transform_horiz<4, 1>,
 			transform_horiz<5, 1>
@@ -1528,13 +1581,7 @@ static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transform_vert<2, 0>,
-			transform_vert<3, 0>,
-			transform_vert<4, 0>,
-			transform_vert<5, 0>
-		},
-		{
-			transform_vert<2, 1>,
+			transformdst_acNxN,
 			transform_vert<3, 1>,
 			transform_vert<4, 1>,
 			transform_vert<5, 1>
@@ -1548,13 +1595,7 @@ static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transform_acNxN<2, 0>,
-			transform_acNxN<3, 0>,
-			transform_acNxN<4, 0>,
-			transform_acNxN<5, 0>
-		},
-		{
-			transform_acNxN<2, 1>,
+			transformdst_acNxN,
 			transform_acNxN<3, 1>,
 			transform_acNxN<4, 1>,
 			transform_acNxN<5, 1>
@@ -1570,7 +1611,29 @@ static void (* const transform_func[4][3][4])(uint8_t *dst, int16_t* coeff, int 
 
 static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t xy_pos_sum) {
 	uint32_t size = 1 << size_log2;
-	transform_func[(size <= xy_pos_sum) * 2 + ((xy_pos_sum & (size - 1)) != 0)][colour][size_log2 - 2](frame, coeff, stride);
+	transform_func[(size <= xy_pos_sum) * 2 + ((xy_pos_sum & (size - 1)) != 0)][(colour + 1) >> 1][size_log2 - 2](frame + (colour >> 1), coeff, stride);
+}
+
+template <int N>
+static void skip_transform_core(const int16_t* coeff, uint8_t* frame, int stride) {
+	for (int y = 0; y < 4; ++y) {
+		for (int x = 0; x < 4; ++x) {
+			int v = frame[y * stride + x * N] + ((coeff[y * 4 + x] + 16) >> 5);
+			frame[y * stride + x * N] = CLIP255C(v);
+		}
+	}
+}
+
+static inline void skip_transform(int16_t coeff[], uint8_t* frame, int stride, int colour, uint32_t xy_pos_sum) {
+	static void (* const transform_func[3])(const int16_t* coeff, uint8_t* dst, int stride) = {
+		skip_transform_core<1>, skip_transform_core<2>, skip_transform_core<2>
+	};
+	if (!xy_pos_sum) {
+		int v = frame[colour >> 1] + ((coeff[0] + 16) >> 5);
+		frame[colour >> 1] = CLIP255C(v);
+	} else {
+		transform_func[colour](coeff, frame + (colour >> 1), stride);
+	}
 }
 
 static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour, int pred_idx, uint8_t* frame) {
@@ -1628,7 +1691,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 			h265d_sigcoeff_t sig_coeff_flags[4 * 4];
 			uint32_t num_coeff = sig_coeff_flags_read(dst.cabac, st, sig_coeff_flag_inc, order.inner_xy_pos, (i == last_subblock_pos), num, sig_coeff_flags, sxy, prev_sbf);
 			if (num_coeff == 0) {
-				return;
+				break;
 			}
 			uint32_t max_coeffs = sig_coeff_greater(colour, i, greater1ctx, sig_coeff_flags, num_coeff, dst.cabac, st);
 			uint8_t hidden_bit = (dst.pps->sign_data_hiding_enabled_flag && (3 < sig_coeff_flags[0].pos - sig_coeff_flags[num_coeff - 1].pos));
@@ -1637,437 +1700,34 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 		}
 		num = 15;
 	} while (0 <= --i);
-	transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
+	if (!transform_skip) {
+		transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
+	} else {
+		skip_transform(dst.coeff_buf, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
+	}
 }
 
-static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx, uint32_t offset_luma, uint32_t offset_chroma) {
+static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx, uint32_t offset_x, uint32_t offset_y) {
 	uint32_t stride = dst.sps->ctb_info.stride;
 	if (cbf & 1) {
-		residual_coding(dst, st, size_log2, 0, pred_idx, dst.luma + offset_luma);
+		residual_coding(dst, st, size_log2, 0, pred_idx, dst.luma + offset_y * stride + offset_x);
 	}
 	if (cbf & 6) {
 		if (2 < size_log2) {
 			size_log2 -= 1;
 		} else if (idx != 3) {
 			return;
+		} else {
+			offset_x -= 4;
+			offset_y -= 4;
 		}
+		int offset_chroma = (offset_y >> 1) * stride + offset_x;
 		if (cbf & 4) {
 			residual_coding(dst, st, size_log2, 1, pred_idx, dst.chroma + offset_chroma);
 		}
 		if (cbf & 2) {
 			residual_coding(dst, st, size_log2, 2, pred_idx, dst.chroma + offset_chroma);
 		}
-	}
-}
-
-template <int N>
-static inline uint32_t sum_left(uint8_t* dst, uint32_t size_log2, uint32_t stride) {
-	const uint8_t* src = dst - N;
-	uint32_t sum = 0;
-	uint32_t cnt = 1 << size_log2;
-	do {
-		for (int n = 0; n < N; ++n) {
-			sum += (src[n] << (16 * n));
-		}
-		src += stride;
-	} while (--cnt);
-	return sum;
-}
-
-template <int N>
-static inline uint32_t sum_top(uint8_t* dst, uint32_t size_log2, uint32_t stride) {
-	const uint8_t* src = dst - stride;
-	uint32_t sum = 0;
-	uint32_t cnt = 1 << (size_log2 - 2);
-	do {
-		for (int n = 0; n < N; ++n) {
-			sum = sum + ((src[n] + src[n + N] + src[n + N * 2] + src[n + N * 3]) << (16 * n));
-		}
-		src += 4 * N;
-	} while (--cnt);
-	return sum;
-}
-
-template <int N>
-static inline void fill_dc(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t dc) {
-	if (N == 1) {
-		dc *= 0x01010101;
-	} else {
-		dc = ((dc & 255) | ((dc >> 8) & 0xff00)) * 0x00010001;
-	}
-	uint32_t y = 1 << size_log2;
-	uint32_t cnt = 1 << (size_log2 - 3 + N);
-	do {
-		for (uint32_t x = 0; x < cnt; ++x) {
-			reinterpret_cast<uint32_t*>(dst)[x] = dc;
-		}
-		dst += stride;
-	} while (--y);
-}
-
-static inline void intra_dc_filter_left(uint8_t* dst, uint32_t cnt, uint32_t stride, uint32_t dc) {
-	dc = dc * 3 + 2;
-	uint8_t* s = dst - 1;
-	do {
-		s[1] = (s[0] + dc) >> 2;
-		s += stride;
-	} while (--cnt);
-}
-
-static inline void intra_dc_filter_top(uint8_t* dst, uint32_t cnt, uint32_t stride, uint32_t dc) {
-	dc = dc * 3 + 2;
-	const uint8_t* s = dst - stride;
-	for (uint32_t i = 0; i < cnt; ++i) {
-		dst[i] = (s[i] + dc) >> 2;
-	}
-}
-
-template <int N>
-static inline void intra_pred_dc(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	uint32_t dc;
-	switch (avail & 3) {
-	case 0:
-		dc = (N == 1) ? 128 : 0x00800080;
-		break;
-	case 1:
-		dc = ((((N == 1) ? 1 : 0x00010001) << size_log2) + (sum_left<N>(dst, 0, stride) << size_log2) + sum_left<N>(dst, size_log2, stride)) >> (size_log2 + 1);
-		break;
-	case 2:
-		dc = ((((N == 1) ? 1 : 0x00010001) << size_log2) + (((N == 1) ? *(dst -stride) : (*(dst - stride) + (*(dst - stride + 1) << 16))) << size_log2) + sum_top<N>(dst, size_log2, stride)) >> (size_log2 + 1);
-		break;
-	case 3:
-		dc = ((((N == 1) ? 1 : 0x00010001) << size_log2) + sum_left<N>(dst, size_log2, stride) + sum_top<N>(dst, size_log2, stride)) >> (size_log2 + 1);
-		break;
-	}
-	fill_dc<N>(dst, size_log2, stride, dc);
-	if ((N == 1) && size_log2 < 5) {
-		uint32_t cnt = (1 << size_log2) - 1;
-		switch (avail & 3) {
-		case 1:
-			dst[0] = (dst[-1] + dc + 1) >> 1;
-			intra_dc_filter_left(dst + stride, cnt, stride, dc);
-			break;
-		case 2:
-			dst[0] = (*(dst - stride) + dc + 1) >> 1;
-			intra_dc_filter_top(dst + 1, cnt, stride, dc);
-			break;
-		case 3:
-			dst[0] = (*(dst - stride) + dst[-1] + dc * 2 + 2) >> 2;
-			intra_dc_filter_top(dst + 1, cnt, stride, dc);
-			intra_dc_filter_left(dst + stride, cnt, stride, dc);
-			break;
-		}
-	}
-}
-
-template <int N>
-static void intra_pred_planar_notop(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	const uint8_t* left_bottom_pos = dst + (stride << size_log2) - N - ((avail & 4) ? 0 : stride);
-	uint32_t left_bottom = left_bottom_pos[0];
-	uint32_t top = dst[-N];
-	for (int i = 1; i < N; ++i) {
-		left_bottom += left_bottom_pos[i] << (i * 16);
-		top += dst[i - N] << (i * 16);
-	}
-	uint32_t size = 1 << size_log2;
-	uint32_t y = size;
-	uint32_t base = size + (top << size_log2);
-	for (int i = 1; i < N; ++i) {
-		base += size << (i * 16);
-	}
-	do {
-		uint32_t left = dst[-N];
-		for (int i = 1; i < N; ++i) {
-			left += dst[i - N] << (i * 16);
-		}
-		base = base + left_bottom - top;
-		unsigned bs = base + (left << size_log2);
-		for (unsigned x = 0; x < size; ++x) {
-			bs = bs + top - left;
-			for (int i = 0; i < N; ++i) {
-				dst[x * N + i] = static_cast<uint8_t>(bs >> (size_log2 + 1 + (i * 16)));
-			}
-		}
-		dst += stride;
-	} while (--y);
-}
-
-template <int N>
-static void intra_pred_planar_noleft(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	const uint8_t* top = dst - stride;
-	uint32_t size = 1 << size_log2;
-	const uint8_t* righttop_pos = &top[size - ((avail & 8) ? 0 : N)];
-	uint32_t righttop = righttop_pos[0];
-	unsigned left = top[0];
-	unsigned base = (left << size_log2) + size;
-	for (int i = 1; i < N; ++i) {
-		righttop += righttop_pos[i] << (i * 16);
-		left += top[i] << (i * 16);
-		base += size << (i * 16);
-	}
-	base += righttop;
-	unsigned y = size;
-	do {
-		uint32_t yscale = y - 1;
-		for (unsigned x = 0; x < size; ++x) {
-			for (int i = 0; i < N; ++i) {
-				uint32_t v = top[x * N + i] * yscale + (base >> (i * 16));
-				dst[x * N + i] = v >> (size_log2 + 1);
-			}
-		}
-		dst += stride;
-		base += left;
-	} while (--y);
-}
-
-template <int N>
-static void intra_pred_planar_both(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	const uint8_t* left_bottom_pos = &dst[(stride << size_log2) - N - ((avail & 4) ? stride : 0)];
-	uint32_t left_bottom = left_bottom_pos[0];
-	const uint8_t* top = dst - stride;
-	uint32_t size = 1 << size_log2;
-	const uint8_t* righttop_pos = &top[size - ((avail & 8) ? 0 : N)];
-	uint32_t righttop = righttop_pos[0];
-	unsigned base = size;
-	for (int i = 1; i < N; ++i) {
-		left_bottom += left_bottom_pos[i] << (i * 16);
-		righttop += righttop_pos[i] << (i * 16);
-		base += size << (i * 16);
-	}
-	unsigned y = size;
-	do {
-		unsigned left = dst[-N];
-		for (int i = 1; i < N; ++i) {
-			left += dst[i - N] << (i * 16);
-		}
-		base += left_bottom;
-		unsigned bs = (left << size_log2) + base;
-		uint32_t yscale = y - 1;
-		for (unsigned x = 0; x < size; ++x) {
-			bs = bs - left + righttop;
-			for (int i = 0; i < N; ++i) {
-				uint32_t v = top[x * N + i] * yscale + (base >> (i * 16));
-				dst[x * N + i] = v >> (size_log2 + 1);
-			}
-		}
-		dst += stride;
-	} while (--y);
-}
-
-template <int N>
-static void intra_pred_planar(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	static void (* const planar_func[4])(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail) = {
-		intra_pred_dc<N>,
-		intra_pred_planar_notop<N>,
-		intra_pred_planar_noleft<N>,
-		intra_pred_planar_both<N>
-	};
-	planar_func[avail & 3](dst, size_log2, stride, avail);
-}
-
-static inline void intra_pred_filter_left(uint8_t* dst, const uint8_t* src, uint32_t size_log2, uint32_t len, uint32_t stride, uint32_t avail) {
-	if (avail & 1) {
-		src -= 1;
-		uint32_t c1 = src[0];
-		uint32_t c0 = (avail & 2) ? *(src - stride) : c1;
-		uint32_t left_size = (1 << size_log2) - 1;
-		uint32_t y0, y1;
-		if ((left_size < len) && !(avail & 4)) {
-			y0 = left_size;
-			y1 = len - left_size;
-		} else {
-			y0 = len;
-			y1 = 0;
-		}
-		do {
-			src += stride;
-			uint32_t c2 = *src;
-			*dst++ = (c0 + c1 * 2 + c2 + 2) >> 2;
-			c0 = c1;
-			c1 = c2;
-		} while (--y0);
-		if (y1) {
-			*dst++ = (c0 + c1 * 3 + 2) >> 2;
-			while (--y1) {
-				*dst++ = c1;
-			}
-		}
-	} else {
-		memset(dst, 128, len);
-	}
-}
-
-static bool intra_pred_detect_strong_onedir(int lefttop, const uint8_t* src, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t dir) {
-	int thr = (avail & dir) ? lefttop + src[stride << (size_log2 + 1)] - src[stride << size_log2] * 2 : lefttop - src[stride << size_log2];
-	return thr * thr < 8 * 8;
-}
-
-static bool intra_pred_detect_strong_filter(const uint8_t* src, uint32_t size_log2, uint32_t stride, uint32_t avail) {
-	if (size_log2 == 5) {
-		uint32_t lt;
-		switch (avail & 3) {
-		case 0:
-			break;
-		case 1:
-			src -= 1;
-			return intra_pred_detect_strong_onedir(src[0], src - stride, size_log2, stride, avail, 4);
-			break;
-		case 2:
-			src = src - stride;
-			return intra_pred_detect_strong_onedir(src[0], src - 1, size_log2, 1, avail, 8);
-			break;
-		case 3:
-			src = src - stride - 1;
-			lt = src[0];
-			return intra_pred_detect_strong_onedir(lt, src, size_log2, 1, avail, 8) && intra_pred_detect_strong_onedir(lt, src, size_log2, stride, avail, 4);
-			break;
-		}
-	}
-	return false;
-}
-
-#include "intrapos.h"
-
-struct get_pix_raw {
-	uint8_t operator()(const uint8_t* src, int offset, uint32_t stride, uint32_t avail) const {
-		return src[((offset < 0) && !avail) ? 0 : offset * stride];
-	}
-};
-
-template <int N>
-struct get_multipix_raw {
-	void operator()(uint8_t* dst, const uint8_t* src, int offset, size_t len, uint32_t stride, uint32_t avail) const {
-		if (stride == N) {
-			memcpy(dst, src + offset * N, len * N);
-		} else {
-			if (avail || (0 <= offset)) {
-				src += offset * stride;
-				memcpy(dst, src, N);
-				src += stride;
-			} else {
-				memcpy(dst, src, N);
-			}
-			for (size_t i = 1; i < len * N; ++i) {
-				memcpy(dst, src, N);
-				src += stride;
-			}
-		}
-	}
-};
-
-struct get_pix_filtered {
-	uint8_t operator()(const uint8_t* src, int offset, uint32_t stride, uint32_t avail) const {
-		if ((0 < offset) || avail) {
-			return (src[(offset - 1) * stride] + src[offset * stride] * 2 + src[(offset + 1) * stride] + 2) >> 2;
-		} else {
-			return (src[0] * 3 + src[stride] + 2) >> 2;
-		}
-	}
-};
-
-struct get_multipix_filtered {
-	void operator()(uint8_t* dst, const uint8_t* src, int offset, size_t len, uint32_t stride, uint32_t avail) const {
-		src += offset * stride;
-		uint32_t c1 = src[0];
-		uint32_t c0 = (avail || (0 < offset)) ? *(src - stride) : c1;
-		for (size_t i = 0; i < len; ++i) {
-			src += stride;
-			uint32_t c2 = src[0];
-			dst[i] = (c0 + c1 * 2 + c2 + 2) >> 2;
-			c0 = c1;
-			c1 = c2;
-		}
-	}
-};
-
-template <int N>
-static void memfill_pix(uint8_t* dst, uint32_t pat, size_t len) {
-	for (size_t i = 0; i < len; ++i) {
-		dst[i * N] = pat;
-	}
-}
-
-template <>
-void memfill_pix<1>(uint8_t* dst, uint32_t pat, size_t len) {
-	memset(dst, pat, len);
-}
-
-template <int N, int VERTICAL, typename F0, typename F1>
-static void intra_pred_get_ref(uint8_t dst[], const uint8_t src[], uint32_t size_log2, uint32_t stride, uint32_t avail, const int8_t* pos_tbl, F0 GetPix, F1 GetMultiPix) {
-	uint32_t avail_main = VERTICAL ? 2 : 1;
-	uint32_t avail_sub = VERTICAL ? 1 : 2;
-	uint32_t main_stride = VERTICAL ? N : stride;
-	uint32_t sub_stride = VERTICAL ? stride : N;
-	int extra_len = *pos_tbl++;
-	if (extra_len != 0) {
-		if (avail & avail_sub) {
-			const uint8_t* left = src - main_stride;
-			for (int i = 0; i < extra_len; ++i) {
-				for (int j = 0; j < N; ++j) {
-					dst[i * N + j] = GetPix(left + j, pos_tbl[i], sub_stride, avail & avail_main);
-				}
-			}
-		} else {
-			if (avail & avail_main) {
-				for (int j = 0; j < N; ++j) {
-					memfill_pix<N>(dst + j, GetPix(src - sub_stride + j, 0, sub_stride, 0), extra_len);
-				}
-			} else {
-				memset(dst, 128, extra_len * N);
-			}
-		}
-		pos_tbl += extra_len;
-	}
-	int base_pos = pos_tbl[0];
-	int base_len = pos_tbl[1];
-	if ((avail & (avail_main + avail_main * 4)) == (avail_main + avail_main * 4)) {
-		GetMultiPix(dst + extra_len * N, src - sub_stride, base_pos, base_len, main_stride, avail & avail_sub);
-		if ((2 << size_log2) <= base_pos + base_len) {
-			for (int j = 0; j < N; ++j) {
-				dst[(extra_len + base_pos + base_len - 2) * N + j] = src[(base_pos + base_len - 1) * main_stride - sub_stride + j];
-			}
-		}
-	} else {
-		if (avail & avail_main) {
-			int shortage = base_pos + base_len - (1 << size_log2);
-			if (shortage <= 0) {
-				GetMultiPix(dst + extra_len * N, src - sub_stride, base_pos, base_len, main_stride, avail & avail_sub);
-			} else {
-				int valid_len = base_len - shortage;
-				GetMultiPix(dst + extra_len * N, src - sub_stride, base_pos, valid_len, main_stride, avail & avail_sub);
-				for (int j = 0; j < N; ++j) {
-					memfill_pix<N>(dst + (extra_len + valid_len) * N + j, src[(base_pos + valid_len - 1) * main_stride + j], shortage);
-				}
-			}
-		} else {
-			if (avail & avail_sub) {
-				for (int j = 0; j < N; ++j) {
-					uint32_t pat = GetPix(src - main_stride + j, 0, sub_stride, avail & avail_main);
-					memfill_pix<N>(dst + extra_len * N + j, pat, base_len);
-				}
-			} else {
-				memset(dst + extra_len * N, 128, base_len * N);
-			}
-		}
-	}
-}
-
-static void intra_pred_get_ref_filtered(uint8_t dst[], const uint8_t src[], uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode) {
-	const int8_t* pos_tbl = intra_pred_pos[mode - 2][size_log2 - 2];
-	if (mode < 18) {
-		intra_pred_get_ref<1, 0>(dst, src, size_log2, stride, avail, pos_tbl, get_pix_filtered(), get_multipix_filtered());
-	} else {
-		intra_pred_get_ref<1, 1>(dst, src, size_log2, stride, avail, pos_tbl, get_pix_filtered(), get_multipix_filtered());
-	}
-}
-
-template <int N>
-static void intra_pred_get_ref_raw(uint8_t dst[], const uint8_t src[], uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode) {
-	const int8_t* pos_tbl = intra_pred_pos[mode - 2][size_log2 - 2];
-	if (mode < 18) {
-		intra_pred_get_ref<N, 0>(dst, src, size_log2, stride, avail, pos_tbl, get_pix_raw(), get_multipix_raw<N>());
-	} else {
-		intra_pred_get_ref<N, 1>(dst, src, size_log2, stride, avail, pos_tbl, get_pix_raw(), get_multipix_raw<N>());
 	}
 }
 
@@ -2096,56 +1756,521 @@ struct store_2pix {
 	}
 };
 
-template <int N, typename F0, typename F1>
-static void intra_pred_angular_vert(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t stride, uint32_t mode, F0 Load, F1 Store) {
-	const int8_t* coef = intra_pred_coef[mode - 2][0];
-	const int8_t* inc = intra_pred_coef[mode - 2][1];
-	uint32_t size = 1 << size_log2;
-	const uint8_t* src = ref + *inc++;
-	for (uint32_t y = 0; y < size; ++y) {
-		int c1 = coef[y];
-		int c0 = 32 - c1;
-		uint32_t d0 = Load(src);
-		const uint8_t* s = src;
-		for (uint32_t x = 0; x < size; ++x) {
-			uint32_t d1 = Load(s + x * N);
-			Store(dst + x * N, (d0 * c0 + d1 * c1 + 16) >> 5);
-			d0 = d1;
-		}
-		src += inc[y];
-		dst += stride;
+template <typename F>
+uint32_t sum_strided(const uint8_t* src, int len, int stride, F Load) {
+	uint32_t sum = 0;
+	for (int i = 0; i < len; ++i) {
+		sum += Load(src + i * stride);
+	}
+	return sum;
+}
+
+template <typename F>
+uint32_t sum_edge_base(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride, F Load) {
+	if (len <= valid_main) {
+		return sum_strided(dst - sub_stride, len, stride, Load);
+	} else if (0 < valid_main) {
+		return sum_strided(dst - sub_stride, valid_main, stride, Load) + Load(dst + (valid_main - 1) * stride - sub_stride) * (len - valid_main);
+	} else if (0 < valid_sub) {
+		return Load(dst - stride) * len;
+	} else {
+		static const uint8_t default_val[] = {
+			128, 128
+		};
+		return Load(default_val) * len;
 	}
 }
 
 template <int N>
-static void intra_pred_angular_horiz(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t stride, uint32_t mode) {
-	const int8_t* coef = intra_pred_coef[mode - 2][0];
-	const int8_t* inc = intra_pred_coef[mode - 2][1];
+uint32_t sum_edge(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {}
+
+template <>
+uint32_t sum_edge<1>(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {
+	return sum_edge_base(dst, len, valid_main, valid_sub, stride, sub_stride, load_1pix());
+}
+
+template <>
+uint32_t sum_edge<2>(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {
+	return sum_edge_base(dst, len, valid_main, valid_sub, stride, sub_stride, load_2pix());
+}
+
+template <int N>
+void fill_dc(uint8_t* dst, int size_log2, int stride, uint32_t dc) {
+	if (N == 1) {
+		dc *= 0x01010101;
+	} else {
+		dc = ((dc & 255) | ((dc >> 8) & 0xff00)) * 0x00010001;
+	}
+	uint32_t y = 1 << size_log2;
+	uint32_t cnt = 1 << (size_log2 - 3 + N);
+	do {
+		for (uint32_t x = 0; x < cnt; ++x) {
+			reinterpret_cast<uint32_t*>(dst)[x] = dc;
+		}
+		dst += stride;
+	} while (--y);
+}
+
+static inline void intra_dc_filter_left(uint8_t* dst, uint32_t cnt, int stride, uint32_t dc) {
+	dc = dc * 3 + 2;
+	uint8_t* s = dst - 1;
+	do {
+		s[1] = (s[0] + dc) >> 2;
+		s += stride;
+	} while (--cnt);
+}
+
+static inline void intra_dc_filter_top(uint8_t* dst, uint32_t cnt, int stride, uint32_t dc) {
+	dc = dc * 3 + 2;
+	const uint8_t* s = dst - stride;
+	for (uint32_t i = 0; i < cnt; ++i) {
+		dst[i] = (s[i] + dc) >> 2;
+	}
+}
+
+static inline void intra_dc_filter_leftonly(uint8_t* dst, uint32_t cnt, int stride, uint32_t dc) {
+	uint32_t left = dst[-1];
+	dst[0] = (left + dc + 1) >> 1;
+	uint32_t dc1 = (left + dc * 3 + 2) >> 2;
+	memset(dst + 1, dc1, cnt - 1);
+	intra_dc_filter_left(dst + stride, cnt - 1, stride, dc);
+}
+
+static inline void intra_dc_filter_toponly(uint8_t* dst, uint32_t cnt, int stride, uint32_t dc) {
+	intra_dc_filter_top(dst + 1, cnt - 1, stride, dc);
+	uint32_t top = *(dst - stride);
+	uint32_t dc1 = (top + dc * 3 + 2) >> 2;
+	dst[0] = (top + dc + 1) >> 1;
+	do {
+		dst += stride;
+		dst[0] = dc1;
+	} while (--cnt);
+}
+
+static inline void intra_dc_filter_both(uint8_t* dst, uint32_t cnt, int stride, uint32_t dc) {
+	dst[0] = (*(dst - stride) + dst[-1] + dc * 2 + 2) >> 2;
+	intra_dc_filter_top(dst + 1, cnt - 1, stride, dc);
+	intra_dc_filter_left(dst + stride, cnt - 1, stride, dc);
+}
+
+template <int N>
+static inline void intra_pred_dc(uint8_t* dst, int size_log2, int stride, int valid_x, int valid_y) {
 	uint32_t size = 1 << size_log2;
-	const uint8_t* src = ref + N * *inc++;
+	uint32_t dc = sum_edge<N>(dst, size, valid_x, valid_y, N, stride) + sum_edge<N>(dst, size, valid_y, valid_x, stride, N) + (((N == 1) ? 1 : 0x00010001) << size_log2);
+	dc = dc >> (size_log2 + 1);
+	fill_dc<N>(dst, size_log2, stride, dc);
+	if ((N == 1) && (size < 32)) {
+		if (0 < valid_x) {
+			if (0 < valid_y) {
+				intra_dc_filter_both(dst, size, stride, dc);
+			} else {
+				intra_dc_filter_toponly(dst, size, stride, dc);
+			}
+		} else if (0 < valid_y) {
+			intra_dc_filter_leftonly(dst, size, stride, dc);
+		}
+	}
+}
+
+template <int N>
+static void intra_pred_planar_core(uint8_t* dst, const uint8_t* src, int size_log2, int stride) {
+	uint32_t size = 1 << size_log2;
+	const uint8_t* top = src + (size + 1) * N;
+	uint32_t left_bottom = src[size * N];
+	uint32_t right_top = top[size * N];
+	uint32_t topscale = size;
+	uint32_t vleft = 0;
 	for (uint32_t y = 0; y < size; ++y) {
-		for (int j = 0; j < N; ++j) {
-			int d0 = *(src + j);
-			const uint8_t* s = src + j + N;
-			for (uint32_t x = 0; x < size; ++x) {
-				int d1 = s[x * N];
-				int c1 = coef[x];
-				int c0 = 32 - c1;
-				dst[x * N] = (d0 * c0 + d1 * c1 + 16) >> 5;
-				d0 = d1;
+		uint32_t left = src[y * N];
+		topscale--;
+		vleft += left_bottom;
+		uint32_t xinc = right_top - left;
+		uint32_t base = (left << size_log2) + vleft;
+		for (uint32_t x = 0; x < size; ++x) {
+			base += xinc;
+			dst[x * N] = (base + top[x * N] * topscale + size) >> (size_log2 + 1);
+		}
+		dst += stride;
+	}
+}
+
+static inline bool abs_smaller(int val, int threshold) {
+	return val * val < threshold * threshold;
+}
+
+static inline bool intra_pred_detect_strong_onedir(int lt, const uint8_t* src, int valid_len, int stride) {
+	if (64 <= valid_len) {
+		return abs_smaller(lt + src[64 * stride] - src[32 * stride] * 2, 8);
+	} else if (32 <= valid_len) {
+		return abs_smaller(lt - src[32 * stride], 8);
+	} else {
+		return true;
+	}
+}
+
+static bool intra_pred_detect_strong_filter(bool strong_filter_enabled, const uint8_t* src, int size_log2, int stride, int valid_x, int valid_y) {
+	if (strong_filter_enabled && (size_log2 == 5)) {
+		if (0 < valid_x) {
+			if (0 < valid_y) {
+				src = src - stride - 1;
+				int lt = src[0];
+				return intra_pred_detect_strong_onedir(lt, src, valid_x, 1) && intra_pred_detect_strong_onedir(lt, src, valid_y, stride);
+			} else {
+				src -= stride;
+				return intra_pred_detect_strong_onedir(src[0], src - 1, valid_x, 1);
+			}
+		} else if (0 < valid_y) {
+			src -= 1;
+			return intra_pred_detect_strong_onedir(src[0], src - stride, valid_y, stride);
+		} else {
+			return false;
+		}
+	}
+	return false;
+}
+
+#include "intrapos.h"
+
+template <int N>
+struct get_pix_raw {
+	uint32_t operator()(const uint8_t* src, int offset, int offset_min, int offset_max, int stride) const {
+		int ofs = ((offset_min <= offset) ? ((offset < offset_max) ? offset : offset_max - 1) : offset_min) * stride;
+		uint32_t pix = src[ofs];
+		for (int i = 1; i < N; ++i) {
+			pix |= src[ofs + i] << (8 * i);
+		}
+		return pix;
+	}
+};
+
+template <int N>
+static inline void multipix_fill_gap(uint8_t* dst, int midlen, int pregap, int postgap) {
+	if (0 < pregap) {
+		if (N == 1) {
+			memset(dst, dst[pregap], pregap);
+		} else {
+			std::fill((uint16_t*)dst, (uint16_t*)dst + pregap, ((const uint16_t*)dst)[pregap]);
+		}
+	}
+	if (0 < postgap) {
+		if (N == 1) {
+			memset(dst + pregap + midlen, dst[pregap + midlen - 1], postgap);
+		} else {
+			std::fill((uint16_t*)dst + pregap + midlen, (uint16_t*)dst + pregap + midlen + postgap, ((const uint16_t*)dst)[pregap + midlen - 1]);
+		}
+	}
+}
+
+template <int N>
+static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+	int pregap;
+	if (offset_min <= offset) {
+		pregap = 0;
+		src += stride * offset;
+	} else {
+		pregap = offset_min - offset;
+		src += stride * offset_min;
+	}
+	int midlen = std::min(offset_max - offset - pregap, len);
+	int postgap = len - pregap - midlen;
+	uint8_t* dst_ofs = dst + pregap * N;
+	if (stride == N) {
+		memcpy(dst_ofs, src, midlen * N);
+	} else {
+		if (N == 1) {
+			for (int i = 0; i < midlen; ++i) {
+				dst_ofs[i] = src[0];
+				src += stride;
+			}
+		} else {
+			for (int i = 0; i < midlen; ++i) {
+				((uint16_t*)dst_ofs)[i] = ((const uint16_t*)src)[0];
+				src += stride;
 			}
 		}
+	}
+	multipix_fill_gap<N>(dst, midlen, pregap, postgap);
+}
+
+template <int N>
+struct get_multipix_raw {
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
+		get_multipix_raw_core<N>(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	}
+};
+
+struct get_pix_filtered_strong {
+	uint32_t operator()(const uint8_t* src, int offset, int offset_min, int offset_max, int stride) const {
+		return ((63 - offset) * src[(offset_min < 0) ? -stride : 0] + (offset + 1) * src[stride * std::min(63, offset_max - 1)] + 32) >> 6;
+	}
+};
+
+static inline void get_multipix_filtered_strong_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+	uint32_t c0 = src[(offset_min < 0) ? -stride : 0];
+	uint32_t c1 = src[stride * std::min(63, offset_max - 1)];
+	for (int i = 0; i < len; ++i) {
+		dst[i] = ((63 - offset) * c0 + (offset + 1) * c1 + 32) >> 6;
+		offset++;
+	}
+}
+
+struct get_multipix_filtered_strong {
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
+		get_multipix_filtered_strong_core(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	}
+};
+
+struct get_pix_filtered {
+	uint8_t operator()(const uint8_t* src, int offset, int offset_min, int offset_max, int stride) const {
+		int c1 = src[offset * stride];
+		if (offset_min < offset) {
+			int c0 = src[(offset - 1) * stride];
+			if (offset < offset_max - 1) {
+				return (c0 + c1 * 2 + src[(offset + 1) * stride] + 2) >> 2;
+			} else {
+				return (c0 + c1 * 3 + 2) >> 2;
+			}
+		} else {
+			return (c1 * 3 + src[(offset + 1) * stride] + 2) >> 2;
+		}
+	}
+};
+
+static inline void get_multipix_filtered_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+	int c0, c1;
+	if (offset_min < offset) {
+		c0 = src[(offset - 1) * stride];
+		c1 = src[offset * stride];
+	} else if (offset_min == offset) {
+		c1 = src[offset * stride];
+		if (offset_min < 0) {
+			c0 = src[sub_stride - stride];
+		} else {
+			c0 = c1;
+		}
+	} else {
+		c0 = c1 = src[(offset + 1) * stride];
+	}
+	src += offset * stride;
+	int midlen = std::min(offset_max - offset - 1, len);
+	for (int i = 0; i < midlen; ++i) {
+		src += stride;
+		uint32_t c2 = src[0];
+		dst[i] = (c0 + c1 * 2 + c2 + 2) >> 2;
+		c0 = c1;
+		c1 = c2;
+	}
+	if (midlen != len) {
+		uint32_t c2 = src[0];
+		dst[midlen++] = (c0 + c1 * 2 + c2 + 2) >> 2;
+		if (midlen != len) {
+			dst[midlen++] = (c1 + c2 * 3 + 2) >> 2;
+			if (midlen != len) {
+				memset(dst + midlen, c2, len - midlen);
+			}
+		}
+	}
+}
+
+struct get_multipix_filtered {
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
+		get_multipix_filtered_core(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	}
+};
+
+template <int N>
+void fillmem(uint8_t* dst, const uint8_t* src, int len) {}
+
+template <>
+void fillmem<1>(uint8_t* dst, const uint8_t* src, int len) {
+	memset(dst, *src, len);
+}
+
+template <>
+void fillmem<2>(uint8_t* dst, const uint8_t* src, int len) {
+	std::fill(reinterpret_cast<uint16_t*>(dst), reinterpret_cast<uint16_t*>(dst) + len, *reinterpret_cast<const uint16_t*>(src));
+}
+
+template <int N>
+static void intra_pred_planar(uint8_t* dst, int size_log2, int stride, int valid_x, int valid_y, bool strong_enabled) {
+	uint8_t neighbour[2 * 34];
+	if ((valid_x <= 0) && (valid_y <= 0)) {
+		fill_dc<N>(dst, size_log2, stride, 128);
+	} else {
+		void (*multipix)(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride);
+		if ((N == 1) && (3 <= size_log2)) {
+			if (intra_pred_detect_strong_filter(strong_enabled, dst, size_log2, stride, valid_x, valid_y)) {
+				multipix = get_multipix_filtered_strong_core;
+			} else {
+				multipix = get_multipix_filtered_core;
+			}
+		} else {
+			multipix = get_multipix_raw_core<N>;
+		}
+		if (0 < valid_y) {
+			multipix(&neighbour[0], dst - N, 0, (0 < valid_x) ? -1 : 0, valid_y, (1 << size_log2) + 1, stride, N);
+		} else {
+			fillmem<N>(neighbour, dst - stride, (1 << size_log2) + 1);
+		}
+		if (0 < valid_x) {
+			multipix(&neighbour[((1 << size_log2) + 1) * N], dst - stride, 0, (0 < valid_y) ? -1 : 0, valid_x, (1 << size_log2) + 1, N, stride);
+		} else {
+			fillmem<N>(&neighbour[((1 << size_log2) + 1) * N], dst - N, (1 << size_log2) + 1);
+		}
+		for (int i = 0; i < N; ++i) {
+			intra_pred_planar_core<N>(dst + i, neighbour + i, size_log2, stride);
+		}
+	}
+}
+
+template <int N>
+static void memfill_pix(uint8_t* dst, uint32_t pat, size_t len) {
+	for (size_t i = 0; i < len; ++i) {
+		for (size_t j = 0; j < N; ++j) {
+			dst[i * N + j] = pat >> (j * 8);
+		}
+	}
+}
+
+template <>
+void memfill_pix<1>(uint8_t* dst, uint32_t pat, size_t len) {
+	memset(dst, pat, len);
+}
+
+template <int N, typename F0>
+static inline void intra_pred_get_ref_extra(uint8_t dst[], const uint8_t src[], uint32_t size_log2, int base_len, int extra_len, const int8_t* pos_tbl, int main_stride, int sub_stride, int valid_main, int valid_sub, F0 GetPix) {
+	if (0 < valid_sub) {
+		src -= main_stride;
+		int ofs_min = (0 < valid_main) ? -1 : 0;
+		for (int i = 0; i < extra_len; ++i) {
+			memfill_pix<N>(dst + i * N, GetPix(src, pos_tbl[i], ofs_min, valid_sub, sub_stride), 1);
+		}
+	} else {
+		if (0 < valid_main) {
+			uint32_t pix = src[-sub_stride];
+			pix = (N == 1) ? pix : pix | (src[-sub_stride + 1] << 8);
+			memfill_pix<N>(dst, pix, extra_len);
+		} else {
+			memset(dst, 128, extra_len * N);
+		}
+	}
+}
+
+template <int N, typename F0, typename F1>
+static void intra_pred_get_ref(uint8_t dst[], const uint8_t src[], int size_log2, int main_stride, int sub_stride, int valid_main, int valid_sub, const int8_t* pos_tbl, F0 GetPix, F1 GetMultiPix) {
+	int extra_len = *pos_tbl++;
+	int base_len = pos_tbl[extra_len + 1];
+	if (extra_len != 0) {
+		intra_pred_get_ref_extra<N>(dst, src, size_log2, base_len, extra_len, pos_tbl, main_stride, sub_stride, valid_main, valid_sub, GetPix);
+		dst = dst + extra_len * N;
+	}
+	int base_pos = pos_tbl[extra_len];
+	if (0 < valid_main) {
+		GetMultiPix(dst, src - sub_stride, base_pos, (0 < valid_sub) ? -1 : 0, std::min(2 << size_log2, valid_main), base_len, main_stride, sub_stride);
+	} else {
+		if (0 < valid_sub) {
+			memfill_pix<N>(dst, GetPix(src - main_stride, 0, 0, 4, sub_stride), base_len);
+		} else {
+			memset(dst, 128, base_len * N);
+		}
+	}
+}
+
+static void intra_pred_get_ref_filtered_strong(uint8_t dst[], const uint8_t src[], int size_log2, int stride, int valid_x, int valid_y, uint32_t mode) {
+	const int8_t* pos_tbl = intra_pred_pos[mode - 2][size_log2 - 2];
+	if (mode < 18) {
+		intra_pred_get_ref<1>(dst, src, size_log2, stride, 1, valid_y, valid_x, pos_tbl, get_pix_filtered_strong(), get_multipix_filtered_strong());
+	} else {
+		intra_pred_get_ref<1>(dst, src, size_log2, 1, stride, valid_x, valid_y, pos_tbl, get_pix_filtered_strong(), get_multipix_filtered_strong());
+	}
+}
+
+static void intra_pred_get_ref_filtered(uint8_t dst[], const uint8_t src[], int size_log2, int stride, int valid_x, int valid_y, uint32_t mode) {
+	const int8_t* pos_tbl = intra_pred_pos[mode - 2][size_log2 - 2];
+	if (mode < 18) {
+		intra_pred_get_ref<1>(dst, src, size_log2, stride, 1, valid_y, valid_x, pos_tbl, get_pix_filtered(), get_multipix_filtered());
+	} else {
+		intra_pred_get_ref<1>(dst, src, size_log2, 1, stride, valid_x, valid_y, pos_tbl, get_pix_filtered(), get_multipix_filtered());
+	}
+}
+
+template <int N>
+static void intra_pred_get_ref_raw(uint8_t dst[], const uint8_t src[], int size_log2, int stride, int valid_x, int valid_y, uint32_t mode) {
+	const int8_t* pos_tbl = intra_pred_pos[mode - 2][size_log2 - 2];
+	if (mode < 18) {
+		intra_pred_get_ref<N>(dst, src, size_log2, stride, N, valid_y, valid_x, pos_tbl, get_pix_raw<N>(), get_multipix_raw<N>());
+	} else {
+		intra_pred_get_ref<N>(dst, src, size_log2, N, stride, valid_x, valid_y, pos_tbl, get_pix_raw<N>(), get_multipix_raw<N>());
+	}
+}
+
+template <int N, typename F0, typename F1>
+static void intra_pred_angular_filter(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t inner_inc, uint32_t outer_inc, uint32_t mode, F0 Load, F1 Store) {
+	const int8_t* coef = intra_pred_coef[mode][0];
+	const int8_t* inc = intra_pred_coef[mode][1];
+	uint32_t size = 1 << size_log2;
+	const uint8_t* src = ref + (*inc++ >> (5 - size_log2)) * N;
+	for (uint32_t y = 0; y < size; ++y) {
+		int c1 = coef[y];
+		int c0 = 32 - c1;
+		uint32_t d0 = Load(src);
+		const uint8_t* s = src + N;
+		for (uint32_t x = 0; x < size; ++x) {
+			uint32_t d1 = Load(s + x * N);
+			Store(dst + x * inner_inc, (d0 * c0 + d1 * c1 + 0x00100010) >> 5);
+			d0 = d1;
+		}
 		src += inc[y] * N;
-		dst += stride;
+		dst += outer_inc;
+	}
+}
+
+static inline void intra_pred_post_edge_filter(uint8_t* dst, const uint8_t* ref, uint32_t len, uint32_t stride) {
+	uint32_t d0 = dst[0];
+	uint32_t c0 = *ref++;
+	for (uint32_t x = 0; x < len; ++x) {
+		int t0 = d0 + ((int)((ref[x]) - c0) >> 1);
+		dst[x * stride] = CLIP255C(t0);
+	}
+}
+
+template <int N>
+static void intra_pred_horizontal(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t stride) {
+	uint32_t height = 1 << size_log2;
+	uint32_t xcnt = N << (size_log2 - 2);
+	uint8_t* d0 = dst;
+	for (uint32_t y = 0; y < height; ++y) {
+		uint32_t pat;
+		if (N == 1) {
+			pat = ref[y] * 0x01010101;
+		} else {
+			pat = reinterpret_cast<const uint16_t*>(ref)[y] * 0x00010001;
+		}
+		for (uint32_t x = 0; x < xcnt; ++x) {
+			reinterpret_cast<uint32_t*>(d0)[x] = pat;
+		}
+		d0 += stride;
+	}
+}
+
+template <int N>
+static void intra_pred_vertical(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t stride) {
+	uint32_t height = 1 << size_log2;
+	uint32_t xcnt = N << (size_log2 - 2);
+	for (uint32_t x = 0; x < xcnt; ++x) {
+		uint32_t pat = reinterpret_cast<const uint32_t*>(ref)[x];
+		for (uint32_t y = 0; y < height; ++y) {
+			reinterpret_cast<uint32_t*>(dst + y * stride)[x] = pat;
+		}
 	}
 }
 
 template <int N>
 static void intra_pred_diagonal(uint8_t* dst, const uint8_t* ref, uint32_t size_log2, uint32_t stride, uint32_t mode) {
-	const int8_t* inc = intra_pred_coef[mode - 2][1];
+	const int8_t* inc = intra_pred_coef[mode][1];
 	uint32_t size = N << size_log2;
 	uint32_t y = 1 << size_log2;
-	const uint8_t* src = ref + inc[0] * N;
+	const uint8_t* src = ref + (inc[0] >> (5 - size_log2)) * N;
 	int src_inc = inc[1] * N;
 	do {
 		memcpy(dst, src, size);
@@ -2155,52 +2280,72 @@ static void intra_pred_diagonal(uint8_t* dst, const uint8_t* ref, uint32_t size_
 }
 
 template <int N, typename F0, typename F1>
-static void intra_pred_angular(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode, bool strong_enabled, F0 Load, F1 Store) {
+static void intra_pred_angular(uint8_t* dst, int size_log2, int stride, int valid_x, int valid_y, uint32_t mode, bool strong_enabled, F0 Load, F1 Store) {
 	static const int8_t filter_thr[16] = {
 		7, 6, 6, 6, 6, 6, 6, 4, 0, 4, 6, 6, 6, 6, 6, 6
 	};
 	uint8_t neighbour[64];
 	if ((N == 1) && (3 <= size_log2) && (filter_thr[(mode - 2) & 15] & (1 << (size_log2 - 3)))) {
-		if (strong_enabled && intra_pred_detect_strong_filter(dst, size_log2, stride, avail)) {
-			intra_pred_get_ref_filtered(neighbour, dst, size_log2, stride, avail, mode);
+		if (intra_pred_detect_strong_filter(strong_enabled, dst, size_log2, stride, valid_x, valid_y)) {
+			intra_pred_get_ref_filtered_strong(neighbour, dst, size_log2, stride, valid_x, valid_y, mode);
 		} else {
-			intra_pred_get_ref_filtered(neighbour, dst, size_log2, stride, avail, mode);
+			intra_pred_get_ref_filtered(neighbour, dst, size_log2, stride, valid_x, valid_y, mode);
 		}
 	} else {
-		intra_pred_get_ref_raw<N>(neighbour, dst, size_log2, stride, avail, mode);
+		intra_pred_get_ref_raw<N>(neighbour, dst, size_log2, stride, valid_x, valid_y, mode);
 	}
-	if ((mode - 2) & 15) {
-		if (mode < 18) {
-			intra_pred_angular_horiz<N>(dst, neighbour, size_log2, stride, mode);
+	mode -= 2;
+	if (mode & 7) {
+		if (mode < 16) {
+			intra_pred_angular_filter<N>(dst, neighbour, size_log2, stride, N, mode, Load, Store);
 		} else {
-			intra_pred_angular_vert<N>(dst, neighbour, size_log2, stride, mode, Load, Store);
+			intra_pred_angular_filter<N>(dst, neighbour, size_log2, N, stride, mode, Load, Store);
 		}
 	} else {
-		intra_pred_diagonal<N>(dst, neighbour, size_log2, stride, mode);
+		if (mode & 8) {
+			if (mode == 8) {
+				intra_pred_horizontal<N>(dst, neighbour, size_log2, stride);
+				if ((N == 1) && (size_log2 < 5) && (0 < valid_x)) {
+					uint32_t len = 1 << size_log2;
+					get_multipix_raw_core<1>(neighbour + len, dst - stride, -1, (0 < valid_y) ? -1 : 0, valid_x, len + 1, 1, stride);
+					intra_pred_post_edge_filter(dst, neighbour + len, len, 1);
+				}
+			} else {
+				intra_pred_vertical<N>(dst, neighbour, size_log2, stride);
+				if ((N == 1) && (size_log2 < 5) && (0 < valid_y)) {
+					uint32_t len = 1 << size_log2;
+					get_multipix_raw_core<1>(neighbour + len, dst - 1, -1, (0 < valid_x) ? -1 : 0, valid_y, len + 1, stride, 1);
+					intra_pred_post_edge_filter(dst, neighbour + len, 1 << size_log2, stride);
+				}
+			}
+		} else {
+			intra_pred_diagonal<N>(dst, neighbour, size_log2, stride, mode);
+		}
 	}
 }
 
 template <int N, typename F0, typename F1>
-static inline void intra_prediction_dispatch(uint8_t* dst, uint32_t size_log2, uint32_t stride, uint32_t avail, uint32_t mode, bool strong_enabled, F0 Load, F1 Store) {
+static inline void intra_prediction_dispatch(uint8_t* dst, int size_log2, int stride, int valid_x, int valid_y, uint32_t mode, bool strong_enabled, F0 Load, F1 Store) {
 	switch (mode) {
 	case 0:
-		intra_pred_planar<N>(dst, size_log2, stride, avail);
+		intra_pred_planar<N>(dst, size_log2, stride, valid_x, valid_y, strong_enabled);
 		break;
 	case 1:
-		intra_pred_dc<N>(dst, size_log2, stride, avail);
+		intra_pred_dc<N>(dst, size_log2, stride, valid_x, valid_y);
 		break;
 	default:
-		intra_pred_angular<N>(dst, size_log2, stride, avail, mode, strong_enabled, Load, Store);
+		intra_pred_angular<N>(dst, size_log2, stride, valid_x, valid_y, mode, strong_enabled, Load, Store);
 		break;
 	}
 }
 
-static inline void intra_prediction(const h265d_ctu_t& dst, uint32_t size_log2, uint32_t offset_luma, uint32_t offset_chroma, int pred_idx, uint32_t avail) {
+static inline void intra_prediction(const h265d_ctu_t& dst, int size_log2, int offset_x, int valid_x, int offset_y, int valid_y, int pred_idx) {
 	uint32_t stride = dst.sps->ctb_info.stride;
-	intra_prediction_dispatch<1>(dst.luma + offset_luma, size_log2, stride, avail, dst.order_luma[pred_idx], dst.sps->strong_intra_smoothing_enabled_flag, load_1pix(), store_1pix());
-	if (2 < size_log2) {
-		intra_prediction_dispatch<2>(dst.chroma + offset_chroma, size_log2 - 1, stride, avail, dst.order_chroma, false, load_2pix(), store_2pix());
+	intra_prediction_dispatch<1>(dst.luma + offset_y * stride + offset_x, size_log2, stride, valid_x, valid_y, dst.order_luma[pred_idx], dst.sps->strong_intra_smoothing_enabled_flag, load_1pix(), store_1pix());
+	if (size_log2 == 2) {
+		return;
 	}
+	intra_prediction_dispatch<2>(dst.chroma + (offset_y >> 1) * stride + offset_x, size_log2 - 1, stride, valid_x >> 1, valid_y >> 1, dst.order_chroma, false, load_2pix(), store_2pix());
 }
 
 static inline void qpy_fill(uint8_t left[], uint8_t top[], uint32_t qpy, uint32_t num) {
@@ -2239,7 +2384,7 @@ static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_to
 	qpy_fill(qp_left, qp_top, qpy, 1 << (size_log2 - 2));
 }
 
-static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t depth, uint8_t upper_cbf_cbcr, uint32_t offset_x, uint32_t offset_y, int idx, int pred_idx, uint32_t avail) {
+static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, uint32_t depth, uint8_t upper_cbf_cbcr, int offset_x, int valid_x, int offset_y, int valid_y, int idx, int pred_idx) {
 	uint32_t split;
 	if (dst.sps->ctb_info.transform_log2 < size_log2) {
 		split = 1;
@@ -2278,17 +2423,18 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 			pi3 = pred_idx;
 		}
 		size_log2 -= 1;
+		if (size_log2 == 2) {
+			uint32_t stride = dst.sps->ctb_info.stride;
+			intra_prediction_dispatch<2>(dst.chroma + (offset_y >> 1) * stride + offset_x, size_log2, stride, (unavail & 2) ? -1 : (valid_x >> 1), (unavail & 1) ? -1 : (valid_y >> 1), dst.order_chroma, false, load_2pix(), store_2pix());
+		}
 		depth += 1;
 		uint32_t block_len = 1 << size_log2;
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y, 0, pi0, avail | ((avail & 3) << 2));
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y, 1, pi1, (avail | 1) & ~4);
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x, offset_y + block_len, 2, pi2, avail | 2 | 8);
-		transform_tree(dst, st, size_log2, depth, cbf, offset_x + block_len, offset_y + block_len, 3, pi3, (avail | 3) & ~8);
+		transform_tree(dst, st, size_log2, unavail, depth, cbf, offset_x, valid_x, offset_y, valid_y, 0, pi0);
+		transform_tree(dst, st, size_log2, unavail & ~1, depth, cbf, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), 1, pi1);
+		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, 2, pi2);
+		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), 3, pi3);
 	} else {
-		uint32_t stride = dst.sps->ctb_info.stride;
-		uint32_t offset_luma = offset_y * stride + offset_x;
-		uint32_t offset_chroma = (offset_y >> 1) * stride + offset_x;
-		intra_prediction(dst, size_log2, offset_luma, offset_chroma, pred_idx, avail);
+		intra_prediction(dst, size_log2, offset_x, (unavail & 2) ? -1 : valid_x, offset_y, (unavail & 1) ? -1 : valid_y, pred_idx);
 		cbf = cbf * 2;
 		if (dst.is_intra || depth || cbf) {
 			cbf |= cbf_luma(dst.cabac, st, depth);
@@ -2300,7 +2446,7 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		}
 		qpy_update(dst, &dst.qp_history[0][offset_y >> 2], &dst.qp_history[0][offset_x >> 2], qp_delta, size_log2);
 		if (cbf) {
-			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_luma, offset_chroma);
+			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_x, offset_y);
 		}
 	}
 }
@@ -2322,7 +2468,11 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 }
 
 template <typename F>
-static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint32_t offset_x, uint32_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+	intra_depth_fill(left, top, size_log2);
+	if (dst.pps->cu_qp_delta_enabled_flag) {
+		dst.qp_delta_req = 1;
+	}
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
 	}
@@ -2366,60 +2516,35 @@ static void coding_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint
 	for (int i = 0; i < 1; ++i) {
 		dst.order_chroma = intra_chroma_pred_dir(chroma_mode_idx, dst.order_luma[i]);
 	}
-	transform_tree(dst, st, size_log2, 0, 3, offset_x, offset_y, 0, 0, avail);
 }
 
-static void quad_tree_normal(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
-	if ((dst.sps->ctb_info.size_log2_min < size_log2) && split_cu_flag(dst.cabac, st, (6 < size_log2 + left->depth) + (6 < size_log2 + top->depth))) {
+static inline bool frame_boundary(int size_log2, int valid_x, int valid_y) {
+	return (valid_x < (1 << size_log2)) || (valid_y < (1 << size_log2));
+}
+
+static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int valid_x, int offset_y, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	if ((valid_x <= 0) || (valid_y <= 0)) {
+		return;
+	}
+	if ((dst.sps->ctb_info.size_log2_min < size_log2) && (frame_boundary(size_log2, valid_x, valid_y) || split_cu_flag(dst.cabac, st, (6 < size_log2 + left->depth) + (6 < size_log2 + top->depth)))) {
 		size_log2 -= 1;
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail | ((avail & 3) << 2), left, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y, (avail | 1) & ~4, left, top + info_offset);
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2 | 8, left + info_offset, top);
-		quad_tree_normal(dst, st, size_log2, offset_x + block_len, offset_y + block_len, (avail | 3) & ~8, left + info_offset, top + info_offset);
+		quad_tree(dst, st, size_log2, unavail, offset_x, valid_x, offset_y, valid_y, left, top);
+		quad_tree(dst, st, size_log2, unavail & ~1, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
+		quad_tree(dst, st, size_log2, unavail & ~2, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
+		quad_tree(dst, st, size_log2, 0, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
-		intra_depth_fill(left, top, size_log2);
-		if (dst.pps->cu_qp_delta_enabled_flag) {
-			dst.qp_delta_req = 1;
-		}
-		return coding_unit(dst, st, size_log2, offset_x, offset_y, avail, left, top, pred_mode_flag_ipic());
-	}
-}
-
-static void quad_tree_boundary(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t offset_x, uint8_t offset_y, uint32_t avail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
-	uint32_t block_len = 1 << size_log2;
-	uint32_t base_x = (dst.pos_x << dst.sps->ctb_info.size_log2) + offset_x;
-	uint32_t base_y = (dst.pos_y << dst.sps->ctb_info.size_log2) + offset_y;
-	if ((dst.sps->ctb_info.size_log2_min < size_log2) && ((dst.sps->pic_width_in_luma_samples < base_x + block_len) || (dst.sps->pic_height_in_luma_samples < base_y + block_len))) {
-		size_log2 -= 1;
-		uint32_t info_offset = 1 << (size_log2 - 2);
-		block_len >>= 1;
-		quad_tree_boundary(dst, st, size_log2, offset_x, offset_y, avail, left, top);
-		bool right_skip = (dst.sps->pic_width_in_luma_samples <= base_x + block_len);
-		bool bottom_skip = (dst.sps->pic_height_in_luma_samples <= base_y + block_len);
-		if (!right_skip) {
-			quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y, avail | 1, left, top + info_offset);
-		}
-		if (!bottom_skip) {
-			quad_tree_boundary(dst, st, size_log2, offset_x, offset_y + block_len, avail | 2, left + info_offset, top);
-			if (!right_skip) {
-				quad_tree_boundary(dst, st, size_log2, offset_x + block_len, offset_y + block_len, avail | 3, left + info_offset, top + info_offset);
-			}
-		}
-	} else {
-		quad_tree_normal(dst, st, size_log2, offset_x, offset_y, avail, left, top);
+		coding_unit_header(dst, st, size_log2, left, top, pred_mode_flag_ipic());
+		transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0);
 	}
 }
 
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
-	uint32_t avail = (dst.not_first_row ? (8 + 2) : 0) + (dst.pos_x != 0);
-	if ((dst.sps->ctb_info.columns - dst.pos_x < 2) || (dst.sps->ctb_info.rows - dst.pos_y < 2)) {
-		quad_tree_boundary(dst, st, dst.sps->ctb_info.size_log2, 0, 0, avail, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
-	} else {
-		quad_tree_normal(dst, st, dst.sps->ctb_info.size_log2, 0, 0, avail, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
-	}
+	uint32_t idx_in_slice = dst.idx_in_slice;
+	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 2 + (!dst.pos_x || !idx_in_slice);
+	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
 }
 
 static inline void neighbour_init(h265d_neighbour_t neighbour[], size_t num) {
@@ -2449,6 +2574,8 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	dst.pos_y = ctu_address / sps.ctb_info.columns;
 	uint32_t y_offset = sps.ctb_info.columns * dst.pos_y;
 	dst.pos_x = ctu_address - y_offset;
+	dst.valid_x = sps.pic_width_in_luma_samples - (dst.pos_x << sps.ctb_info.size_log2);
+	dst.valid_y = std::min(sps.pic_height_in_luma_samples - (dst.pos_y << sps.ctb_info.size_log2), 1U << sps.ctb_info.size_log2);
 	uint32_t luma_offset = ((y_offset << sps.ctb_info.size_log2) + dst.pos_x) << sps.ctb_info.size_log2;
 	m2d_frame_t& frm = dst.frames[0];
 	frm.width = sps.ctb_info.stride;
@@ -2480,11 +2607,17 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	if (dst.sps->ctb_info.columns <= pos_x) {
 		neighbour_init(dst.neighbour_left, NUM_ELEM(dst.neighbour_left));
 		dst.pos_y++;
+		dst.valid_x = dst.sps->pic_width_in_luma_samples;
+		if (dst.pos_y == dst.sps->ctb_info.rows - 1) {
+			dst.valid_y = std::min(dst.sps->pic_height_in_luma_samples - (dst.pos_y << size_log2), 1U << size_log2);
+		}
 		pos_x = 0;
 		uint32_t y_offset = dst.sps->ctb_info.columns << (size_log2 * 2);
 		uint32_t line_offset = dst.sps->ctb_info.columns << size_log2;
 		dst.luma = dst.luma + y_offset - line_offset;
 		dst.chroma = dst.chroma + (y_offset >> 1) - line_offset;
+	} else {
+		dst.valid_x -= 1 << size_log2;
 	}
 	dst.luma += 1 << size_log2;
 	dst.chroma += 1 << size_log2;
