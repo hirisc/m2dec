@@ -103,19 +103,13 @@ class QueuedBuffer : private Uncopyable {
 	int num_;
 	int filled_num_;
 	std::vector<T> frames_;
-	AsyncQueue<T> empty_frames_;
-	AsyncQueue<T> stuffed_frames_;
-	T reserveFrame() {
+	AsyncQueue<T*> empty_frames_;
+	AsyncQueue<T*> stuffed_frames_;
+	T* reserveFrame() {
 		return empty_frames_.pop();
 	}
-	void pushFrame(T frm) {
+	void pushFrame(T* frm) {
 		stuffed_frames_.push(frm);
-	}
-	T popFrame() {
-		return stuffed_frames_.pop();
-	}
-	void discardFrame(T frm) {
-		empty_frames_.push(frm);
 	}
 public:
 	QueuedBuffer(int num)
@@ -125,15 +119,21 @@ public:
 		  stuffed_frames_(num)
 	{
 		for (int i = 0; i < num_; ++i) {
-			empty_frames_.push(frames_[i]);
+			empty_frames_.push(&frames_[i]);
 		}
 	}
 	~QueuedBuffer() {}
+	T* popFrame() {
+		return stuffed_frames_.pop();
+	}
+	void discardFrame(T* frm) {
+		empty_frames_.push(frm);
+	}
 	void assign(std::vector<T> dat) {
 		frames_.assign(dat.begin(), dat.end());
 		drop();
 		for (int i = 0; i < num_; ++i) {
-			empty_frames_.push(frames_[i]);
+			empty_frames_.push(&frames_[i]);
 		}
 	}
 	void drop() {
@@ -145,13 +145,13 @@ public:
 template <typename T>
 class ReadableFrame: private Uncopyable {
 	QueuedBuffer<T>& buffer_;
-	T frame_;
+	T* frame_;
 public:
 	ReadableFrame(QueuedBuffer<T>& buf) : buffer_(buf), frame_(buffer_.popFrame()) {}
 	~ReadableFrame() {
 		buffer_.discardFrame(frame_);
 	}
-	const T& get() {
+	const T* get() {
 		return frame_;
 	}
 };
@@ -159,13 +159,13 @@ public:
 template <typename T>
 class WritableFrame: private Uncopyable {
 	QueuedBuffer<T>& buffer_;
-	T frame_;
+	T* frame_;
 public:
 	WritableFrame(QueuedBuffer<T>& buf) : buffer_(buf), frame_(buffer_.reserveFrame()) {}
 	~WritableFrame() {
 		buffer_.pushFrame(frame_);
 	}
-	T& get() {
+	T* get() {
 		return frame_;
 	}
 };
@@ -311,8 +311,8 @@ private:
 		RecordTime(1);
 		for (;;) {
 			WritableFrame<Buffer> wr(outqueue_);
-			Buffer& buf = wr.get();
-			err = fr_.read_block(buf);
+			Buffer* buf = wr.get();
+			err = fr_.read_block(*buf);
 			if (err < 0) {
 				break;
 			}
@@ -320,7 +320,7 @@ private:
 		fprintf(stderr, "File terminate.\n");
 		RecordTime(0);
 		WritableFrame<Buffer> wr(outqueue_);
-		wr.get().len = -1;
+		wr.get()->len = -1;
 		return 0;
 	}
 };
@@ -332,7 +332,7 @@ public:
 		: m2dec_(codec, dstnum, reread_file, this),
 		  dst_align_(dstnum),
 		  inqueue_(inqueue), outqueue_(dstnum),
-		  src_next_(0), dpb_emptify_(dpb_emptify), terminated_(false) {
+		  src_(0), dpb_emptify_(dpb_emptify), terminated_(false) {
 	}
 	~M2DecoderUnit() {}
 	FileReaderUnit::QueueType& inqueue() {
@@ -352,7 +352,7 @@ private:
 	std::vector<Frame> dst_align_;
 	FileReaderUnit::QueueType& inqueue_;
 	M2DecoderUnit::QueueType outqueue_;
-	const Buffer* src_next_;
+	Buffer* src_;
 	bool dpb_emptify_;
 	bool terminated_;
 	static void post_dst(void *obj, Frame& frm) {
@@ -363,22 +363,24 @@ private:
 	}
 	void post_dst_impl(Frame& frm) {
 		WritableFrame<Frame> wr(outqueue_);
-		wr.get() = frm;
+		*wr.get() = frm;
 	}
 	int reread_file_impl() {
-		ReadableFrame<Buffer> rd(inqueue_);
-		const Buffer* src = &rd.get();
-		if (src->len <= 0) {
+		if (src_) {
+			inqueue_.discardFrame(src_);
+		}
+		src_ = inqueue_.popFrame();
+		if (src_->len <= 0) {
 			terminated_ = true;
 			return -1;
 		}
-		M2Decoder::type_t codec = static_cast<M2Decoder::type_t>(src->type);
+		M2Decoder::type_t codec = static_cast<M2Decoder::type_t>(src_->type);
 		if (codec != m2dec_.codec_mode()) {
 			m2dec_.change_codec(codec);
 		}
 		dec_bits *stream = dec().demuxer()->stream;
 		stream = stream ? stream : dec().stream();
-		dec_bits_set_data(stream, src->data, src->len, src->id);
+		dec_bits_set_data(stream, src_->data, src_->len, src_->id);
 		return 0;
 	}
 	int run_impl() {
@@ -648,15 +650,15 @@ struct Options {
 	std::list<const char *> infile_list_;
 	FileWriterUnit fw_;
 	int outbuf_;
-	bool repeat_;
+	int repeat_;
 	bool logdump_;
 	bool dpb_mode_;
 	~Options() {}
 	Options(int argc, char **argv)
 		: interval_(0),
-		  outbuf_(3), repeat_(false), logdump_(false), dpb_mode_(false) {
+		  outbuf_(3), repeat_(1), logdump_(false), dpb_mode_(false) {
 		int opt;
-		while ((opt = getopt(argc, argv, "ef:hlmorst:")) != -1) {
+		while ((opt = getopt(argc, argv, "ef:hlmor:st:")) != -1) {
 			switch (opt) {
 			case 'e':
 				dpb_mode_ = true;
@@ -677,7 +679,7 @@ struct Options {
 				fw_.set_mode(FileWriter::WRITE_RAW);
 				break;
 			case 'r':
-				repeat_ = true;
+				repeat_ = strtoul(optarg, 0, 0);
 				break;
 			case 't':
 				interval_ = strtoul(optarg, 0, 0);
@@ -852,12 +854,12 @@ int run_loop(Options& opt, int outbuf) {
 	while (1) {
 		if (!surface.suspended()) {
 			ReadableFrame<Frame> rd(m2dec.outqueue());
-			const Frame& out = rd.get();
-			if (!out.luma) {
+			const Frame* out = rd.get();
+			if (!out->luma) {
 				break;
 			}
-			surface.display(out);
-			opt.fw_.write(out);
+			surface.display(*out);
+			opt.fw_.write(*out);
 		} else {
 			UniDelay(100);
 		}
@@ -925,11 +927,12 @@ int main(int argc, char **argv)
 		timer = SDL_AddTimer(opt.interval_, DispTimer, 0);
 	}
 #endif /* ENABLE_DISPLAY */
+	opt.repeat_ = std::max(1, opt.repeat_);
 	do {
 		if (run_loop(opt, opt.outbuf_) < 0) {
 			break;
 		}
-	} while (opt.repeat_);
+	} while (--opt.repeat_);
 #ifdef ENABLE_DISPLAY
 	if (opt.interval_) {
 		SDL_RemoveTimer(timer);
