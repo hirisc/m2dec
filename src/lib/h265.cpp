@@ -25,8 +25,8 @@
 #include <assert.h>
 #include <string.h>
 #include <setjmp.h>
-#include <stdlib.h>
 #include <limits.h>
+#include <cstdlib>
 #include <algorithm>
 #include "h265.h"
 #include "m2d_macro.h"
@@ -67,6 +67,49 @@ dec_bits *h265d_stream_pos(h265d_context *h2) {
 	return &reinterpret_cast<h265d_data_t*>(h2)->stream_i;
 }
 
+static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* pool) {
+	uint8_t* next = pool;
+	int col = sps.ctb_info.columns;
+	if (ctu) {
+		ctu->neighbour_top = reinterpret_cast<h265d_neighbour_t*>(next);
+	}
+	next += sizeof(ctu->neighbour_left) * col;
+	if (ctu) {
+		ctu->deblock_topedge = ctu->deblock_topedgebase = reinterpret_cast<h265d_deblocking_strength_t*>(next);
+	}
+	next += sizeof(ctu->deblock_topedge[0]) * (col << (sps.ctb_info.size_log2 - 3));
+	size_t sao_right_len = sizeof(ctu->sao_vlines.right[0][0][0]) << sps.ctb_info.size_log2;
+	size_t sao_line_len = (sizeof(ctu->sao_hlines[0][0].bottom[0]) * col) << sps.ctb_info.size_log2;
+	size_t sao_map_len = (sizeof(ctu->sao_hlines[0][0].reserved_flag[0]) * col + 7) >> 3;
+	for (int i = 0; i < 2; ++i) {
+		for (int col = 0; col < 2; ++col) {
+			h265d_sao_hlines_t& hlines = ctu->sao_hlines[i][col];
+			h265d_sao_vlines_t& vlines = ctu->sao_vlines;
+			if (ctu) {
+				vlines.right[i][col] = reinterpret_cast<uint8_t*>(next);
+			}
+			next += sao_right_len;
+			if (ctu) {
+				hlines.bottom = reinterpret_cast<uint8_t*>(next);
+			}
+			next += sao_line_len;
+			if (ctu) {
+				hlines.reserved_flag = reinterpret_cast<uint8_t*>(next);
+			}
+			next += sao_map_len;
+		}
+	}
+	if (ctu) {
+		ctu->sao_signbuf = reinterpret_cast<uint8_t*>(next);
+	}
+	next += sizeof(ctu->sao_signbuf[0]) << (sps.ctb_info.size_log2 - 2);
+	if (ctu) {
+		ctu->sao_map = reinterpret_cast<h265d_sao_map_t*>(next);
+	}
+	next += sizeof(ctu->sao_map[0]) * col * sps.ctb_info.columns;
+	return next - pool;
+}
+
 int h265d_get_info(h265d_context *h2, m2d_info_t *info) {
 	if (!h2 || !info) {
 		return -1;
@@ -84,8 +127,7 @@ int h265d_get_info(h265d_context *h2, m2d_info_t *info) {
 	info->crop[1] = width - sps.pic_width_in_luma_samples + sps.cropping[1];
 	info->crop[2] = sps.cropping[2];
 	info->crop[3] = height - sps.pic_height_in_luma_samples + sps.cropping[3];
-	info->additional_size = (sizeof(h2d.coding_tree_unit.sao_map[0]) * sps.ctb_info.rows) * sps.ctb_info.columns
-		+ sizeof(h2d.coding_tree_unit.neighbour_left) * sps.ctb_info.columns;
+	info->additional_size = set_second_frame(sps, 0, 0);
 	return 0;
 }
 
@@ -98,7 +140,7 @@ int h265d_set_frames(h265d_context *h2, int num_frame, m2d_frame_t *frame, uint8
 	ctu.num_frames = num_frame;
 	std::copy(frame, frame + num_frame, ctu.frames);
 	memset(ctu.lru, 0, sizeof(ctu.lru));
-	ctu.neighbour_top = reinterpret_cast<h265d_neighbour_t*>(second_frame);
+	set_second_frame(h2d.sps[h2d.pps[h2d.slice_header.pps_id].sps_id], &ctu, second_frame);
 /*
 	h2d->slice_header->reorder[0].ref_frames = mb->frame->refs[0];
 	h2d->slice_header->reorder[1].ref_frames = mb->frame->refs[1];
@@ -664,62 +706,90 @@ static inline void sao_read_offset(h265d_sao_map_elem_t& dst, uint32_t idx, uint
 	}
 }
 
-static inline void sao_read_offset_band(int8_t offset[], m2d_cabac_t& cabac, dec_bits& st) {
+static inline void sao_read_offset_band(h265d_sao_map_elem_t& map, m2d_cabac_t& cabac, dec_bits& st) {
+	int8_t* offset = map.offset;
 	for (int j = 0; j < 4; ++j) {
 		int ofs = offset[j];
 		if (ofs && cabac_decode_bypass(&cabac, &st)) {
 			offset[j] = -ofs;
 		}
 	}
-	cabac_decode_multibypass(&cabac, &st, 5);
+	map.opt.band_pos = cabac_decode_multibypass(&cabac, &st, 5);
 }
 
-static inline uint32_t sao_eo_class(m2d_cabac_t& cabac, dec_bits& st) {
-	return cabac_decode_multibypass(&cabac, &st, 2);
+static inline void sao_eo_fix_offset(h265d_sao_map_elem_t& dst) {
+	dst.offset[2] = -dst.offset[2];
+	dst.offset[3] = -dst.offset[3];
 }
 
-static void sao_read(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
-	uint32_t merge_flag = 0;
-	if (dst.pos_x != 0) {
-		merge_flag = sao_merge_flag(dst.cabac, st);
-	}
-	if (!merge_flag && dst.pos_y != 0) {
-		merge_flag = sao_merge_flag(dst.cabac, st) * 2;
-	}
-	h265d_sao_map_t& sao_map = dst.sao_map[0];
-	if (!merge_flag) {
-		sao_map.idx = 0;
-		if (hdr.body.slice_sao_luma_flag) {
-			uint32_t idx = sao_type_idx(dst.cabac, st);
-			if (idx != 0) {
-				uint32_t max_bits = (1 << (dst.sps->bit_depth_luma_minus8 + 3)) - 1;
-				sao_map.idx = idx;
-				sao_read_offset(sao_map.elem[0], idx, max_bits, dst.cabac, st);
-				if (idx == 1) {
-					sao_read_offset_band(sao_map.elem[0].offset, dst.cabac, st);
-				} else {
-					sao_eo_class(dst.cabac, st);
-				}
-			}
-		}
-		if (hdr.body.slice_sao_chroma_flag) {
-			uint32_t idx = sao_type_idx(dst.cabac, st);
-			if (idx != 0) {
-				uint32_t max_bits = (1 << (dst.sps->bit_depth_chroma_minus8 + 3)) - 1;
-				sao_map.idx |= idx << 4;
-				sao_read_offset(sao_map.elem[1], idx, max_bits, dst.cabac, st);
-				if (idx == 1) {
-					sao_read_offset_band(sao_map.elem[1].offset, dst.cabac, st);
-				} else {
-					sao_eo_class(dst.cabac, st);
-				}
-				sao_read_offset(sao_map.elem[2], idx, max_bits, dst.cabac, st);
-				if (idx == 1) {
-					sao_read_offset_band(sao_map.elem[2].offset, dst.cabac, st);
-				}
+static inline void sao_eo_class(h265d_sao_map_elem_t& dst, m2d_cabac_t& cabac, dec_bits& st) {
+	dst.opt.edge = cabac_decode_multibypass(&cabac, &st, 2);
+	sao_eo_fix_offset(dst);
+}
+
+static void sao_read_block(h265d_sao_map_t& sao_map, h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {
+	sao_map.luma_idx = 0;
+	if (hdr.body.slice_sao_luma_flag) {
+		uint32_t idx = sao_type_idx(dst.cabac, st);
+		if (idx != 0) {
+			uint32_t max_bits = (1 << (dst.sps->bit_depth_luma_minus8 + 3)) - 1;
+			sao_map.luma_idx = idx;
+			sao_read_offset(sao_map.elem[0], idx, max_bits, dst.cabac, st);
+			if (idx == 1) {
+				sao_read_offset_band(sao_map.elem[0], dst.cabac, st);
+			} else {
+				sao_eo_class(sao_map.elem[0], dst.cabac, st);
 			}
 		}
 	}
+	if (hdr.body.slice_sao_chroma_flag) {
+		uint32_t idx = sao_type_idx(dst.cabac, st);
+		if (idx != 0) {
+			uint32_t max_bits = (1 << (dst.sps->bit_depth_chroma_minus8 + 3)) - 1;
+			sao_map.chroma_idx = idx;
+			sao_read_offset(sao_map.elem[1], idx, max_bits, dst.cabac, st);
+			if (idx == 1) {
+				sao_read_offset_band(sao_map.elem[1], dst.cabac, st);
+			} else {
+				sao_eo_class(sao_map.elem[1], dst.cabac, st);
+			}
+			sao_read_offset(sao_map.elem[2], idx, max_bits, dst.cabac, st);
+			if (idx == 1) {
+				sao_read_offset_band(sao_map.elem[2], dst.cabac, st);
+			} else {
+				sao_map.elem[2].opt.edge = sao_map.elem[1].opt.edge;
+				sao_eo_fix_offset(sao_map.elem[2]);
+			}
+		}
+	}
+}
+
+static int sao_search_nonmerged_left(const h265d_sao_map_t* sao_map, int max) {
+	int res = max;
+	do {
+		if (!sao_map->merge_left) {
+			break;
+		}
+		sao_map--;
+	} while (--res);
+	return res - max;
+}
+
+static void sao_read(h265d_ctu_t& ctu, const h265d_slice_header_t& hdr, dec_bits& st) {
+	h265d_sao_map_t* sao_map = ctu.sao_map + ctu.pos_y * ctu.sps->ctb_info.columns + ctu.pos_x;
+	if (ctu.pos_x != 0) {
+		if ((sao_map[0].merge_left = sao_merge_flag(ctu.cabac, st)) != 0) {
+			return;
+		}
+	}
+	if (ctu.pos_y != 0) {
+		if (sao_merge_flag(ctu.cabac, st)) {
+			const h265d_sao_map_t* upper = &sao_map[-ctu.sps->ctb_info.columns];
+			sao_map[0] = upper[sao_search_nonmerged_left(upper, ctu.pos_x)];
+			return;
+		}
+	}
+	sao_read_block(*sao_map, ctu, hdr, st);
 }
 
 static void sao_ignore(h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st) {}
@@ -1961,6 +2031,16 @@ static inline void multipix_fill_gap(uint8_t* dst, int midlen, int pregap, int p
 	}
 }
 
+template <typename T>
+static inline void memcpy_from_vertical(T* dst, const void* src, size_t size, int stride) {
+	T* dst_end = dst + size;
+	const uint8_t* s0 = reinterpret_cast<const uint8_t*>(src);
+	while (dst != dst_end) {
+		*dst++ = *reinterpret_cast<const T*>(s0);
+		s0 += stride;
+	}
+}
+
 template <int N>
 static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
 	int pregap;
@@ -1978,15 +2058,16 @@ static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int o
 		memcpy(dst_ofs, src, midlen * N);
 	} else {
 		if (N == 1) {
-			for (int i = 0; i < midlen; ++i) {
-				dst_ofs[i] = src[0];
-				src += stride;
-			}
+			memcpy_from_vertical(dst_ofs, src, midlen, stride);
 		} else {
+#if 1
+			memcpy_from_vertical((uint16_t*)dst_ofs, src, midlen, stride);
+#else
 			for (int i = 0; i < midlen; ++i) {
 				((uint16_t*)dst_ofs)[i] = ((const uint16_t*)src)[0];
 				src += stride;
 			}
+#endif
 		}
 	}
 	multipix_fill_gap<N>(dst, midlen, pregap, postgap);
@@ -2371,8 +2452,8 @@ static inline void intra_prediction(const h265d_ctu_t& dst, int size_log2, int o
 	intra_prediction_dispatch<2>(dst.chroma + (offset_y >> 1) * stride + offset_x, size_log2 - 1, stride, valid_x >> 1, valid_y >> 1, dst.order_chroma, false, load_2pix(), store_2pix());
 }
 
-static inline void qpy_fill(uint8_t left[], uint8_t top[], uint32_t qpy, uint32_t num) {
-	for (uint32_t i = 0; i < num; ++i) {
+static inline void qpy_fill(uint8_t left[], uint8_t top[], uint32_t qpy, int num) {
+	for (int i = 0; i < num; ++i) {
 		left[i] = qpy;
 		top[i] = qpy;
 	}
@@ -2395,7 +2476,7 @@ static inline void qp_to_scale(h265d_scaling_info_t dst[], uint32_t qpy, const i
 	dst[2].scale = qp_scale[qpy + cbcr_delta[1]];
 }
 
-static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_top[], int32_t qp_delta, uint32_t size_log2) {
+static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_top[], int32_t qp_delta) {
 	uint32_t qpy_org = dst.qpy;
 	uint32_t left = qp_left[0];
 	uint32_t top = qp_top[0];
@@ -2404,7 +2485,36 @@ static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_to
 		dst.qpy = qpy;
 		qp_to_scale(dst.qp_scale, qpy, dst.qpc_delta);
 	}
-	qpy_fill(qp_left, qp_top, qpy, 1 << (size_log2 - 2));
+}
+
+static void record_block_boundary_onedir(h265d_ctu_t& ctu, int dir, int offset_x, int offset_y, int xgap, int ygap, int len, int edgemax, int strength) {
+	if (offset_x & 7) {
+		return;
+	}
+	int org_x = offset_x >> 3;
+	int org_y = offset_y >> 2;
+	h265d_deblocking_strength_t* boundary = ctu.deblock_boundary[dir] + org_x * xgap + (org_y + 1) * ygap;
+	int qp = ctu.qpy + 1;
+	const uint8_t* prev_qp = &ctu.qp_history[dir][org_y];
+	for (int n = 0; n < len; ++n) {
+		boundary[n * ygap].qp = (qp + prev_qp[n]) >> 1;
+		boundary[n * ygap].str = strength;
+	}
+}
+
+static void record_block_boundary(h265d_ctu_t& ctu, int size_log2, int offset_x, int offset_y, uint32_t unavail, int str) {
+	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
+		return;
+	}
+	int stride = ctu.sps->ctb_info.stride;
+	int edgemax = 1 << (ctu.sps->ctb_info.size_log2 - 3);
+	int len = 1 << (size_log2 - 2);
+	if (offset_x || !(unavail & 1)) {
+		record_block_boundary_onedir(ctu, 0, offset_x, offset_y, 1, edgemax, len, edgemax, str);
+	}
+	if (offset_y || !(unavail & 2)) {
+		record_block_boundary_onedir(ctu, 1, offset_y, offset_x, edgemax * 2 + 1, 1, len, edgemax, str);
+	}
 }
 
 static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, uint32_t depth, uint8_t upper_cbf_cbcr, int offset_x, int valid_x, int offset_y, int valid_y, int idx, int pred_idx) {
@@ -2467,10 +2577,12 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 			dst.qp_delta_req = 0;
 			qp_delta = cu_qp_delta(dst.cabac, st);
 		}
-		qpy_update(dst, &dst.qp_history[0][offset_y >> 2], &dst.qp_history[0][offset_x >> 2], qp_delta, size_log2);
+		qpy_update(dst, &dst.qp_history[0][offset_y >> 2], &dst.qp_history[1][offset_x >> 2], qp_delta);
 		if (cbf) {
 			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_x, offset_y);
 		}
+		record_block_boundary(dst, size_log2, offset_x, offset_y, unavail, 2);
+		qpy_fill(&dst.qp_history[0][offset_y >> 2], &dst.qp_history[1][offset_x >> 2], dst.qpy, 1 << (size_log2 - 2));
 	}
 }
 
@@ -2563,11 +2675,656 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 	}
 }
 
+static inline int clip2(int val, int lim) {
+	return (val < 0) ? 0 : ((lim < val) ? lim : val);
+}
+
+static inline bool dsam0(int dpq0, int p3, int p0, int q0, int q3, int beta, int tc) {
+	int dpq = dpq0 * 2;
+	if ((beta >> 2) <= dpq) {
+		return false;
+	}
+	if (((5 * tc + 1) >> 1) <= std::abs(p0 - q0)) {
+		return false;
+	}
+	if ((beta >> 3) <= std::abs(p3 - p0) + std::abs(q0 - q3)) {
+		return false;
+	}
+	return true;
+}
+
+static inline int deblock_weakpq1flag(int dp0, int dp3, int dq0, int dq3, int beta) {
+	int dp = dp0 + dp3;
+	int dq = dq0 + dq3;
+	int beta2 = (beta + (beta >> 1)) >> 3;
+	return (dp < beta2) * 2 + (dq < beta2);
+}
+
+static inline int clip3delta(int dif, int lim) {
+	return (-lim <= dif) ? ((dif <= lim) ? dif : lim) : -lim;
+}
+
+static inline int clip3tc(int src, int dst, int tc) {
+	return src + clip3delta(dst - src, tc);
+}
+
+static inline int deblock_weakpq1(int p0, int p1, int p2, int delta, int tc) {
+	int d1 = p1 + clip3delta((((p2 + p0 + 1) >> 1) - p1 + delta) >> 1, tc >> 1);
+	return CLIP255C(d1);
+}
+
+static inline void deblock_filter1_line(uint8_t* dst, int tc, int depq, int xofs) {
+	int p1 = dst[xofs * 2];
+	int p0 = dst[xofs * 3];
+	int q0 = dst[xofs * 4];
+	int q1 = dst[xofs * 5];
+	int delta = (9 * (q0 - p0) - 3 * (q1 - p1) + 8) >> 4;
+	if (std::abs(delta) < tc * 10) {
+		delta = clip3delta(delta, tc);
+		dst[xofs * 3] = CLIP255C(p0 + delta);
+		dst[xofs * 4] = CLIP255C(q0 - delta);
+		if (depq & 2) {
+			dst[xofs * 2] = deblock_weakpq1(p0, p1, dst[xofs * 1], delta, tc);
+		}
+		if (depq & 1) {
+			dst[xofs * 5] = deblock_weakpq1(q0, q1, dst[xofs * 6], delta, tc);
+		}
+	}
+}
+
+static inline void deblock_filter1(uint8_t* dst, int tc, int depq, int stride, int xofs) {
+	for (int y = 0; y < 4; ++y) {
+		deblock_filter1_line(dst, tc, depq, xofs);
+		dst += stride;
+	}
+}
+
+static inline void deblock_filter2_line(uint8_t* dst, int tc2, int xofs) {
+	int p2 = dst[xofs * 1];
+	int p1 = dst[xofs * 2];
+	int p0 = dst[xofs * 3];
+	int q0 = dst[xofs * 4];
+	dst[xofs * 1] = clip3tc(p2, (2 * dst[0] + 3 * p2 + p1 + p0 + q0 + 4) >> 3, tc2);
+	dst[xofs * 2] = clip3tc(p1, (p2 + p1 + p0 + q0 + 2) >> 2, tc2);
+	int q1 = dst[xofs * 5];
+	dst[xofs * 3] = clip3tc(p0, (p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3, tc2);
+	int q2 = dst[xofs * 6];
+	dst[xofs * 4] = clip3tc(q0, (p1 + 2 * p0 + 2 * q0 + 2 * q1 + q2 + 4) >> 3, tc2);
+	dst[xofs * 5] = clip3tc(q1, (p0 + q0 + q1 + q2 + 2) >> 2, tc2);
+	dst[xofs * 6] = clip3tc(q2, (p0 + q0 + q1 + 3 * q2 + 2 * dst[xofs * 7] + 4) >> 3, tc2);
+}
+
+static inline void deblock_filter2(uint8_t* dst, int tc, int stride, int xofs) {
+	int tc2 = tc * 2;
+	for (int y = 0; y < 4; ++y) {
+		deblock_filter2_line(dst, tc2, xofs);
+		dst += stride;
+	}
+}
+
+static const int8_t q_thr[54 - 16][2] = {
+	{6, 0}, {7, 0}, {8, 1}, {9, 1}, {10, 1}, {11, 1}, {12, 1}, {13, 1},
+	{14, 1}, {15, 1}, {16, 1}, {17, 2}, {18, 2}, {20, 2}, {22, 2}, {24, 3},
+	{26, 3}, {28, 3}, {30, 3}, {32, 4}, {34, 4}, {36, 4}, {38, 5}, {40, 5},
+	{42, 6}, {44, 6}, {46, 7}, {48, 8}, {50, 9}, {52, 10}, {54, 11}, {56, 13},
+	{58, 14}, {60, 16}, {62, 18}, {64, 20}, {64, 22}, {64, 24}
+};
+
+static inline void deblock_edge_luma(uint8_t* dst, int beta_qpy, int tc_qpy, int xofs, int stride) {
+	const uint8_t* src3 = dst + stride * 3;
+	int dp0 = dst[xofs * 1] - 2 * dst[xofs * 2] + dst[xofs * 3];
+	int dq0 = dst[xofs * 4] - 2 * dst[xofs * 5] + dst[xofs * 6];
+	int dp3 = src3[xofs * 1] - 2 * src3[xofs * 2] + src3[xofs * 3];
+	int dq3 = src3[xofs * 4] - 2 * src3[xofs * 5] + src3[xofs * 6];
+	dp0 = std::abs(dp0);
+	dp3 = std::abs(dp3);
+	dq0 = std::abs(dq0);
+	dq3 = std::abs(dq3);
+	int dpq0 = dp0 + dq0;
+	int dpq3 = dp3 + dq3;
+	int d = dpq0 + dpq3;
+	int beta = q_thr[beta_qpy][0];
+	if (d < beta) {
+		int tc = q_thr[tc_qpy][1];
+		if (dsam0(dpq0, dst[0], dst[xofs * 3], dst[xofs * 4], dst[xofs * 7], beta, tc) && dsam0(dpq3, src3[0], src3[xofs * 3], src3[xofs * 4], src3[xofs * 7], beta, tc)) {
+			deblock_filter2(dst, tc, stride, xofs);
+		} else {
+			deblock_filter1(dst, tc, deblock_weakpq1flag(dp0, dp3, dq0, dq3, beta), stride, xofs);
+		}
+	}
+}
+
+static inline void deblocking_edge_luma_block(const h265d_deblocking_strength_t& strength, int beta_offset, int tc_offset, uint8_t* dst, int xstride, int ystride) {
+	int str = strength.str;
+	if (str != 0) {
+		int qp = strength.qp;
+		int beta_qp = (beta_offset ? clip2(qp + beta_offset, 51) : qp) - 16;
+		if (0 <= beta_qp) {
+			int ofs = tc_offset + (str & 2);
+			int tc_qp = (ofs ? clip2(qp + ofs, 51) : qp) - 16;
+			if (0 <= tc_qp) {
+				deblock_edge_luma(dst, beta_qp, tc_qp, xstride, ystride);
+			}
+		}
+	}
+}
+
+static void deblocking_vert_edge_luma_lines(const h265d_deblocking_strength_t str[], int beta_offset, int tc_offset, uint8_t* dst, int stride, int blknum, int edgenum) {
+	for (int y = 0; y < blknum; ++y) {
+		for (int x = 0; x < edgenum; ++x) {
+			deblocking_edge_luma_block(str[x], beta_offset, tc_offset, dst + x * 8, 1, stride);
+		}
+		str += edgenum;
+		dst += stride * 4;
+	}
+}
+
+static void deblocking_horiz_edge_luma_lines(const h265d_deblocking_strength_t str[], int beta_offset, int tc_offset, uint8_t* dst, int stride, int blknum, int edgenum) {
+	for (int y = 0; y < edgenum; ++y) {
+		for (int x = 0; x < blknum; ++x) {
+			deblocking_edge_luma_block(str[x], beta_offset, tc_offset, dst + x * 4, stride, 1);
+		}
+		str = str + edgenum * 2 + 1;
+		dst += stride * 8;
+	}
+}
+
+static inline int qpi_to_qpc_deb(int qpi) {
+	static const int8_t qpcadj_12[] = {
+		-12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1,
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+		16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 29, 30,
+		31, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37, 38, 39, 40, 41,
+		42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59
+	};
+	return qpcadj_12[qpi + 12];
+}
+
+static inline int tc_qpc(int qp, int qpc_offset, int tc_offset) {
+	qp = qpi_to_qpc_deb(qp + qpc_offset);
+	return clip2(qp + tc_offset, 53);
+}
+
+static inline void deblocking_edge_chroma_block(int qp, int pps_offset, int tc_offset, uint8_t* dst, int xofs, int stride) {
+	qp = tc_qpc(qp, pps_offset, tc_offset) - 16;
+	if (qp < 0) {
+		return;
+	}
+	int tc = q_thr[qp][1];
+	for (int x = 0; x < 2; ++x) {
+		int p1 = dst[0];
+		int p0 = dst[xofs * 1];
+		int q0 = dst[xofs * 2];
+		int q1 = dst[xofs * 3];
+		int delta = clip3delta(((q0 - p0) * 4 + p1 - q1 + 4) >> 3, tc);
+		if (delta) {
+			dst[xofs * 1] = CLIP255C(p0 + delta);
+			dst[xofs * 2] = CLIP255C(q0 - delta);
+		}
+		dst += stride;
+	}
+}
+
+static void deblocking_vert_edge_chroma_lines(const h265d_deblocking_strength_t str[], int cb_offset, int cr_offset, int tc_offset, uint8_t* dst, int stride, int blknum, int edgenum) {
+	for (int y = 0; y < blknum; ++y) {
+		for (int x = 0; x < edgenum; ++x) {
+			if (str[x * 2].str == 2) {
+				int qp = str[x * 2].qp;
+				deblocking_edge_chroma_block(qp, cb_offset, tc_offset, dst + x * 16, 2, stride);
+				deblocking_edge_chroma_block(qp, cr_offset, tc_offset, dst + x * 16 + 1, 2, stride);
+			}
+		}
+		str += edgenum * 2;
+		dst += stride * 2;
+	}
+}
+
+static void deblocking_horiz_edge_chroma_lines(const h265d_deblocking_strength_t str[], int cb_offset, int cr_offset, int tc_offset, uint8_t* dst, int stride, int blknum, int edgenum) {
+	for (int y = 0; y < edgenum; ++y) {
+		for (int x = 0; x < blknum; ++x) {
+			if (str[x].str == 2) {
+				int qp = str[x].qp;
+				deblocking_edge_chroma_block(qp, cb_offset, tc_offset, dst + x * 4, stride, 2);
+				deblocking_edge_chroma_block(qp, cr_offset, tc_offset, dst + x * 4 + 1, stride, 2);
+			}
+		}
+		dst += stride * 8;
+		str = str + (edgenum * 4 + 1) * 2;
+	}
+}
+
+static void pre_deblocking_strength(h265d_ctu_t& ctu, int edgenum) {
+	memcpy(ctu.deblock_boundary[0], ctu.deblock_topedge, edgenum * sizeof(ctu.deblock_topedge[0]));
+}
+
+static inline void clear_deblocking_strength_left(h265d_ctu_t& ctu, int edgenum) {
+	h265d_deblocking_strength_t* left = &ctu.deblock_boundary[1][0];
+	int len = edgenum * 2;
+	for (int n = 0; n < edgenum; ++n) {
+		left[0] = left[len];
+		memset(left + 1, 0, len * sizeof(left[0]));
+		left = left + len + 1;
+	}
+}
+
+static void post_deblocking_strength(h265d_ctu_t& ctu, int edgenum) {
+	if (ctu.pos_x < ctu.sps->ctb_info.columns - 1) {
+		clear_deblocking_strength_left(ctu, edgenum);
+	} else {
+		memset(ctu.deblock_boundary[1], 0, sizeof(ctu.deblock_boundary[1]));
+	}
+	int store_size = edgenum * sizeof(ctu.deblock_topedge[0]);
+	memcpy(ctu.deblock_topedge, ctu.deblock_boundary[0] + edgenum * edgenum * 2, store_size);
+	memset(ctu.deblock_boundary[0] + store_size, 0, sizeof(ctu.deblock_boundary[0]) - store_size);
+}
+
+static void sanityedge(const h265d_deblocking_strength_t* bound, int inc, int edgenum, int stride) {
+	for (int e = 0; e < edgenum; ++e) {
+		if ((bound[e * inc].str != 0) || (bound[e * inc + stride].str != 0)) {
+			throw -1;
+		}
+	}
+}
+
+static void sanity(const h265d_ctu_t& ctu) {
+#if 0
+	int edgenum = 1 << (ctu.sps->ctb_info.size_log2 - 3);
+	if (ctu.pos_y == 0) {
+		sanityedge(ctu.deblock_boundary[0], 1, edgenum, 0);
+	}
+	if (ctu.pos_x == 0) {
+		sanityedge(ctu.deblock_boundary[1], edgenum * 2 + 2, edgenum, 0);
+	}
+#endif
+}
+
+static void deblock_ctu(h265d_ctu_t& ctu) {
+	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
+		return;
+	}
+	int edgenum = 1 << (ctu.sps->ctb_info.size_log2 - 3);
+	sanity(ctu);
+	pre_deblocking_strength(ctu, edgenum);
+	sanity(ctu);
+	int stride = ctu.sps->ctb_info.stride;
+	int beta_offset = ctu.slice_header->body.slice_beta_offset_div2 * 2;
+	int tc_offset = ctu.slice_header->body.slice_tc_offset_div2 * 2;
+	uint8_t* luma = ctu.luma - stride * 4 - 4;
+	deblocking_vert_edge_luma_lines(ctu.deblock_boundary[0], beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_y == ctu.sps->ctb_info.rows - 1), edgenum);
+	deblocking_horiz_edge_luma_lines(ctu.deblock_boundary[1], beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_x == ctu.sps->ctb_info.columns - 1), edgenum);
+	uint8_t* chroma = ctu.chroma - stride * 2 - 4;
+	int cb_offset = ctu.pps->pps_cb_qp_offset;
+	int cr_offset = ctu.pps->pps_cr_qp_offset;
+	deblocking_vert_edge_chroma_lines(ctu.deblock_boundary[0], cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_y == ctu.sps->ctb_info.rows - 1), edgenum >> 1);
+	deblocking_horiz_edge_chroma_lines(ctu.deblock_boundary[1], cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_x == ctu.sps->ctb_info.columns - 1), edgenum >> 1);
+	post_deblocking_strength(ctu, edgenum);
+	VC_CHECK;
+}
+
+static inline int signe(int x) {
+	return ((x >> (sizeof(int) * 8 - 1)) & 2) | ((x + 65535) >> 16);
+}
+
+static inline uint8_t set_sign_elem(uint8_t dst, int pos, int sign) {
+	static const uint8_t mask[] = {
+		0xfc, 0xf3, 0xcf, 0x3f
+	};
+	pos &= 3;
+	return (dst & mask[pos]) | (sign << (pos * 2));
+}
+
+static inline void set_sign(uint8_t* dst, int pos, int sign) {
+	dst += pos >> 2;
+	*dst = set_sign_elem(*dst, pos, sign);
+}
+
+/* Assume pos are to be incremented sequentially. */
+static inline int set_sign_buffered(uint8_t* dst, int pos, int sign, int tmp) {
+	if ((pos & 3) == 0) {
+		dst[(pos - 1) >> 2] = tmp;
+	}
+	return set_sign_elem(tmp, pos, sign);
+}
+
+static inline int get_sign(const uint8_t* dst, int pos) {
+	return (dst[pos >> 2] >> ((pos & 3) * 2)) & 3;
+}
+
+static inline int sao_eo_index(int sign0, int sign2) {
+	static const int8_t idx[16] = {
+		-1, 2, 1, -1, 2, 3, -1, 2, 1, -1, 0, 1, -1, 2, 1, -1
+	};
+	return idx[sign0 * 4 + sign2];
+}
+
+static inline void sao_edge0_line(uint8_t* dst, int width, const int8_t* offset, int xgap) {
+	int d1 = dst[0];
+	int sign0 = signe(d1 - dst[-xgap]);
+	for (int x = 0; x < width; ++x) {
+		int d2 = dst[(x + 1) * xgap];
+		int sign2 = signe(d1 - d2);
+		int idx = sao_eo_index(sign2, sign0);
+		if (0 <= idx) {
+			dst[x * xgap] = clip2(d1 + offset[idx], 255);
+		}
+		d1 = d2;
+		sign0 = sign2 ^ 3;
+	}
+}
+
+static inline void sao_edge0(uint8_t* dst, const int8_t offset[], int width, int height, int xgap, int stride, uint32_t unavail) {
+	if (unavail & 1) {
+		dst += xgap;
+		width -= 1;
+	}
+	if (unavail & 4) {
+		width -= 1;
+	}
+	for (int y = 0; y < height; ++y) {
+		sao_edge0_line(dst, width, offset, xgap);
+		dst += stride;
+	}
+}
+
+static inline void fill_sign(const uint8_t* s0, const uint8_t* s1, int len, int xgap, uint8_t* dst) {
+	for (int x = 0; x < len; ++x) {
+		set_sign(dst, x, signe(s1[x * xgap] - s0[x * xgap]));
+	}
+}
+
+/*
+  XDELTA = -1: left-top to right-bottom
+  XDELTA = +1: right-top to left-bottom
+ */
+template <int XDELTA>
+static inline void sao_diag_edge(uint8_t* dst, const int8_t offset[], int width, int height, uint8_t* signbuf, int xgap, int stride, uint32_t unavail) {
+	if (XDELTA) {
+		if (unavail & 1) {
+			dst += xgap;
+			width -= 1;
+		}
+		if (unavail & 4) {
+			width -= 1;
+		}
+	}
+	int ystart = 0;
+	if (unavail & 2) {
+		dst += stride;
+		height -= 1;
+	}
+	if (unavail & 8) {
+		height -= 1;
+	}
+	fill_sign(dst - stride + xgap * XDELTA, dst, width, xgap, signbuf);
+	for (int y = 0; y < height; ++y) {
+		const uint8_t* s2 = dst + stride - xgap * XDELTA;
+		int tmp = 0;
+		for (int x = 0; x < width; ++x) {
+			int d0 = dst[x * xgap];
+			int sign0 = get_sign(signbuf, x);
+			int sign2 = signe(d0 - s2[x * xgap]);
+			int idx = sao_eo_index(sign2, sign0);
+			if (0 <= idx) {
+				dst[x * xgap] = clip2(d0 + offset[idx], 255);
+			}
+			if (!XDELTA || ((0 < XDELTA) && (x != 0))) {
+				set_sign(signbuf, x - XDELTA, sign2 ^ 3);
+			} else if (XDELTA < 0) {
+				tmp = set_sign_buffered(signbuf, x - XDELTA, sign2 ^ 3, tmp);
+			}
+		}
+		if (XDELTA < 0) {
+			if ((width & 3) != 0) {
+				signbuf[width >> 2] = tmp;
+			}
+			set_sign(signbuf, 0, signe(s2[-xgap] - dst[-xgap]));
+		} else if (0 < XDELTA) {
+			set_sign(signbuf, width - 1, signe(s2[width * xgap] - dst[width * xgap]));
+		}
+		dst = dst + stride;
+	}
+}
+
+static void sao_eo_block(const h265d_sao_map_t& sao_map, int cidx, uint8_t* dst, h265d_ctu_t& ctu, int width, int height, int xgap, int stride, uint32_t unavail) {
+	int edge = sao_map.elem[(cidx + 1) >> 1].opt.edge;
+	const int8_t* offset = sao_map.elem[cidx].offset;
+	switch (edge) {
+	case 0:
+		sao_edge0(dst, offset, width, height, xgap, stride, unavail);
+		break;
+	case 1:
+		sao_diag_edge<0>(dst, offset, width, height, ctu.sao_signbuf, xgap, stride, unavail);
+		break;
+	case 2:
+		sao_diag_edge<-1>(dst, offset, width, height, ctu.sao_signbuf, xgap, stride, unavail);
+		break;
+	case 3:
+		sao_diag_edge<1>(dst, offset, width, height, ctu.sao_signbuf, xgap, stride, unavail);
+		break;
+	}
+}
+
+static void sao_bo_block(const h265d_sao_map_t& sao_map, int cidx, uint8_t* dst, int width, int height, int xgap, int stride) {
+	int bandtop = sao_map.elem[cidx].opt.band_pos;
+	const int8_t* offset = sao_map.elem[cidx].offset;
+	int shift = sizeof(*dst) * 8 - 5;
+	unsigned lim = 4U << shift;
+	bandtop <<= shift;
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			int d0 = dst[x * xgap];
+			int dif = d0 - bandtop;
+			if ((unsigned)dif < lim) {
+				dst[x * xgap] = clip2(d0 + offset[dif >> shift], 255);
+			}
+		}
+		dst += stride;
+	}
+}
+
+struct swap_hline {
+	void operator()(uint8_t* a, uint8_t* b, int len) const {
+		uint32_t* a32 = reinterpret_cast<uint32_t*>(a);
+		uint32_t* b32 = reinterpret_cast<uint32_t*>(b);
+		int cnt = len >> 2;
+		for (int x = 0; x < cnt; ++x) {
+			uint32_t tmp = a32[x];
+			a32[x] = b32[x];
+			b32[x] = tmp;
+		}
+	}
+};
+
+struct copy_hline {
+	void operator()(uint8_t* a, const uint8_t* b, int len) const {
+		uint32_t* a32 = reinterpret_cast<uint32_t*>(a);
+		const uint32_t* b32 = reinterpret_cast<const uint32_t*>(b);
+		int cnt = len >> 2;
+		for (int x = 0; x < cnt; ++x) {
+			a32[x] = b32[x];
+		}
+	}
+};
+
+template <typename F>
+static void sao_swap_hline(const uint8_t* record_bits, uint8_t* src, uint8_t* mod, int xpos, int xnum, int width, F Modify) {
+	record_bits += xpos >> 3;
+	int bits = *record_bits++;
+	for (int x = 0; x < xnum; ++x) {
+		if (bits & (1 << (xpos++ & 7))) {
+			Modify(src + x * width, mod + x * width, width);
+		}
+		if ((xpos & 7) == 0) {
+			bits = *record_bits++;
+		}
+	}
+}
+
+static inline void write_hline(uint8_t* dst, const uint8_t* src, int len) {
+	const uint32_t* a32 = reinterpret_cast<const uint32_t*>(src);
+	uint32_t* b32 = reinterpret_cast<uint32_t*>(dst);
+	int cnt = len >> 2;
+	for (int x = 0; x < cnt; ++x) {
+		b32[x] = a32[x];
+	}
+}
+
+static void sao_reserve_hline(h265d_sao_hlines_t& lines, const uint8_t* src, int xpos, int xnum, int width) {
+	uint8_t* record_bits = lines.reserved_flag;
+	write_hline(lines.bottom + xpos * width, src, xnum * width);
+	record_bits += xpos >> 3;
+	int xend = xpos + xnum;
+	int bits = *record_bits;
+	for (int x = xpos; x < xend; ++x) {
+		bits |= 1 << (x & 7);
+		if ((x & 7) == 7) {
+			*record_bits++ = bits;
+			bits = 0;
+		}
+	}
+	if (xend & 7) {
+		*record_bits = bits;
+	}
+}
+
+static inline int vline_flag(int phase, int cidx) {
+	return 1 << (cidx * 2 + (phase & 1));
+}
+
+template <typename T>
+static void sao_swap_vline(h265d_sao_vlines_t& lines, int phase, int cidx, T* src0, T* src1, int stride0, int stride1, int height) {
+	if (lines.reserved_flag & vline_flag(phase, cidx)) {
+		for (int y = 0; y < height; ++y) {
+			T tmp = src0[y * stride0];
+			src0[y * stride0] = src1[y * stride1];
+			src1[y * stride1] = tmp;
+		}
+	}
+}
+
+template <typename T>
+static void sao_reserve_vline(h265d_sao_vlines_t& lines, int phase, int cidx, const T* src, int height, int stride) {
+	lines.reserved_flag |= vline_flag(phase, cidx);
+	memcpy_from_vertical(reinterpret_cast<T*>(lines.right[phase & 1][cidx]), reinterpret_cast<const T*>(src), height, stride);
+}
+
+static void sao_clear_vline(h265d_sao_vlines_t& lines, int phase, int cidx) {
+	lines.reserved_flag &= ~vline_flag(phase, cidx);
+}
+
+static inline int sao_merged_num(const h265d_sao_map_t* sao_map, int max) {
+	int i;
+	for (i = 1; i < max; ++i) {
+		if (!sao_map[i].merge_left) {
+			break;
+		}
+	}
+	return i;
+}
+
+static int sao_region(h265d_ctu_t& ctu, const h265d_sao_map_t* sao_map, int width, int height, int stride, uint32_t unavail, int max, int xphase, int pos_y) {
+	int x_num;
+	sao_clear_vline(ctu.sao_vlines, xphase ^ 1, 0);
+	sao_clear_vline(ctu.sao_vlines, xphase ^ 1, 1);
+	x_num = sao_merged_num(sao_map, max);
+	int hlen = width * x_num;
+	int idx = sao_map[0].luma_idx;
+	if (idx) {
+		if (x_num < max) {
+			if (sao_map[x_num].luma_idx == 2) {
+				sao_reserve_vline(ctu.sao_vlines, xphase ^ 1, 0, ctu.luma + hlen - 1, height, stride);
+			}
+		} else {
+			unavail |= 4;
+		}
+		sao_reserve_hline(ctu.sao_hlines[(pos_y ^ 1) & 1][0], ctu.luma + stride * (height - 1), ctu.pos_x, x_num, width);
+		if (idx == 1) {
+			sao_bo_block(sao_map[0], 0, ctu.luma, hlen, height, 1, stride);
+		} else {
+			sao_swap_vline(ctu.sao_vlines, xphase, 0, ctu.sao_vlines.right[xphase & 1][0], ctu.luma - 1, 1, stride, height);
+			sao_eo_block(sao_map[0], 0, ctu.luma, ctu, hlen, height, 1, stride, unavail);
+			sao_swap_vline(ctu.sao_vlines, xphase, 0, ctu.luma - 1, ctu.sao_vlines.right[xphase & 1][0], stride, 1, height);
+		}
+	}
+	idx = sao_map[0].chroma_idx;
+	if (idx) {
+		if (x_num < max) {
+			if (sao_map[x_num].chroma_idx == 2) {
+				sao_reserve_vline(ctu.sao_vlines, xphase ^ 1, 1, reinterpret_cast<uint16_t*>(ctu.chroma + hlen - 2), height >> 1, stride);
+			}
+		} else {
+			unavail |= 4;
+		}
+		sao_reserve_hline(ctu.sao_hlines[(pos_y ^ 1) & 1][1], ctu.chroma + stride * ((height >> 1) - 1), ctu.pos_x, x_num, width);
+		if (idx == 1) {
+			sao_bo_block(sao_map[0], 1, ctu.chroma, hlen >> 1, height >> 1, 2, stride);
+			sao_bo_block(sao_map[0], 2, ctu.chroma + 1, hlen >> 1, height >> 1, 2, stride);
+		} else if (1 < idx) {
+			sao_swap_vline(ctu.sao_vlines, xphase, 1, reinterpret_cast<uint16_t*>(ctu.sao_vlines.right[xphase & 1][1]), reinterpret_cast<uint16_t*>(ctu.chroma - 2), 1, stride >> 1, height >> 1);
+			sao_eo_block(sao_map[0], 1, ctu.chroma, ctu, hlen >> 1, height >> 1, 2, stride, unavail);
+			sao_eo_block(sao_map[0], 2, ctu.chroma + 1, ctu, hlen >> 1, height >> 1, 2, stride, unavail);
+			sao_swap_vline(ctu.sao_vlines, xphase, 1, reinterpret_cast<uint16_t*>(ctu.chroma - 2), reinterpret_cast<uint16_t*>(ctu.sao_vlines.right[xphase & 1][1]), stride >> 1, 1, height >> 1);
+		}
+	}
+	return x_num;
+}
+
+static void sao_oneframe(h265d_ctu_t& ctu) {
+	if (!ctu.slice_header->body.slice_sao_luma_flag && !ctu.slice_header->body.slice_sao_chroma_flag) {
+		return;
+	}
+	int ymax = ctu.sps->ctb_info.rows;
+	int xmax = ctu.sps->ctb_info.columns;
+	int stride = ctu.sps->ctb_info.stride;
+	int len = 1 << ctu.sps->ctb_info.size_log2;
+	const h265d_sao_map_t* sao_map = ctu.sao_map;
+	uint32_t unavail = 3;
+	for (int y = 0; y < ymax; ++y) {
+		ctu.pos_y = y;
+		ctu.luma = ctu.frames[0].luma + stride * len * y;
+		ctu.chroma = ctu.frames[0].chroma + stride * (len >> 1) * y;
+		if (y != 0) {
+			h265d_sao_hlines_t* prev = ctu.sao_hlines[y & 1];
+			sao_swap_hline(prev[0].reserved_flag, prev[0].bottom, ctu.luma - stride, 0, xmax, len, swap_hline());
+			sao_swap_hline(prev[1].reserved_flag, prev[1].bottom, ctu.chroma - stride, 0, xmax, len, swap_hline());
+		}
+		h265d_sao_hlines_t* next = ctu.sao_hlines[(y ^ 1) & 1];
+		memset(next[0].reserved_flag, 0, (sizeof(next[0].reserved_flag[0]) * xmax + 7) >> 3);
+		memset(next[1].reserved_flag, 0, (sizeof(next[0].reserved_flag[0]) * xmax + 7) >> 3);
+		int height = (y < ymax - 1) ? len : ((ctu.sps->pic_height_in_luma_samples - 1) & (len - 1)) + 1;
+		int x = 0;
+		int phase = 0;
+		ctu.sao_vlines.reserved_flag = 0;
+		while (x < xmax) {
+			ctu.pos_x = x;
+			int run = sao_region(ctu, sao_map + x, len, height, stride, unavail, xmax - x, phase++, y);
+			x += run;
+			ctu.luma += len * run;
+			ctu.chroma += len * run;
+			unavail &= ~1;
+		}
+		if (y != 0) {
+			h265d_sao_hlines_t* prev = ctu.sao_hlines[y & 1];
+			ctu.luma = ctu.frames[0].luma + stride * len * y;
+			ctu.chroma = ctu.frames[0].chroma + stride * (len >> 1) * y;
+			sao_swap_hline(prev[0].reserved_flag, ctu.luma - stride, prev[0].bottom, 0, xmax, len, copy_hline());
+			sao_swap_hline(prev[1].reserved_flag, ctu.chroma - stride, prev[1].bottom, 0, xmax, len, copy_hline());
+		}
+		sao_map += xmax;
+		unavail = (y < ymax - 2) ? 1 : 9;
+	}
+}
+
+static inline uint32_t get_avail(int xpos, int ypos, int cols, int rows) {
+	return (xpos == 0) + (ypos == 0) * 2 + (xpos == cols - 1) * 4 + (ypos == rows - 1) * 8;
+}
+
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
 	uint32_t idx_in_slice = dst.idx_in_slice;
 	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 2 + (!dst.pos_x || !idx_in_slice);
 	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
+	deblock_ctu(dst);
 }
 
 static inline void neighbour_init(h265d_neighbour_t neighbour[], size_t num) {
@@ -2609,6 +3366,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	frm.crop[3] = sps.cropping[3] + frm.height - sps.pic_height_in_luma_samples;
 	dst.luma = frm.luma + luma_offset;
 	dst.chroma = frm.chroma + (luma_offset >> 1);
+	dst.deblock_topedge = dst.deblock_topedgebase + (dst.pos_x << (sps.ctb_info.size_log2 - 3));
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
 	if (dst.qpy != header.slice_qpy) {
@@ -2621,7 +3379,8 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	size_t neighbour_flags_top_len = sps.ctb_info.columns * sizeof(dst.neighbour_left);
 	neighbour_init(dst.neighbour_top, neighbour_flags_top_len);
 	memset(dst.qp_history[0], dst.qpy, sizeof(dst.qp_history));
-	dst.sao_map = reinterpret_cast<h265d_sao_map_t*>(dst.neighbour_top + neighbour_flags_top_len);
+	memset(dst.deblock_boundary, 0, sizeof(dst.deblock_boundary));
+	memset(dst.deblock_topedgebase, 0, sizeof(dst.deblock_topedgebase[0]) * (sps.ctb_info.columns << (sps.ctb_info.size_log2 - 3)));
 }
 
 static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
@@ -2644,6 +3403,7 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	}
 	dst.luma += 1 << size_log2;
 	dst.chroma += 1 << size_log2;
+	dst.deblock_topedge = dst.deblock_topedgebase + (pos_x << (size_log2 - 3));
 	dst.pos_x = pos_x;
 	dst.idx_in_slice++;
 	uint32_t num = NUM_ELEM(dst.neighbour_left);
@@ -2678,12 +3438,14 @@ static void slice_layer(h265d_data_t& h2d, dec_bits& st) {
 	const h265d_sps_t& sps = h2d.sps[pps.sps_id];
 	slice_header(header, pps, sps, st);
 	slice_data(h2d.coding_tree_unit, h2d, pps, sps, st);
+	sao_oneframe(h2d.coding_tree_unit);
 }
 
 static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {
 	int err = 0;
 	dec_bits& st = h2d.stream_i;
 	switch (h2d.current_nal = static_cast<h265d_nal_t>((nalu_header >> 9) & 63)) {
+	case TRAIL_N:
 	case IDR_W_RADL:
 		slice_layer(h2d, st);
 		err = 1;

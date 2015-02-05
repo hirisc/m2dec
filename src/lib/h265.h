@@ -199,6 +199,7 @@ typedef struct {
 } h265d_access_unit_delimite_t;
 
 typedef enum {
+	TRAIL_N = 0,
 	BLA_W_LP = 16,
 	IDR_W_RADL = 19,
 	IDR_N_LP = 20,
@@ -285,13 +286,28 @@ typedef struct {
 
 typedef struct {
 	int8_t offset[4];
-	uint8_t band_pos[4];
+	union {
+		uint8_t band_pos;
+		uint8_t edge;
+	} opt;
 } h265d_sao_map_elem_t;
 
 typedef struct h265d_sao_map_t {
-	uint8_t idx;
+	uint8_t merge_left : 1;
+	uint8_t luma_idx : 2;
+	uint8_t chroma_idx : 2;
 	h265d_sao_map_elem_t elem[3];
 } h265d_sao_map_t;
+
+typedef struct {
+	uint8_t* bottom;
+	uint8_t* reserved_flag;
+} h265d_sao_hlines_t;
+
+typedef struct {
+	uint8_t* right[2][2];
+	uint8_t reserved_flag;
+} h265d_sao_vlines_t;
 
 typedef struct {
 	h265d_nal_t nal_type;
@@ -337,6 +353,11 @@ typedef struct {
 	uint8_t** matrix;
 } h265d_scaling_info_t;
 
+typedef struct {
+	uint8_t qp : 6;
+	uint8_t str : 2;
+} h265d_deblocking_strength_t;
+
 typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t& scale, int idx);
 
 typedef struct h265d_ctu_t {
@@ -367,6 +388,12 @@ typedef struct h265d_ctu_t {
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
 	h265d_cabac_context_t context;
+	h265d_deblocking_strength_t deblock_boundary[2][8 * 17];
+	h265d_deblocking_strength_t* deblock_topedge;
+	h265d_deblocking_strength_t* deblock_topedgebase;
+	h265d_sao_vlines_t sao_vlines;
+	h265d_sao_hlines_t sao_hlines[2][2];
+	uint8_t* sao_signbuf;
 	int16_t coeff_buf[32 * 32 * 2];
 } h265d_ctu_t;
 
