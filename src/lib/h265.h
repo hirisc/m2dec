@@ -69,6 +69,10 @@ typedef struct {
 	uint8_t num_pics;
 	int16_t delta_poc[16];
 	uint16_t used_by_curr_pic_flag;
+} h265d_short_term_ref_pic_elem_t;
+
+typedef struct {
+	h265d_short_term_ref_pic_elem_t ref[2];
 } h265d_short_term_ref_pic_set_t;
 
 typedef struct {
@@ -144,7 +148,7 @@ typedef struct {
 	h265d_sps_prefix_t prefix;
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_scaling_list_data_t scaling_list_data;
-	h265d_short_term_ref_pic_set_t short_term_ref_pic_set[64][2];
+	h265d_short_term_ref_pic_set_t short_term_ref_pic_set[64];
 	h265d_vui_parameters_t vui_parameters;
 } h265d_sps_t;
 
@@ -318,12 +322,15 @@ typedef struct {
 	int8_t slice_tc_offset_div2;
 	uint32_t pic_output_flag : 1;
 	uint32_t colour_plane_id : 2;
+	uint32_t slice_temporal_mvp_enabled_flag : 1;
 	uint32_t slice_sao_luma_flag : 1;
 	uint32_t slice_sao_chroma_flag : 1;
 	uint32_t cabac_init_flag : 1;
 	uint32_t deblocking_filter_override_flag : 1;
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
+	uint16_t slice_pic_order_cnt_lsb;
+	h265d_short_term_ref_pic_set_t short_term_ref_pic_set;
 } h265d_slice_header_body_t;
 
 typedef struct {
@@ -360,6 +367,31 @@ typedef struct {
 
 typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t& scale, int idx);
 
+typedef struct {
+	int poc;
+	int16_t frame_idx;
+	uint8_t is_idr : 1;
+	uint8_t is_terminal : 1;
+} h265d_dpb_elem_t;
+
+typedef struct {
+	int8_t size;
+	int8_t max;
+	int8_t output;
+	int8_t is_ready;
+	h265d_dpb_elem_t data[16];
+} h265d_dpb_t;
+
+typedef struct {
+	uint8_t *curr_luma;
+	uint8_t *curr_chroma;
+	int num;
+	int index;
+	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
+	int8_t lru[H265D_MAX_FRAME_NUM];
+	h265d_dpb_t dpb;
+} h265d_frame_info_t;
+
 typedef struct h265d_ctu_t {
 	m2d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
@@ -384,9 +416,7 @@ typedef struct h265d_ctu_t {
 	void (*sao_read)(struct h265d_ctu_t& dst, const h265d_slice_header_t& hdr, dec_bits& st);
 	uint8_t* luma;
 	uint8_t* chroma;
-	int8_t num_frames;
-	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
-	int8_t lru[H265D_MAX_FRAME_NUM];
+	h265d_frame_info_t frame_info;
 	h265d_cabac_context_t context;
 	h265d_deblocking_strength_t deblock_boundary[2][8 * 17];
 	h265d_deblocking_strength_t* deblock_topedge;
