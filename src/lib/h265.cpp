@@ -2257,7 +2257,7 @@ template <int N>
 static void intra_pred_planar(uint8_t* dst, int size_log2, int stride, int valid_x, int valid_y, bool strong_enabled) {
 	uint8_t neighbour[2 * 34];
 	if ((valid_x <= 0) && (valid_y <= 0)) {
-		fill_dc<N>(dst, size_log2, stride, 128);
+		fill_dc<N>(dst, size_log2, stride, (N == 1) ? 128 : 0x00800080);
 	} else {
 		void (*multipix)(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride);
 		if ((N == 1) && (3 <= size_log2)) {
