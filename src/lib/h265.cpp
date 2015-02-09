@@ -102,11 +102,11 @@ static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* p
 	if (ctu) {
 		ctu->sao_signbuf = reinterpret_cast<uint8_t*>(next);
 	}
-	next += sizeof(ctu->sao_signbuf[0]) << (sps.ctb_info.size_log2 - 2);
+	next += (sizeof(ctu->sao_signbuf[0]) * col) << (sps.ctb_info.size_log2 - 2);
 	if (ctu) {
 		ctu->sao_map = reinterpret_cast<h265d_sao_map_t*>(next);
 	}
-	next += sizeof(ctu->sao_map[0]) * col * sps.ctb_info.columns;
+	next += sizeof(ctu->sao_map[0]) * col * sps.ctb_info.rows;
 	return next - pool;
 }
 
@@ -2436,10 +2436,9 @@ static void intra_pred_angular(uint8_t* dst, int size_log2, int stride, int vali
 	}
 }
 
-static inline void intra_pred_postfilter(uint8_t* dst, int len, int stride, int sub_stride) {
+static inline void intra_pred_postfilter(uint8_t* dst, int len, int stride, int sub_stride, uint32_t c0) {
 	uint32_t d0 = dst[0];
 	const uint8_t* src = dst - sub_stride;
-	uint32_t c0 = src[-stride];
 	for (int x = 0; x < len; ++x) {
 		int t0 = d0 + ((int)((src[x * stride]) - c0) >> 1);
 		dst[x * stride] = CLIP255C(t0);
@@ -2469,11 +2468,14 @@ static void intra_pred_horizontal_mode(uint8_t* dst, int size_log2, int stride, 
 	if (0 < valid_y) {
 		intra_pred_horizontal_raw<N>(dst, size_log2, stride);
 		if ((N == 1) && (size_log2 < 5) && (0 < valid_x)) {
-			intra_pred_postfilter(dst, 1 << size_log2, 1, stride);
+			intra_pred_postfilter(dst, 1 << size_log2, 1, stride, dst[-1 - stride]);
 		}
 	} else {
 		uint32_t dc = (0 < valid_x) ? ((N == 1) ? *(dst - stride) : load_2pix()(dst - stride)) : ((N == 1) ? 128 : 0x00800080);
 		fill_dc<N>(dst, size_log2, stride, dc);
+		if ((N == 1) && (size_log2 < 5) && (0 < valid_x)) {
+			intra_pred_postfilter(dst, 1 << size_log2, 1, stride, dc);
+		}
 	}
 }
 
@@ -2495,11 +2497,14 @@ static void intra_pred_vertical_mode(uint8_t* dst, int size_log2, int stride, in
 	if (0 < valid_x) {
 		intra_pred_vertical_raw<N>(dst, size_log2, stride);
 		if ((N == 1) && (size_log2 < 5) && (0 < valid_y)) {
-			intra_pred_postfilter(dst, 1 << size_log2, stride, 1);
+			intra_pred_postfilter(dst, 1 << size_log2, stride, 1, dst[-1 - stride]);
 		}
 	} else {
 		uint32_t dc = (0 < valid_y) ? ((N == 1) ? *(dst - N) : load_2pix()(dst - N)) : ((N == 1) ? 128 : 0x00800080);
 		fill_dc<N>(dst, size_log2, stride, dc);
+		if ((N == 1) && (size_log2 < 5) && (0 < valid_y)) {
+			intra_pred_postfilter(dst, 1 << size_log2, stride, 1, dc);
+		}
 	}
 }
 
@@ -2808,7 +2813,7 @@ static inline void deblock_filter1_line(uint8_t* dst, int tc, int depq, int xofs
 			dst[xofs * 2] = deblock_weakpq1(p0, p1, dst[xofs * 1], delta, tc);
 		}
 		if (depq & 1) {
-			dst[xofs * 5] = deblock_weakpq1(q0, q1, dst[xofs * 6], delta, tc);
+			dst[xofs * 5] = deblock_weakpq1(q0, q1, dst[xofs * 6], -delta, tc);
 		}
 	}
 }
