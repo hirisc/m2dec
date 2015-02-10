@@ -823,6 +823,7 @@ static void sao_read_block(h265d_sao_map_t& sao_map, h265d_ctu_t& dst, const h26
 			}
 		}
 	}
+	sao_map.chroma_idx = 0;
 	if (hdr.body.slice_sao_chroma_flag) {
 		uint32_t idx = sao_type_idx(dst.cabac, st);
 		if (idx != 0) {
@@ -2123,7 +2124,7 @@ static inline void memcpy_from_vertical(T* dst, const void* src, size_t size, in
 }
 
 template <int N>
-static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) {
 	int pregap;
 	if (offset_min <= offset) {
 		pregap = 0;
@@ -2141,14 +2142,7 @@ static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int o
 		if (N == 1) {
 			memcpy_from_vertical(dst_ofs, src, midlen, stride);
 		} else {
-#if 1
 			memcpy_from_vertical((uint16_t*)dst_ofs, src, midlen, stride);
-#else
-			for (int i = 0; i < midlen; ++i) {
-				((uint16_t*)dst_ofs)[i] = ((const uint16_t*)src)[0];
-				src += stride;
-			}
-#endif
 		}
 	}
 	multipix_fill_gap<N>(dst, midlen, pregap, postgap);
@@ -2156,8 +2150,8 @@ static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int o
 
 template <int N>
 struct get_multipix_raw {
-	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
-		get_multipix_raw_core<N>(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) const {
+		get_multipix_raw_core<N>(dst, src, offset, offset_min, offset_max, size_log2, len, stride, sub_stride);
 	}
 };
 
@@ -2167,7 +2161,7 @@ struct get_pix_filtered_strong {
 	}
 };
 
-static inline void get_multipix_filtered_strong_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+static inline void get_multipix_filtered_strong_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) {
 	uint32_t c0 = src[(offset_min < 0) ? -stride : 0];
 	uint32_t c1 = src[stride * std::min(63, offset_max - 1)];
 	for (int i = 0; i < len; ++i) {
@@ -2177,8 +2171,8 @@ static inline void get_multipix_filtered_strong_core(uint8_t* dst, const uint8_t
 }
 
 struct get_multipix_filtered_strong {
-	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
-		get_multipix_filtered_strong_core(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) const {
+		get_multipix_filtered_strong_core(dst, src, offset, offset_min, offset_max, size_log2, len, stride, sub_stride);
 	}
 };
 
@@ -2198,7 +2192,7 @@ struct get_pix_filtered {
 	}
 };
 
-static inline void get_multipix_filtered_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) {
+static inline void get_multipix_filtered_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) {
 	int c0, c1;
 	if (offset_min < offset) {
 		c0 = src[(offset - 1) * stride];
@@ -2222,21 +2216,18 @@ static inline void get_multipix_filtered_core(uint8_t* dst, const uint8_t* src, 
 		c0 = c1;
 		c1 = c2;
 	}
-	if (midlen != len) {
-		uint32_t c2 = src[0];
-		dst[midlen++] = (c0 + c1 * 2 + c2 + 2) >> 2;
-		if (midlen != len) {
-			dst[midlen++] = (c1 + c2 * 3 + 2) >> 2;
-			if (midlen != len) {
-				memset(dst + midlen, c2, len - midlen);
-			}
-		}
+	while (midlen < len) {
+		dst[midlen++] = (c0 + c1 * 3 + 2) >> 2;
+		c0 = c1;
+	}
+	if (((2 << size_log2) <= offset_max) && (offset + len == (2 << size_log2))) {
+		dst[len - 1] = c1;
 	}
 }
 
 struct get_multipix_filtered {
-	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride) const {
-		get_multipix_filtered_core(dst, src, offset, offset_min, offset_max, len, stride, sub_stride);
+	void operator()(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) const {
+		get_multipix_filtered_core(dst, src, offset, offset_min, offset_max, size_log2, len, stride, sub_stride);
 	}
 };
 
@@ -2259,7 +2250,7 @@ static void intra_pred_planar(uint8_t* dst, int size_log2, int stride, int valid
 	if ((valid_x <= 0) && (valid_y <= 0)) {
 		fill_dc<N>(dst, size_log2, stride, (N == 1) ? 128 : 0x00800080);
 	} else {
-		void (*multipix)(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int len, int stride, int sub_stride);
+		void (*multipix)(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride);
 		if ((N == 1) && (3 <= size_log2)) {
 			if (intra_pred_detect_strong_filter(strong_enabled, dst, size_log2, stride, valid_x, valid_y)) {
 				multipix = get_multipix_filtered_strong_core;
@@ -2270,12 +2261,12 @@ static void intra_pred_planar(uint8_t* dst, int size_log2, int stride, int valid
 			multipix = get_multipix_raw_core<N>;
 		}
 		if (0 < valid_y) {
-			multipix(&neighbour[0], dst - N, 0, (0 < valid_x) ? -1 : 0, valid_y, (1 << size_log2) + 1, stride, N);
+			multipix(&neighbour[0], dst - N, 0, (0 < valid_x) ? -1 : 0, valid_y, size_log2, (1 << size_log2) + 1, stride, N);
 		} else {
 			fillmem<N>(neighbour, dst - stride, (1 << size_log2) + 1);
 		}
 		if (0 < valid_x) {
-			multipix(&neighbour[((1 << size_log2) + 1) * N], dst - stride, 0, (0 < valid_y) ? -1 : 0, valid_x, (1 << size_log2) + 1, N, stride);
+			multipix(&neighbour[((1 << size_log2) + 1) * N], dst - stride, 0, (0 < valid_y) ? -1 : 0, valid_x, size_log2, (1 << size_log2) + 1, N, stride);
 		} else {
 			fillmem<N>(&neighbour[((1 << size_log2) + 1) * N], dst - N, (1 << size_log2) + 1);
 		}
@@ -2328,10 +2319,10 @@ static void intra_pred_get_ref(uint8_t dst[], const uint8_t src[], int size_log2
 	}
 	int base_pos = pos_tbl[extra_len];
 	if (0 < valid_main) {
-		GetMultiPix(dst, src - sub_stride, base_pos, (0 < valid_sub) ? -1 : 0, std::min(2 << size_log2, valid_main), base_len, main_stride, sub_stride);
+		GetMultiPix(dst, src - sub_stride, base_pos, (0 < valid_sub) ? -1 : 0, std::min(2 << size_log2, valid_main), size_log2, base_len, main_stride, sub_stride);
 	} else {
 		if (0 < valid_sub) {
-			memfill_pix<N>(dst, GetPix(src - main_stride, 0, 0, 4, sub_stride), base_len);
+			memfill_pix<N>(dst, get_pix_raw<N>()(src - main_stride, 0, 0, 4, sub_stride), base_len);
 		} else {
 			memset(dst, 128, base_len * N);
 		}
@@ -2545,6 +2536,16 @@ static inline void qpy_fill(uint8_t left[], uint8_t top[], uint32_t qpy, int num
 	}
 }
 
+static inline int qpi_to_qpc(int qpi) {
+	static const int8_t qpcadj[52] = {
+		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+		16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 29, 30,
+		31, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37, 38, 39, 40, 41,
+		42, 43, 44, 45
+	};
+	return qpcadj[qpi % 52];
+}
+
 static inline void qp_to_scale(h265d_scaling_info_t dst[], uint32_t qpy, const int8_t* cbcr_delta) {
 	static const int16_t qp_scale[] = {
 		40, 45, 51, 57, 64, 72,
@@ -2558,8 +2559,8 @@ static inline void qp_to_scale(h265d_scaling_info_t dst[], uint32_t qpy, const i
 		10240, 11520, 13056, 14592
 	};
 	dst[0].scale = qp_scale[qpy];
-	dst[1].scale = qp_scale[qpy + cbcr_delta[0]];
-	dst[2].scale = qp_scale[qpy + cbcr_delta[1]];
+	dst[1].scale = qp_scale[qpi_to_qpc(qpy + cbcr_delta[0])];
+	dst[2].scale = qp_scale[qpi_to_qpc(qpy + cbcr_delta[1])];
 }
 
 static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_top[], int32_t qp_delta) {
@@ -2928,7 +2929,7 @@ static inline int qpi_to_qpc_deb(int qpi) {
 
 static inline int tc_qpc(int qp, int qpc_offset, int tc_offset) {
 	qp = qpi_to_qpc_deb(qp + qpc_offset);
-	return clip2(qp + tc_offset, 53);
+	return clip2(qp + 2 + tc_offset, 53);
 }
 
 static inline void deblocking_edge_chroma_block(int qp, int pps_offset, int tc_offset, uint8_t* dst, int xofs, int stride) {
