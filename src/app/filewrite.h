@@ -57,7 +57,10 @@ public:
 		}
 		return fo_ != 0;
 	}
-	virtual const char *get_extension() = 0;
+	const char *get_extension() {
+		static const char ext[] = "out";
+		return ext;
+	};
 	virtual size_t writeframe(const m2d_frame_t *frame) = 0;
 };
 
@@ -69,10 +72,6 @@ class FileWriterRaw : public FileWriter {
 	};
 public:
 	FileWriterRaw() {}
-	const char *get_extension() {
-		static const char ext[] = "yuv";
-		return ext;
-	};
 	size_t writeframe(const m2d_frame_t *frame) {
 		if (!fo_) {
 			return 0;
@@ -101,10 +100,6 @@ protected:
 	}
 public:
 	FileWriterMd5() {}
-	const char *get_extension() {
-		static const char ext[] = "md5";
-		return ext;
-	};
 	size_t writeframe(const m2d_frame_t *frame) {
 		if (!fo_) {
 			return 0;
