@@ -365,14 +365,15 @@ static inline void scaling_list_default(h265d_ctu_t& dst, uint32_t size_log2, ui
 	}
 }
 
-static void short_term_ref_pic_set_nopred_calc(h265d_short_term_ref_pic_elem_t& dst, uint32_t num_pics, dec_bits& st) {
+static void short_term_ref_pic_set_nopred_calc(h265d_short_term_ref_pic_elem_t& dst, uint32_t num_pics, bool pos, dec_bits& st) {
 	int16_t* delta_poc = dst.delta_poc;
 	uint16_t used_flag = 0;
 	int val = 0;
 	for (uint32_t i = 0; i < num_pics; ++i) {
 		uint32_t delta;
 		READ_CHECK_RANGE(ue_golomb(&st), delta, 32767, st);
-		val = val - (delta + 1);
+		delta += 1;
+		val += pos ? delta : -delta;
 		delta_poc[i] = val;
 		used_flag |= get_onebit(&st) << i;
 	}
@@ -385,30 +386,71 @@ static void short_term_ref_pic_set_nopred(h265d_short_term_ref_pic_set_t& dst, d
 	READ_CHECK_RANGE(ue_golomb(&st), pos_pics, 16 - neg_pics, st);
 	dst.ref[0].num_pics = neg_pics;
 	dst.ref[1].num_pics = pos_pics;
-	short_term_ref_pic_set_nopred_calc(dst.ref[0], neg_pics, st);
-	short_term_ref_pic_set_nopred_calc(dst.ref[1], pos_pics, st);
+	short_term_ref_pic_set_nopred_calc(dst.ref[0], neg_pics, false, st);
+	short_term_ref_pic_set_nopred_calc(dst.ref[1], pos_pics, true, st);
 }
 
-static void short_term_ref_pic_set_pred_part(h265d_short_term_ref_pic_set_t& dst, const h265d_short_term_ref_pic_set_t& ref, dec_bits& st, int delta_rps, int l0) {
-	int num = ref.ref[l0].num_pics;
-	for (int j = 0; j < num; ++j) {
-		int use_delta_flag = get_onebit(&st);
-		if (use_delta_flag) {
-			int poc = ref.ref[l0].delta_poc[j] + delta_rps;
-			if (poc < 0) {
-			}
-		} else {
-			get_onebit(&st);
+static inline int short_term_ref_pic_set_pred_core(int16_t dst_delta_poc[], const int16_t ref_delta_poc[], int delta_rps, uint16_t used_flag, uint16_t use_delta_flag,  uint16_t& used, int idx, bool neg, int j) {
+	int dpoc = ref_delta_poc[j] + delta_rps;
+	if (((neg ? -dpoc : dpoc) < 0) && (use_delta_flag & (1 << j))) {
+		dst_delta_poc[idx] = dpoc;
+		if (used_flag & (1 << j)) {
+			used |= 1 << idx;
 		}
+		idx++;
 	}
+	return idx;
+}
+
+static inline int short_term_ref_pic_set_pred_neg(h265d_short_term_ref_pic_elem_t& dst, const h265d_short_term_ref_pic_elem_t& ref, int delta_rps, uint16_t used_flag, uint16_t use_delta_flag, uint16_t& used, int idx, bool neg) {
+	for (int j = ref.num_pics - 1; 0 <= j; --j) {
+		idx = short_term_ref_pic_set_pred_core(dst.delta_poc, ref.delta_poc, delta_rps, used_flag, use_delta_flag, used, idx, neg, j);
+	}
+	return idx;
+}
+
+static inline int short_term_ref_pic_set_pred_pos(h265d_short_term_ref_pic_elem_t& dst, const h265d_short_term_ref_pic_elem_t& ref, int delta_rps, uint16_t used_flag, uint16_t use_delta_flag, uint16_t& used, int idx, bool neg) {
+	for (int j = 0; j < ref.num_pics; ++j) {
+		idx = short_term_ref_pic_set_pred_core(dst.delta_poc, ref.delta_poc, delta_rps, used_flag, use_delta_flag, used, idx, neg, j);
+	}
+	return idx;
+}
+
+static void short_term_ref_pic_set_pred_part(h265d_short_term_ref_pic_set_t& dst, const h265d_short_term_ref_pic_set_t& ref, int delta_rps, uint16_t used_flag, uint16_t use_delta_flag, int s0) {
+	uint16_t used0 = 0;
+	int i = short_term_ref_pic_set_pred_neg(dst.ref[s0], ref.ref[s0 ^ 1], delta_rps, used_flag >> ((s0 != 0) ? 0 : ref.ref[0].num_pics), use_delta_flag >> ((s0 != 0) ? 0 : ref.ref[0].num_pics), used0, 0, s0 != 0);
+	int mask = 1 << (ref.ref[0].num_pics + ref.ref[1].num_pics);
+	if ((((s0 != 0) ? -delta_rps : delta_rps) < 0) && (use_delta_flag & mask)) {
+		dst.ref[s0].delta_poc[i] = delta_rps;
+		if (used_flag & mask) {
+			used0 |= 1 << i;
+		}
+		i++;
+	}
+	dst.ref[s0].num_pics = short_term_ref_pic_set_pred_pos(dst.ref[s0], ref.ref[s0], delta_rps, used_flag >> ((s0 == 0) ? 0 : ref.ref[0].num_pics), use_delta_flag >> ((s0 == 0) ? 0 : ref.ref[0].num_pics), used0, i, s0 != 0);
+	dst.ref[s0].used_by_curr_pic_flag = used0;
 }
 
 static void short_term_ref_pic_set_pred(h265d_short_term_ref_pic_set_t ref_pic[], dec_bits& st, int idx, int idx_delta) {
 	int sign = get_onebit(&st);
 	int abs_delta_rps = ue_golomb(&st) + 1;
 	int delta_rps = sign ? -abs_delta_rps : abs_delta_rps;
-	short_term_ref_pic_set_pred_part(ref_pic[idx], ref_pic[idx - idx_delta], st, delta_rps, 0);
-	assert(0);
+	const h265d_short_term_ref_pic_set_t& ref = ref_pic[idx - idx_delta];
+	int num = ref.ref[0].num_pics + ref.ref[1].num_pics;
+	uint16_t used_flag = 0;
+	uint16_t use_delta_flag = 0;
+	for (int j = 0; j <= num; ++j) {
+		uint32_t used_by = get_onebit(&st);
+		uint16_t bit = 1 << j;
+		if (used_by) {
+			used_flag |= bit;
+			use_delta_flag |= bit;
+		} else if (get_onebit(&st)) {
+			use_delta_flag |= bit;
+		}
+	}
+	short_term_ref_pic_set_pred_part(ref_pic[idx], ref_pic[idx - idx_delta], delta_rps, used_flag, use_delta_flag, 0);
+	short_term_ref_pic_set_pred_part(ref_pic[idx], ref_pic[idx - idx_delta], delta_rps, used_flag, use_delta_flag, 1);
 }
 
 static void sps_short_term_ref_pic_set(h265d_short_term_ref_pic_set_t short_term_ref_pic_set[], uint32_t num, dec_bits& st) {
