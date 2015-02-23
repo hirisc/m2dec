@@ -67,11 +67,12 @@ typedef struct {
 
 typedef struct {
 	uint8_t num_pics;
-	int16_t delta_poc[16];
 	uint16_t used_by_curr_pic_flag;
+	int16_t delta_poc[16];
 } h265d_short_term_ref_pic_elem_t;
 
 typedef struct {
+	uint8_t total_curr;
 	h265d_short_term_ref_pic_elem_t ref[2];
 } h265d_short_term_ref_pic_set_t;
 
@@ -204,6 +205,7 @@ typedef struct {
 
 typedef enum {
 	TRAIL_N = 0,
+	TRAIL_R = 1,
 	BLA_W_LP = 16,
 	IDR_W_RADL = 19,
 	IDR_N_LP = 20,
@@ -320,6 +322,12 @@ typedef struct {
 	int8_t slice_qpc_delta[2];
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
+	uint8_t num_ref_idx_l0_default_active_minus1;
+	uint8_t num_ref_idx_l1_default_active_minus1;
+	uint8_t collocated_ref_idx;
+	int8_t max_num_merge_cand;
+	uint32_t mvd_l1_zefo_flag : 1;
+	uint32_t colocated_from_l0_flag : 1;
 	uint32_t pic_output_flag : 1;
 	uint32_t colour_plane_id : 2;
 	uint32_t slice_temporal_mvp_enabled_flag : 1;

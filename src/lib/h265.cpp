@@ -365,19 +365,23 @@ static inline void scaling_list_default(h265d_ctu_t& dst, uint32_t size_log2, ui
 	}
 }
 
-static void short_term_ref_pic_set_nopred_calc(h265d_short_term_ref_pic_elem_t& dst, uint32_t num_pics, bool pos, dec_bits& st) {
+static int short_term_ref_pic_set_nopred_calc(h265d_short_term_ref_pic_elem_t& dst, uint32_t num_pics, bool pos, dec_bits& st) {
 	int16_t* delta_poc = dst.delta_poc;
 	uint16_t used_flag = 0;
 	int val = 0;
+	int used_cnt = 0;
 	for (uint32_t i = 0; i < num_pics; ++i) {
 		uint32_t delta;
 		READ_CHECK_RANGE(ue_golomb(&st), delta, 32767, st);
 		delta += 1;
 		val += pos ? delta : -delta;
 		delta_poc[i] = val;
-		used_flag |= get_onebit(&st) << i;
+		int used_bit = get_onebit(&st);
+		used_flag |= used_bit << i;
+		used_cnt += used_bit;
 	}
 	dst.used_by_curr_pic_flag = used_flag;
+	return used_cnt;
 }
 
 static void short_term_ref_pic_set_nopred(h265d_short_term_ref_pic_set_t& dst, dec_bits& st) {
@@ -386,8 +390,9 @@ static void short_term_ref_pic_set_nopred(h265d_short_term_ref_pic_set_t& dst, d
 	READ_CHECK_RANGE(ue_golomb(&st), pos_pics, 16 - neg_pics, st);
 	dst.ref[0].num_pics = neg_pics;
 	dst.ref[1].num_pics = pos_pics;
-	short_term_ref_pic_set_nopred_calc(dst.ref[0], neg_pics, false, st);
-	short_term_ref_pic_set_nopred_calc(dst.ref[1], pos_pics, true, st);
+	int neg_num = short_term_ref_pic_set_nopred_calc(dst.ref[0], neg_pics, false, st);
+	int pos_num = short_term_ref_pic_set_nopred_calc(dst.ref[1], pos_pics, true, st);
+	dst.total_curr = neg_num + pos_num;
 }
 
 static inline int short_term_ref_pic_set_pred_core(int16_t dst_delta_poc[], const int16_t ref_delta_poc[], int delta_rps, uint16_t used_flag, uint16_t use_delta_flag,  uint16_t& used, int idx, bool neg, int j) {
@@ -431,17 +436,18 @@ static void short_term_ref_pic_set_pred_part(h265d_short_term_ref_pic_set_t& dst
 	dst.ref[s0].used_by_curr_pic_flag = used0;
 }
 
-static void short_term_ref_pic_set_pred(h265d_short_term_ref_pic_set_t ref_pic[], dec_bits& st, int idx, int idx_delta) {
+static void short_term_ref_pic_set_pred(h265d_short_term_ref_pic_set_t& dst, const h265d_short_term_ref_pic_set_t& ref, dec_bits& st) {
 	int sign = get_onebit(&st);
 	int abs_delta_rps = ue_golomb(&st) + 1;
 	int delta_rps = sign ? -abs_delta_rps : abs_delta_rps;
-	const h265d_short_term_ref_pic_set_t& ref = ref_pic[idx - idx_delta];
 	int num = ref.ref[0].num_pics + ref.ref[1].num_pics;
 	uint16_t used_flag = 0;
 	uint16_t use_delta_flag = 0;
+	int used_cnt = 0;
 	for (int j = 0; j <= num; ++j) {
 		uint32_t used_by = get_onebit(&st);
 		uint16_t bit = 1 << j;
+		used_cnt += used_by;
 		if (used_by) {
 			used_flag |= bit;
 			use_delta_flag |= bit;
@@ -449,15 +455,16 @@ static void short_term_ref_pic_set_pred(h265d_short_term_ref_pic_set_t ref_pic[]
 			use_delta_flag |= bit;
 		}
 	}
-	short_term_ref_pic_set_pred_part(ref_pic[idx], ref_pic[idx - idx_delta], delta_rps, used_flag, use_delta_flag, 0);
-	short_term_ref_pic_set_pred_part(ref_pic[idx], ref_pic[idx - idx_delta], delta_rps, used_flag, use_delta_flag, 1);
+	short_term_ref_pic_set_pred_part(dst, ref, delta_rps, used_flag, use_delta_flag, 0);
+	short_term_ref_pic_set_pred_part(dst, ref, delta_rps, used_flag, use_delta_flag, 1);
+	dst.total_curr = used_cnt;
 }
 
 static void sps_short_term_ref_pic_set(h265d_short_term_ref_pic_set_t short_term_ref_pic_set[], uint32_t num, dec_bits& st) {
 	short_term_ref_pic_set_nopred(short_term_ref_pic_set[0], st);
 	for (uint32_t i = 1; i < num; ++i) {
 		if (get_onebit(&st)) {
-			short_term_ref_pic_set_pred(short_term_ref_pic_set, st, i, 1);
+			short_term_ref_pic_set_pred(short_term_ref_pic_set[i], short_term_ref_pic_set[i - 1], st);
 		} else {
 			short_term_ref_pic_set_nopred(short_term_ref_pic_set[i], st);
 		}
@@ -688,6 +695,16 @@ static void entry_points(h265d_entry_point_t& dst, const h265d_pps_t& pps, const
 	}
 }
 
+static void slice_header_short_term_ref_pic_set(h265d_short_term_ref_pic_set_t& dst, const h265d_short_term_ref_pic_set_t sps_short_term_ref_pic_set[], uint32_t ref_num, dec_bits& st) {
+	if (get_onebit(&st)) {
+		int delta_idx_minus1;
+		READ_CHECK_RANGE(ue_golomb(&st), delta_idx_minus1, ref_num, st);
+		short_term_ref_pic_set_pred(dst, sps_short_term_ref_pic_set[ref_num - delta_idx_minus1 - 1], st);
+	} else {
+		short_term_ref_pic_set_nopred(dst, st);
+	}
+}
+
 static void slice_header_nonidr(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	dst.slice_pic_order_cnt_lsb = get_bits(&st, sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
 	if (get_onebit(&st)) {
@@ -697,7 +714,7 @@ static void slice_header_nonidr(h265d_slice_header_body_t& dst, const h265d_pps_
 		}
 		dst.short_term_ref_pic_set = sps.short_term_ref_pic_set[idx];
 	} else {
-		short_term_ref_pic_set_nopred(dst.short_term_ref_pic_set, st);
+		slice_header_short_term_ref_pic_set(dst.short_term_ref_pic_set, sps.short_term_ref_pic_set, sps.num_short_term_ref_pic_sets, st);
 	}
 	if (sps.long_term_ref_pics_present_flag) {
 		uint32_t num_long_term_sps = (0 < sps.num_long_term_ref_pics_sps) ? ue_golomb(&st) : 0;
@@ -712,8 +729,47 @@ static void slice_header_nonidr(h265d_slice_header_body_t& dst, const h265d_pps_
 			}
 		}
 	}
-	if (sps.sps_temporal_mvp_enabled_flag) {
-		dst.slice_temporal_mvp_enabled_flag = get_onebit(&st);
+	dst.slice_temporal_mvp_enabled_flag = sps.sps_temporal_mvp_enabled_flag ? get_onebit(&st) : 0;
+}
+
+static void pred_weight_table(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	uint32_t luma_log2_weight_denom;
+	assert(0);
+}
+
+static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+	if (get_onebit(&st)) {
+		READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l0_default_active_minus1, 14, st);
+		if (dst.slice_type == 0) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l1_default_active_minus1, 14, st);
+		}
+	} else {
+		dst.num_ref_idx_l0_default_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
+		dst.num_ref_idx_l1_default_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
+	}
+	if (pps.lists_modification_present_flag && (1 < dst.short_term_ref_pic_set.total_curr)) {
+		assert(0);
+	}
+	if (dst.slice_type == 0) {
+		dst.mvd_l1_zefo_flag = get_onebit(&st);
+	}
+	if (pps.cabac_init_present_flag) {
+		dst.cabac_init_flag = get_onebit(&st);
+	}
+	if (dst.slice_temporal_mvp_enabled_flag) {
+		uint32_t col_l0_flag = (dst.slice_type == 0) ? get_onebit(&st) : 1;
+		dst.colocated_from_l0_flag = col_l0_flag;
+		if (col_l0_flag && (0 < dst.num_ref_idx_l0_default_active_minus1)) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l0_default_active_minus1, st);
+		} else if (!col_l0_flag && (0 < dst.num_ref_idx_l1_default_active_minus1)) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l1_default_active_minus1, st);
+		}
+	}
+	if (((dst.slice_type == 0) && pps.weighted_bipred_flag) || ((dst.slice_type == 1) && pps.weighted_pred_flag)) {
+		pred_weight_table(dst, pps, sps, st);
+		uint32_t five_minus_max_num_merge_cand;
+		READ_CHECK_RANGE(ue_golomb(&st), five_minus_max_num_merge_cand, 4, st);
+		dst.max_num_merge_cand = 5 - five_minus_max_num_merge_cand;
 	}
 }
 
@@ -734,7 +790,7 @@ static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t&
 		dst.slice_sao_chroma_flag = get_onebit(&st);
 	}
 	if (dst.slice_type != 2) {
-		assert(0);
+		slice_header_nonintra(dst, pps, sps, st);
 	}
 	int32_t qp_delta = se_golomb(&st);
 	dst.slice_qpy = pps.init_qp_minus26 + qp_delta + 26;
@@ -3602,6 +3658,7 @@ static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {
 	dec_bits& st = h2d.stream_i;
 	switch (h2d.current_nal = static_cast<h265d_nal_t>((nalu_header >> 9) & 63)) {
 	case TRAIL_N:
+	case TRAIL_R:
 	case IDR_W_RADL:
 		slice_layer(h2d, st);
 		err = 1;
