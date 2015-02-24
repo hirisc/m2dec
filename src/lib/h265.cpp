@@ -767,10 +767,10 @@ static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pp
 	}
 	if (((dst.slice_type == 0) && pps.weighted_bipred_flag) || ((dst.slice_type == 1) && pps.weighted_pred_flag)) {
 		pred_weight_table(dst, pps, sps, st);
-		uint32_t five_minus_max_num_merge_cand;
-		READ_CHECK_RANGE(ue_golomb(&st), five_minus_max_num_merge_cand, 4, st);
-		dst.max_num_merge_cand = 5 - five_minus_max_num_merge_cand;
 	}
+	uint32_t five_minus_max_num_merge_cand;
+	READ_CHECK_RANGE(ue_golomb(&st), five_minus_max_num_merge_cand, 4, st);
+	dst.max_num_merge_cand = 5 - five_minus_max_num_merge_cand;
 }
 
 static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
@@ -877,6 +877,52 @@ static const m2d_cabac_init_mn_t cabac_initial_value[3][154] = {
 		{-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64}, {0, 56}, {-5, 48}, {5, 40},
 		{0, 48}, {0, 48},
 	},
+	{
+		{0, 56}, {10, 56}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
+		{15, 56}, {0, 24}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {0, 64}, {0, 48},
+		{-25, 104}, {-15, 96}, {-10, 64}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
+		{0, 56}, {0, 56}, {5, 48}, {-10, 80}, {-5, 64}, {-20, 96}, {0, 56}, {-15, 104},
+		{0, 24}, {-15, 72}, {5, 40}, {0, 64}, {-5, 80}, {15, 32}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96}, {-20, 104}, {-25, 104},
+		{-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104}, {-15, 104}, {-20, 104},
+		{-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96},
+		{-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104},
+		{-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 56}, {-5, 80},
+		{-30, 88}, {0, 64}, {0, 72}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
+		{-10, 72}, {-30, 104}, {0, 56}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
+		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
+		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-10, 72},
+		{-10, 72}, {-15, 72}, {-10, 56}, {-15, 72}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
+		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {15, 16}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
+		{0, 56}, {-10, 56}, {-5, 48}, {-5, 56}, {5, 56}, {15, 0}, {5, 32}, {5, 40},
+		{0, 64}, {5, 40}, {-5, 56}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-10, 64},
+		{-15, 72}, {5, 40}
+
+	},
+	{
+		{0, 56}, {5, -16}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
+		{15, 56}, {-5, 32}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {10, 40}, {0, 48},
+		{-25, 104}, {0, 64}, {-5, 56}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
+		{0, 56}, {0, 56}, {5, 48}, {25, -16}, {5, 40}, {-10, 64}, {0, 56}, {-15, 104},
+		{0, 24}, {-20, 80}, {5, 40}, {0, 64}, {5, 56}, {15, 32}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96}, {-20, 104}, {-20, 96},
+		{-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96}, {-15, 104}, {-15, 104},
+		{-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96},
+		{-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96},
+		{-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 56}, {-5, 80},
+		{-30, 88}, {0, 64}, {5, 64}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
+		{-10, 72}, {-30, 104}, {-10, 80}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
+		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
+		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-5, 64},
+		{-5, 64}, {-10, 64}, {-10, 56}, {-10, 64}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
+		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {5, 40}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
+		{0, 56}, {-10, 56}, {-5, 48}, {-10, 64}, {5, 56}, {20, -16}, {5, 32}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-15, 72},
+		{-15, 72}, {5, 40}
+
+	}
 };
 
 static inline uint32_t sao_merge_flag(m2d_cabac_t& cabac, dec_bits& st) {
@@ -1005,6 +1051,15 @@ struct pred_mode_flag_ipic {
 		return 1;
 	}
 };
+
+static inline uint32_t cu_skip_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top) {
+	int idx = (!(unavail & 1) && (left->pred_mode & 1)) + (!(unavail & 2) && (top->pred_mode & 1));
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cu_skip_flag + idx);
+}
+
+static inline uint32_t merge_idx(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_multibypass(&cabac, &st, 3);
+}
 
 static inline uint32_t part_mode_intra(m2d_cabac_t& cabac, dec_bits& st) {
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->part_mode);
@@ -2793,7 +2848,7 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 	}
 }
 
-static inline void intra_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint32_t mode, uint32_t num) {
+static inline void cu_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint32_t mode, uint32_t num) {
 	for (uint32_t i = 0; i < num; ++i) {
 		dst0[i].pred_mode = mode;
 		dst1[i].pred_mode = mode;
@@ -2809,14 +2864,28 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 	}
 }
 
+static void prediction_unit_skip(h265d_ctu_t& dst, dec_bits& st, int size_log2) {
+	if (1 < dst.slice_header->body.max_num_merge_cand) {
+		merge_idx(dst.cabac, st);
+	}
+}
+
 template <typename F>
-static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
 	intra_depth_fill(left, top, size_log2);
 	if (dst.pps->cu_qp_delta_enabled_flag) {
 		dst.qp_delta_req = 1;
 	}
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
+	}
+	if (dst.slice_header->body.slice_type < 2) {
+		uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
+		if (skip) {
+			cu_pred_mode_fill(left, top, 1, 1 << (size_log2 - 2));
+			prediction_unit_skip(dst, st, size_log2);
+			return;
+		}
 	}
 	int part_num = 1;
 	dst.intra_split = 0;
@@ -2849,7 +2918,7 @@ static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, h2
 		}
 		dst.order_luma[i] = mode;
 		pred_flag >>= 1;
-		intra_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
+		cu_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
 	}
 	if (part_num != 4) {
 		memset(dst.order_luma + 1, dst.order_luma[0], sizeof(dst.order_luma[0]) * 3);
@@ -2877,7 +2946,7 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		quad_tree(dst, st, size_log2, unavail & ~2, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
 		quad_tree(dst, st, size_log2, 0, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
-		coding_unit_header(dst, st, size_log2, left, top, pred_mode_flag_ipic());
+		coding_unit_header(dst, st, size_log2, unavail, left, top, pred_mode_flag_ipic());
 		transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0);
 	}
 }
@@ -3545,7 +3614,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	const h265d_slice_header_t& hdr = h2d.slice_header;
 	const h265d_slice_header_body_t& header = hdr.body;
 	int slice_type = header.slice_type;
-	int idc = (slice_type < 2) ? ((slice_type ^ header.cabac_init_flag) + 1) : 0;
+	int idc = (slice_type < 2) ? (2 - (slice_type ^ header.cabac_init_flag)) : 0;
 	init_cabac_context(&dst.cabac, header.slice_qpy, cabac_initial_value[idc], NUM_ELEM(cabac_initial_value[idc]));
 	dst.sao_read = (hdr.body.slice_sao_luma_flag || hdr.body.slice_sao_chroma_flag) ? sao_read : sao_ignore;
 	dst.sps = &sps;
