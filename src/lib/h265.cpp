@@ -1046,12 +1046,6 @@ static inline uint32_t split_cu_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t 
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->split_cu_flag + cond);
 }
 
-struct pred_mode_flag_ipic {
-	uint8_t operator()(m2d_cabac_t& cabac, dec_bits& st) const {
-		return 1;
-	}
-};
-
 static inline uint32_t cu_skip_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top) {
 	int idx = (!(unavail & 1) && (left->pred_mode & 1)) + (!(unavail & 2) && (top->pred_mode & 1));
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cu_skip_flag + idx);
@@ -1059,6 +1053,57 @@ static inline uint32_t cu_skip_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t u
 
 static inline uint32_t merge_idx(m2d_cabac_t& cabac, dec_bits& st) {
 	return cabac_decode_multibypass(&cabac, &st, 3);
+}
+
+static inline int pred_mode_flag(m2d_cabac_t& cabac, dec_bits& st, int slice_type) {
+	if (slice_type < 2) {
+		return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->pred_mode_flag);
+	} else {
+		return 1;
+	}
+}
+
+static inline uint32_t part_mode_inter0(m2d_cabac_t& cabac, dec_bits& st, int8_t* ctx) {
+	return cabac_decode_decision_raw(&cabac, &st, ctx) ? 0 : 2 - cabac_decode_decision_raw(&cabac, &st, ctx + 1);
+}
+
+static inline uint32_t part_mode_inter1(m2d_cabac_t& cabac, dec_bits& st, int8_t* ctx) {
+	uint32_t base = part_mode_inter0(cabac, st, ctx);
+	if (base == 0) {
+		return base;
+	} else {
+		if (cabac_decode_decision_raw(&cabac, &st, ctx + 3)) {
+			return base;
+		} else {
+			return (base + 1) * 2 + cabac_decode_bypass(&cabac, &st);
+		}
+	}
+}
+
+static inline uint32_t part_mode_inter2(m2d_cabac_t& cabac, dec_bits& st, int8_t* ctx) {
+	uint32_t base = part_mode_inter0(cabac, st, ctx);
+	if (base < 2) {
+		return base;
+	} else {
+		return base + (cabac_decode_decision_raw(&cabac, &st, ctx + 2) ^ 1);
+	}
+}
+
+static inline uint32_t part_mode_inter(m2d_cabac_t& cabac, dec_bits& st, int size_log2, int min_size_log2, int amp_enabled_flag) {
+	int8_t* ctx = reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->part_mode;
+	if (min_size_log2 < size_log2) {
+		if (!amp_enabled_flag) {
+			return part_mode_inter0(cabac, st, ctx);
+		} else {
+			return part_mode_inter1(cabac, st, ctx);
+		}
+	} else {
+		if (size_log2 == 3) {
+			return part_mode_inter0(cabac, st, ctx);
+		} else {
+			return part_mode_inter2(cabac, st, ctx);
+		}
+	}
 }
 
 static inline uint32_t part_mode_intra(m2d_cabac_t& cabac, dec_bits& st) {
@@ -2870,8 +2915,7 @@ static void prediction_unit_skip(h265d_ctu_t& dst, dec_bits& st, int size_log2) 
 	}
 }
 
-template <typename F>
-static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top, F PredModeFlag) {
+static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	intra_depth_fill(left, top, size_log2);
 	if (dst.pps->cu_qp_delta_enabled_flag) {
 		dst.qp_delta_req = 1;
@@ -2879,7 +2923,8 @@ static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, ui
 	if (dst.pps->transquant_bypass_enabled_flag) {
 		assert(0);
 	}
-	if (dst.slice_header->body.slice_type < 2) {
+	int slice_type = dst.slice_header->body.slice_type;
+	if (slice_type < 2) {
 		uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
 		if (skip) {
 			cu_pred_mode_fill(left, top, 1, 1 << (size_log2 - 2));
@@ -2889,13 +2934,15 @@ static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, ui
 	}
 	int part_num = 1;
 	dst.intra_split = 0;
-	if ((dst.is_intra = PredModeFlag(dst.cabac, st)) == 0) {
-		assert(0);
-	} else if (dst.sps->ctb_info.size_log2_min == size_log2) {
-		if (part_mode_intra(dst.cabac, st) == 0) {
+	dst.is_intra = pred_mode_flag(dst.cabac, st, slice_type);
+	if (dst.is_intra) {
+		if ((dst.sps->ctb_info.size_log2_min == size_log2) && (part_mode_intra(dst.cabac, st) == 0)) {
 			dst.intra_split = 1;
 			part_num = 4;
 		}
+	} else {
+		int mode;
+		mode = part_mode_inter(dst.cabac, st, size_log2, dst.sps->ctb_info.size_log2_min, dst.sps->amp_enabled_flag);
 	}
 	if ((dst.sps->ctb_info.pcm_log2_min <= size_log2) && (size_log2 <= dst.sps->ctb_info.pcm_log2)) {
 		assert(0);
@@ -2946,7 +2993,7 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		quad_tree(dst, st, size_log2, unavail & ~2, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
 		quad_tree(dst, st, size_log2, 0, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
-		coding_unit_header(dst, st, size_log2, unavail, left, top, pred_mode_flag_ipic());
+		coding_unit_header(dst, st, size_log2, unavail, left, top);
 		transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0);
 	}
 }
