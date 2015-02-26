@@ -739,13 +739,13 @@ static void pred_weight_table(h265d_slice_header_body_t& dst, const h265d_pps_t&
 
 static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	if (get_onebit(&st)) {
-		READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l0_default_active_minus1, 14, st);
+		READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l0_active_minus1, 14, st);
 		if (dst.slice_type == 0) {
-			READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l1_default_active_minus1, 14, st);
+			READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_l1_active_minus1, 14, st);
 		}
 	} else {
-		dst.num_ref_idx_l0_default_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
-		dst.num_ref_idx_l1_default_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
+		dst.num_ref_idx_l0_active_minus1 = pps.num_ref_idx_l0_default_active_minus1;
+		dst.num_ref_idx_l1_active_minus1 = pps.num_ref_idx_l1_default_active_minus1;
 	}
 	if (pps.lists_modification_present_flag && (1 < dst.short_term_ref_pic_set.total_curr)) {
 		assert(0);
@@ -759,10 +759,10 @@ static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pp
 	if (dst.slice_temporal_mvp_enabled_flag) {
 		uint32_t col_l0_flag = (dst.slice_type == 0) ? get_onebit(&st) : 1;
 		dst.colocated_from_l0_flag = col_l0_flag;
-		if (col_l0_flag && (0 < dst.num_ref_idx_l0_default_active_minus1)) {
-			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l0_default_active_minus1, st);
-		} else if (!col_l0_flag && (0 < dst.num_ref_idx_l1_default_active_minus1)) {
-			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l1_default_active_minus1, st);
+		if (col_l0_flag && (0 < dst.num_ref_idx_l0_active_minus1)) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l0_active_minus1, st);
+		} else if (!col_l0_flag && (0 < dst.num_ref_idx_l1_active_minus1)) {
+			READ_CHECK_RANGE(ue_golomb(&st), dst.collocated_ref_idx, dst.num_ref_idx_l1_active_minus1, st);
 		}
 	}
 	if (((dst.slice_type == 0) && pps.weighted_bipred_flag) || ((dst.slice_type == 1) && pps.weighted_pred_flag)) {
@@ -854,73 +854,74 @@ static void slice_header(h265d_slice_header_t& dst, const h265d_pps_t& pps, cons
         m = (elem >> 4) * 5 - 45
         n = ((elem & 15) << 3) - 16
  */
-static const m2d_cabac_init_mn_t cabac_initial_value[3][154] = {
+static const m2d_cabac_init_mn_t cabac_initial_value[3][157] = {
 	{
 		{0, 56}, {15, 48}, {-5, 72}, {-5, 88}, {0, 88}, {0, 64}, {0, 0}, {0, 0},
 		{0, 0}, {0, 0}, {10, 48}, {0, 0}, {0, 0}, {0, 0}, {10, 48}, {-30, 104},
 		{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
-		{0, 0}, {0, 0}, {0, 0}, {0, 56}, {-5, 64}, {-5, 64}, {-15, 104}, {-5, 88},
-		{-20, 96}, {-5, 64}, {10, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 64}, {0, 64},
-		{-5, 72}, {-5, 72}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88}, {-5, 80}, {0, 56},
-		{-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104}, {-10, 104}, {-15, 104},
-		{-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88},
-		{-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104},
-		{-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-20, 72}, {5, 72},
-		{-5, 32}, {-5, 88}, {-15, 104}, {-15, 104}, {-10, 88}, {-15, 96}, {-15, 96}, {-20, 96},
-		{-10, 80}, {-15, 80}, {-10, 80}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56},
-		{-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-15, 72},
-		{-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-5, 80}, {-5, 72}, {10, 32},
-		{10, 32}, {0, 48}, {-5, 48}, {0, 48}, {-5, 48}, {0, 56}, {-5, 48}, {-5, 72},
-		{-15, 104}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 80}, {-20, 80}, {-5, 56}, {-5, 64},
-		{-5, 80}, {0, 48}, {-5, 64}, {-5, 72}, {0, 56}, {-25, 64}, {0, 24}, {-20, 80},
-		{-5, 72}, {-15, 72}, {-10, 64}, {0, 48}, {-5, 80}, {10, 8}, {5, 32}, {10, 32},
-		{-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64}, {0, 56}, {-5, 48}, {5, 40},
-		{0, 48}, {0, 48},
+		{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 56}, {-5, 64},
+		{-5, 64}, {-15, 104}, {-5, 88}, {-20, 96}, {-5, 64}, {10, 32}, {0, 64}, {0, 0},
+		{0, 0}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-15, 96}, {-15, 96}, {-10, 80},
+		{-10, 88}, {-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104},
+		{-5, 104}, {-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-15, 96},
+		{-15, 96}, {-10, 80}, {-10, 88}, {-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80},
+		{-15, 88}, {-15, 104}, {-5, 104}, {-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72},
+		{-30, 104}, {-20, 72}, {5, 72}, {-5, 32}, {-5, 88}, {-15, 104}, {-15, 104}, {-10, 88},
+		{-15, 96}, {-15, 96}, {-20, 96}, {-10, 80}, {-15, 80}, {-10, 80}, {-15, 72}, {-10, 88},
+		{-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8},
+		{0, 56}, {-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88},
+		{-5, 80}, {-5, 72}, {10, 32}, {10, 32}, {0, 48}, {-5, 48}, {0, 48}, {-5, 48},
+		{0, 56}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 80},
+		{-20, 80}, {-5, 56}, {-5, 64}, {-5, 80}, {0, 48}, {-5, 64}, {-5, 72}, {0, 56},
+		{-25, 64}, {0, 24}, {-20, 80}, {-5, 72}, {-15, 72}, {-10, 64}, {0, 48}, {-5, 80},
+		{10, 8}, {5, 32}, {10, 32}, {-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64},
+		{0, 56}, {-5, 48}, {5, 40}, {0, 48}, {0, 48}
+
 	},
 	{
 		{0, 56}, {10, 56}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
 		{15, 56}, {0, 24}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {0, 64}, {0, 48},
 		{-25, 104}, {-15, 96}, {-10, 64}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
-		{0, 56}, {0, 56}, {5, 48}, {-10, 80}, {-5, 64}, {-20, 96}, {0, 56}, {-15, 104},
-		{0, 24}, {-15, 72}, {5, 40}, {0, 64}, {-5, 80}, {15, 32}, {0, 64}, {0, 64},
-		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96}, {-20, 104}, {-25, 104},
-		{-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104}, {-15, 104}, {-20, 104},
-		{-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96},
-		{-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104},
-		{-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 56}, {-5, 80},
-		{-30, 88}, {0, 64}, {0, 72}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
-		{-10, 72}, {-30, 104}, {0, 56}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
-		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
-		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-10, 72},
-		{-10, 72}, {-15, 72}, {-10, 56}, {-15, 72}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
-		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {15, 16}, {5, 40},
-		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
-		{0, 56}, {-10, 56}, {-5, 48}, {-5, 56}, {5, 56}, {15, 0}, {5, 32}, {5, 40},
-		{0, 64}, {5, 40}, {-5, 56}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-10, 64},
-		{-15, 72}, {5, 40}
+		{0, 56}, {0, 56}, {0, 56}, {0, 56}, {5, 48}, {5, 48}, {-10, 80}, {-5, 64},
+		{-20, 96}, {0, 56}, {-15, 104}, {0, 24}, {-15, 72}, {5, 40}, {0, 64}, {-5, 80},
+		{15, 32}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-20, 96},
+		{-15, 96}, {-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96},
+		{-15, 104}, {-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 88},
+		{-15, 96}, {-20, 96}, {-15, 96}, {-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96},
+		{-25, 96}, {-15, 96}, {-15, 104}, {-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72},
+		{-15, 80}, {-10, 56}, {-5, 80}, {-30, 88}, {0, 64}, {0, 72}, {0, 64}, {-5, 72},
+		{0, 56}, {-5, 72}, {-10, 72}, {-10, 72}, {-30, 104}, {0, 56}, {5, 32}, {10, 40},
+		{-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48},
+		{0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64},
+		{5, 64}, {0, 56}, {-10, 72}, {-10, 72}, {-15, 72}, {-10, 56}, {-15, 72}, {-10, 56},
+		{5, 40}, {0, 40}, {10, 40}, {-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64},
+		{15, 16}, {15, 16}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32},
+		{-5, 32}, {0, 24}, {-5, 48}, {0, 56}, {-10, 56}, {-5, 48}, {-5, 56}, {5, 56},
+		{15, 0}, {5, 32}, {5, 40}, {0, 64}, {5, 40}, {-5, 56}, {10, 32}, {-15, 72},
+		{5, 40}, {-20, 72}, {-10, 64}, {-15, 72}, {5, 40}
 
 	},
 	{
 		{0, 56}, {5, -16}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
 		{15, 56}, {-5, 32}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {10, 40}, {0, 48},
 		{-25, 104}, {0, 64}, {-5, 56}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
-		{0, 56}, {0, 56}, {5, 48}, {25, -16}, {5, 40}, {-10, 64}, {0, 56}, {-15, 104},
-		{0, 24}, {-20, 80}, {5, 40}, {0, 64}, {5, 56}, {15, 32}, {0, 64}, {0, 64},
-		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96}, {-20, 104}, {-20, 96},
-		{-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96}, {-15, 104}, {-15, 104},
-		{-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96},
-		{-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96},
-		{-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 56}, {-5, 80},
-		{-30, 88}, {0, 64}, {5, 64}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
-		{-10, 72}, {-30, 104}, {-10, 80}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
-		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
-		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-5, 64},
-		{-5, 64}, {-10, 64}, {-10, 56}, {-10, 64}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
-		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {5, 40}, {5, 40},
-		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
-		{0, 56}, {-10, 56}, {-5, 48}, {-10, 64}, {5, 56}, {20, -16}, {5, 32}, {5, 40},
-		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-15, 72},
-		{-15, 72}, {5, 40}
+		{0, 56}, {0, 56}, {0, 56}, {0, 56}, {5, 48}, {5, 48}, {25, -16}, {5, 40},
+		{-10, 64}, {0, 56}, {-15, 104}, {0, 24}, {-20, 80}, {5, 40}, {0, 64}, {5, 56},
+		{15, 32}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-10, 80},
+		{-15, 96}, {-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88},
+		{-10, 96}, {-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 88},
+		{-15, 96}, {-10, 80}, {-15, 96}, {-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104},
+		{-25, 104}, {-10, 88}, {-10, 96}, {-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72},
+		{-20, 88}, {-10, 56}, {-5, 80}, {-30, 88}, {0, 64}, {5, 64}, {0, 64}, {-5, 72},
+		{0, 56}, {-5, 72}, {-10, 72}, {-10, 72}, {-30, 104}, {-10, 80}, {5, 32}, {10, 40},
+		{-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48},
+		{0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64},
+		{5, 64}, {0, 56}, {-5, 64}, {-5, 64}, {-10, 64}, {-10, 56}, {-10, 64}, {-10, 56},
+		{5, 40}, {0, 40}, {10, 40}, {-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64},
+		{15, 16}, {5, 40}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32},
+		{-5, 32}, {0, 24}, {-5, 48}, {0, 56}, {-10, 56}, {-5, 48}, {-10, 64}, {5, 56},
+		{20, -16}, {5, 32}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {-15, 72},
+		{5, 40}, {-20, 72}, {-15, 72}, {-15, 72}, {5, 40}
 
 	}
 };
@@ -1055,12 +1056,12 @@ static inline uint32_t merge_idx(m2d_cabac_t& cabac, dec_bits& st) {
 	return cabac_decode_multibypass(&cabac, &st, 3);
 }
 
-static inline int pred_mode_flag(m2d_cabac_t& cabac, dec_bits& st, int slice_type) {
-	if (slice_type < 2) {
-		return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->pred_mode_flag);
-	} else {
-		return 1;
-	}
+static inline uint32_t merge_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->merge_flag);
+}
+
+static inline int pred_mode_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->pred_mode_flag);
 }
 
 static inline uint32_t part_mode_inter0(m2d_cabac_t& cabac, dec_bits& st, int8_t* ctx) {
@@ -1089,21 +1090,73 @@ static inline uint32_t part_mode_inter2(m2d_cabac_t& cabac, dec_bits& st, int8_t
 	}
 }
 
-static inline uint32_t part_mode_inter(m2d_cabac_t& cabac, dec_bits& st, int size_log2, int min_size_log2, int amp_enabled_flag) {
+static inline h265d_inter_part_mode_t part_mode_inter(m2d_cabac_t& cabac, dec_bits& st, int size_log2, int min_size_log2, int amp_enabled_flag) {
 	int8_t* ctx = reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->part_mode;
+	uint32_t mode;
 	if (min_size_log2 < size_log2) {
 		if (!amp_enabled_flag) {
-			return part_mode_inter0(cabac, st, ctx);
+			mode = part_mode_inter0(cabac, st, ctx);
 		} else {
-			return part_mode_inter1(cabac, st, ctx);
+			mode = part_mode_inter1(cabac, st, ctx);
 		}
 	} else {
 		if (size_log2 == 3) {
-			return part_mode_inter0(cabac, st, ctx);
+			mode = part_mode_inter0(cabac, st, ctx);
 		} else {
-			return part_mode_inter2(cabac, st, ctx);
+			mode = part_mode_inter2(cabac, st, ctx);
 		}
 	}
+	return static_cast<h265d_inter_part_mode_t>(mode);
+}
+
+static inline uint32_t inter_pred_idc(m2d_cabac_t& cabac, dec_bits& st, int width, int height, int depth) {
+	if ((width + height != 12) && cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->inter_pred_idc + depth)) {
+		return 2;
+	} else {
+		return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->inter_pred_idc + 4);
+	}
+}
+
+static inline uint32_t ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int max, int8_t* ctx) {
+	uint32_t idx;
+	int max_tmp = std::min(max, 2);
+	for (idx = 0; idx < max_tmp; ++idx) {
+		if (cabac_decode_decision_raw(&cabac, &st, ctx + idx)) {
+			break;
+		}
+	}
+	for (;idx < max; ++idx) {
+		if (cabac_decode_bypass(&cabac, &st)) {
+			break;
+		}
+	}
+	return idx;
+}
+
+static inline uint32_t ref_idx_l0(m2d_cabac_t& cabac, dec_bits& st, int num_ref_idx_active_minus1) {
+	return ref_idx_lx(cabac, st, num_ref_idx_active_minus1, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->ref_idx_l0);
+}
+
+static inline uint32_t abs_mvd_greater_flag(m2d_cabac_t& cabac, dec_bits& st, int idx) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->abs_mvd_greater_flag + idx);
+}
+
+static inline uint32_t abs_mvd_minus2(m2d_cabac_t& cabac, dec_bits& st) {
+	int bits;
+	for (bits = 0; cabac_decode_bypass(&cabac, &st); bits++);
+	if (bits) {
+		return (2 << bits) - 2 + cabac_decode_multibypass(&cabac, &st, bits + 1);
+	} else {
+		return 0;
+	}
+}
+
+static inline uint32_t mvd_sign_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_bypass(&cabac, &st);
+}
+
+static inline uint32_t mvp_lx_flag(m2d_cabac_t& cabac, dec_bits& st, int idx) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->mvp_flag + idx);
 }
 
 static inline uint32_t part_mode_intra(m2d_cabac_t& cabac, dec_bits& st) {
@@ -2909,40 +2962,107 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 	}
 }
 
-static void prediction_unit_skip(h265d_ctu_t& dst, dec_bits& st, int size_log2) {
+static void prediction_unit_merge(h265d_ctu_t& dst, dec_bits& st, int offset_x, int offset_y, int width, int height) {
 	if (1 < dst.slice_header->body.max_num_merge_cand) {
 		merge_idx(dst.cabac, st);
 	}
 }
 
-static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
-	intra_depth_fill(left, top, size_log2);
-	if (dst.pps->cu_qp_delta_enabled_flag) {
-		dst.qp_delta_req = 1;
+static inline int mvd_coding_suffix(m2d_cabac_t& cabac, dec_bits& st, int mvd) {
+	if (mvd) {
+		if (1 < mvd) {
+			mvd += abs_mvd_minus2(cabac, st);
+		}
+		mvd = mvd_sign_flag(cabac, st) ? -mvd : mvd;
 	}
-	if (dst.pps->transquant_bypass_enabled_flag) {
-		assert(0);
-	}
-	int slice_type = dst.slice_header->body.slice_type;
-	if (slice_type < 2) {
-		uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
-		if (skip) {
-			cu_pred_mode_fill(left, top, 1, 1 << (size_log2 - 2));
-			prediction_unit_skip(dst, st, size_log2);
-			return;
+	return mvd;
+}
+
+static inline void mvd_coding(m2d_cabac_t& cabac, dec_bits& st, int16_t mvd[]) {
+	int mvd0 = abs_mvd_greater_flag(cabac, st, 0);
+	int mvd1 = abs_mvd_greater_flag(cabac, st, 0);
+	mvd0 = (mvd0) ? mvd0 + abs_mvd_greater_flag(cabac, st, 1) : mvd0;
+	mvd1 = (mvd1) ? mvd1 + abs_mvd_greater_flag(cabac, st, 1) : mvd1;
+	mvd[0] = mvd_coding_suffix(cabac, st, mvd0);
+	mvd[1] = mvd_coding_suffix(cabac, st, mvd1);
+}
+
+static void prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, int offset_x, int offset_y, int width, int height) {
+	if (merge_flag(dst.cabac, st)) {
+		prediction_unit_merge(dst, st, offset_x, offset_y, width, height);
+	} else {
+		int pred_idc;
+		if (dst.slice_header->body.slice_type == 0) {
+			int depth = dst.sps->ctb_info.size_log2 - size_log2;
+			pred_idc = inter_pred_idc(dst.cabac, st, width, height, depth);
+		} else {
+			pred_idc = 0;
+		}
+		if (pred_idc != 1) {
+			int num_ref = dst.slice_header->body.num_ref_idx_l0_active_minus1;
+			int ref_idx0 = (0 < num_ref) ? ref_idx_l0(dst.cabac, st, num_ref) : 0;
+			int16_t mvd[2];
+			mvd_coding(dst.cabac, st, mvd);
+			mvp_lx_flag(dst.cabac, st, 0);
 		}
 	}
+}
+
+static void prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2) {
+	h265d_inter_part_mode_t mode = part_mode_inter(dst.cabac, st, size_log2, dst.sps->ctb_info.size_log2_min, dst.sps->amp_enabled_flag);
+	int len = 1 << size_log2;
+	int len_s;
+	switch (mode) {
+	case PART_2Nx2N:
+		prediction_unit(dst, st, size_log2, 0, 0, len, len);
+		break;
+	case PART_2NxN:
+		len_s = len >> 1;
+		prediction_unit(dst, st, size_log2, 0, 0, len, len_s);
+		prediction_unit(dst, st, size_log2, 0, len_s, len, len_s);
+		break;
+	case PART_Nx2N:
+		len_s = len >> 1;
+		prediction_unit(dst, st, size_log2, 0, 0, len_s, len);
+		prediction_unit(dst, st, size_log2, len_s, 0, len_s, len);
+		break;
+	case PART_NxN:
+		len_s = len >> 1;
+		prediction_unit(dst, st, size_log2, 0, 0, len_s, len_s);
+		prediction_unit(dst, st, size_log2, len_s, 0, len_s, len_s);
+		prediction_unit(dst, st, size_log2, 0, len_s, len_s, len_s);
+		prediction_unit(dst, st, size_log2, len_s, len_s, len_s, len_s);
+		break;
+	case PART_2NxnU:
+		len_s = len >> 2;
+		prediction_unit(dst, st, size_log2, 0, 0, len, len_s);
+		prediction_unit(dst, st, size_log2, 0, len_s, len, len - len_s);
+		break;
+	case PART_2NxnD:
+		len_s = len >> 2;
+		prediction_unit(dst, st, size_log2, 0, 0, len, len - len_s);
+		prediction_unit(dst, st, size_log2, 0, len - len_s, len, len_s);
+		break;
+	case PART_nLx2N:
+		len_s = len >> 2;
+		prediction_unit(dst, st, size_log2, 0, 0, len_s, len);
+		prediction_unit(dst, st, size_log2, len_s, 0, len - len_s, len);
+		break;
+	case PART_nRx2N:
+		len_s = len >> 2;
+		prediction_unit(dst, st, size_log2, 0, 0, len - len_s, len);
+		prediction_unit(dst, st, size_log2, len - len_s, 0, len_s, len);
+		break;
+	}
+}
+
+static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	int part_num = 1;
 	dst.intra_split = 0;
-	dst.is_intra = pred_mode_flag(dst.cabac, st, slice_type);
-	if (dst.is_intra) {
-		if ((dst.sps->ctb_info.size_log2_min == size_log2) && (part_mode_intra(dst.cabac, st) == 0)) {
-			dst.intra_split = 1;
-			part_num = 4;
-		}
-	} else {
-		int mode;
-		mode = part_mode_inter(dst.cabac, st, size_log2, dst.sps->ctb_info.size_log2_min, dst.sps->amp_enabled_flag);
+	dst.is_intra = 1;
+	if ((dst.sps->ctb_info.size_log2_min == size_log2) && (part_mode_intra(dst.cabac, st) == 0)) {
+		dst.intra_split = 1;
+		part_num = 4;
 	}
 	if ((dst.sps->ctb_info.pcm_log2_min <= size_log2) && (size_log2 <= dst.sps->ctb_info.pcm_log2)) {
 		assert(0);
@@ -2973,6 +3093,36 @@ static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, ui
 	uint32_t chroma_mode_idx = intra_chroma_pred_mode(dst.cabac, st);
 	for (int i = 0; i < 1; ++i) {
 		dst.order_chroma = intra_chroma_pred_dir(chroma_mode_idx, dst.order_luma[i]);
+	}
+}
+
+static void cu_header_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
+	cu_pred_mode_fill(left, top, skip, 1 << (size_log2 - 2));
+	if (skip) {
+		int len = 1 << size_log2;
+		prediction_unit_merge(dst, st, 0, 0, len, len);
+	} else {
+		if (pred_mode_flag(dst.cabac, st) != 0) {
+			cu_header_intra(dst, st, size_log2, left, top);
+			return;
+		}
+		prediction_unit_cases(dst, st, size_log2);
+	}
+}
+
+static void coding_unit_header(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	intra_depth_fill(left, top, size_log2);
+	if (dst.pps->cu_qp_delta_enabled_flag) {
+		dst.qp_delta_req = 1;
+	}
+	if (dst.pps->transquant_bypass_enabled_flag) {
+		assert(0);
+	}
+	if (dst.slice_header->body.slice_type < 2) {
+		cu_header_inter(dst, st, size_log2, unavail, left, top);
+	} else {
+		cu_header_intra(dst, st, size_log2, left, top);
 	}
 }
 

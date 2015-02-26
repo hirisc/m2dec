@@ -260,6 +260,17 @@ typedef enum {
 	INTRA_STRONG_FILTER = 64
 } h265d_intra_pred_mode_t;
 
+typedef enum {
+	PART_2Nx2N = 0,
+	PART_2NxN = 1,
+	PART_Nx2N = 2,
+	PART_NxN = 3,
+	PART_2NxnU = 4,
+	PART_2NxnD = 5,
+	PART_nLx2N = 6,
+	PART_nRx2N = 7
+} h265d_inter_part_mode_t;
+
 typedef struct {
 	int8_t sao_merge_flag[1];
 	int8_t sao_type_idx[1];
@@ -274,7 +285,8 @@ typedef struct {
 	int8_t merge_flag[1];
 	int8_t merge_idx[1];
 	int8_t inter_pred_idc[5];
-	int8_t ref_idx[2];
+	int8_t ref_idx_l0[2];
+	int8_t ref_idx_l1[2];
 	int8_t mvp_flag[1];
 	int8_t split_transform_flag[3];
 	int8_t cbf_luma[2];
@@ -322,8 +334,8 @@ typedef struct {
 	int8_t slice_qpc_delta[2];
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
-	uint8_t num_ref_idx_l0_default_active_minus1;
-	uint8_t num_ref_idx_l1_default_active_minus1;
+	uint8_t num_ref_idx_l0_active_minus1;
+	uint8_t num_ref_idx_l1_active_minus1;
 	uint8_t collocated_ref_idx;
 	int8_t max_num_merge_cand;
 	uint32_t mvd_l1_zefo_flag : 1;
