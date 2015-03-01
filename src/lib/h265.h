@@ -164,8 +164,7 @@ typedef struct {
 
 typedef struct {
 	uint8_t sps_id;
-	uint8_t num_ref_idx_l0_default_active_minus1;
-	uint8_t num_ref_idx_l1_default_active_minus1;
+	uint8_t num_ref_idx_lx_default_active_minus1[2];
 	uint8_t init_qp_minus26;
 	uint8_t diff_cu_qp_delta_depth;
 	int8_t pps_cb_qp_offset;
@@ -285,9 +284,8 @@ typedef struct {
 	int8_t merge_flag[1];
 	int8_t merge_idx[1];
 	int8_t inter_pred_idc[5];
-	int8_t ref_idx_l0[2];
-	int8_t ref_idx_l1[2];
-	int8_t mvp_flag[1];
+	int8_t ref_idx_lx[2][2];
+	int8_t mvp_flag[2];
 	int8_t split_transform_flag[3];
 	int8_t cbf_luma[2];
 	int8_t cbf_chroma[4];
@@ -334,11 +332,10 @@ typedef struct {
 	int8_t slice_qpc_delta[2];
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
-	uint8_t num_ref_idx_l0_active_minus1;
-	uint8_t num_ref_idx_l1_active_minus1;
+	uint8_t num_ref_idx_lx_active_minus1[2];
 	uint8_t collocated_ref_idx;
 	int8_t max_num_merge_cand;
-	uint32_t mvd_l1_zefo_flag : 1;
+	uint32_t mvd_l1_zero_flag : 1;
 	uint32_t colocated_from_l0_flag : 1;
 	uint32_t pic_output_flag : 1;
 	uint32_t colour_plane_id : 2;
@@ -421,7 +418,6 @@ typedef struct h265d_ctu_t {
 	int8_t qp_delta_req, qpy;
 	int8_t qpc_delta[2];
 	h265d_scaling_info_t qp_scale[3];
-	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
 	uint8_t not_first_row : 1;
 	int8_t order_luma[4], order_chroma;
