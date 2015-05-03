@@ -81,6 +81,7 @@
     <ClCompile Include="..\..\src\lib\bitio.c" />
     <ClCompile Include="..\..\src\lib\h264.cpp" />
     <ClCompile Include="..\..\src\lib\h265.cpp" />
+    <ClCompile Include="..\..\src\lib\h265_x86.cpp" />
     <ClCompile Include="..\..\src\lib\idct.cpp" />
     <ClCompile Include="..\..\src\lib\m2d.cpp" />
     <ClCompile Include="..\..\src\lib\motioncomp.cpp" />

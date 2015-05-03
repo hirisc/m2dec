@@ -30,6 +30,9 @@
 #include <algorithm>
 #include "h265.h"
 #include "m2d_macro.h"
+#if (defined(__GNUC__) && defined(__SSE2__)) || defined(_M_IX86) || defined(_M_AMD64)
+#define X86ASM
+#endif
 
 typedef enum {
 	WRONG_PARAM = -1,
@@ -1760,6 +1763,11 @@ static inline void transformdst_dconly(uint8_t *dst, int16_t* coeff, int stride)
 	dst[3] = CLIP255C(dst[3] + e3);
 }
 
+#ifdef X86ASM
+void transformdst_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac8x8(uint8_t* dst, int16_t* src, int stride);
+#else
 template <typename F>
 static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Saturate) {
 	int c0 = coeff[0];
@@ -1776,7 +1784,7 @@ static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Satu
 	dst[3] = Saturate(d0 * 55 + d2 * 29 - d3);
 }
 
-static inline void transformdst_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
+static inline void transformdst_ac4x4(uint8_t* dst, int16_t* coeff, int stride) {
 	int16_t* tmp = coeff + 16;
 	for (int x = 0; x < 4; ++x) {
 		transformdst_line4(tmp + x * 4, coeff + x, sat16<7>());
@@ -1788,6 +1796,7 @@ static inline void transformdst_acNxN(uint8_t* dst, int16_t* coeff, int stride) 
 		tmp++;
 	}
 }
+#endif
 
 template <int LOG2, typename T0, typename F>
 static inline void transform_line4(T0 *dst, const int16_t* coeff, F Saturate) {
@@ -1996,7 +2005,7 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
 			transform_horiz<3, 1>,
 			transform_horiz<4, 1>,
 			transform_horiz<5, 1>
@@ -2010,7 +2019,7 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
 			transform_vert<3, 1>,
 			transform_vert<4, 1>,
 			transform_vert<5, 1>
@@ -2024,8 +2033,12 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
+#ifdef X86ASM
+			transform_ac8x8,
+#else
 			transform_acNxN<3, 1>,
+#endif
 			transform_acNxN<4, 1>,
 			transform_acNxN<5, 1>
 		},
