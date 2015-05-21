@@ -1767,6 +1767,7 @@ static inline void transformdst_dconly(uint8_t *dst, int16_t* coeff, int stride)
 void transformdst_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
 void transform_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
 void transform_ac8x8(uint8_t* dst, int16_t* src, int stride);
+void transform_ac16x16(uint8_t* dst, int16_t* src, int stride);
 #else
 template <typename F>
 static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Saturate) {
@@ -2036,10 +2037,11 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 			transformdst_ac4x4,
 #ifdef X86ASM
 			transform_ac8x8,
+			transform_ac16x16,
 #else
 			transform_acNxN<3, 1>,
-#endif
 			transform_acNxN<4, 1>,
+#endif
 			transform_acNxN<5, 1>
 		},
 		{
