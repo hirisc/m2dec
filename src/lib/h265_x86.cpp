@@ -336,9 +336,9 @@ static inline void idct16x16horizodd(const __m128i& r0, __m128i& dst0, __m128i& 
 		{80, 70, -80, -90, 90, 43, 70, -43},
 		{-25, 90, -87, 70, -57, 87, 9, -25}
 	};
-	__m128i r1 = _mm_shuffle_epi32(r0, 0xb1); // 13, 15, 1, 3, 5, 7, 9, 11
+	__m128i r1 = _mm_shuffle_epi32(r0, 0x93); // 13, 15, 1, 3, 5, 7, 9, 11
 	__m128i r2 = _mm_shuffle_epi32(r0, 0x4e); // 9, 11, 13, 15, 1, 3, 5, 7
-	__m128i r3 = _mm_shuffle_epi32(r0, 0x93); // 5, 7, 9, 11, 13, 15, 1, 3
+	__m128i r3 = _mm_shuffle_epi32(r0, 0x39); // 5, 7, 9, 11, 13, 15, 1, 3
 	__m128i d0 = _mm_madd_epi16(r0, *(const __m128i*)coef[0]);
 	__m128i e0 = _mm_madd_epi16(r0, *(const __m128i*)coef[1]);
 	__m128i d1 = _mm_madd_epi16(r1, *(const __m128i*)coef[2]);
@@ -378,73 +378,6 @@ static inline void idct16x16horiz(const int16_t* in, uint8_t* dst, int bitdepth)
 	}
 }
 
-static inline void idct16x16even8l(const int16_t* src, int gap, __m128i& dst0, __m128i& dst1, __m128i& dst2, __m128i& dst3, __m128i& dst4, __m128i& dst5, __m128i& dst6, __m128i& dst7) {
-	__m128i s0 = _mm_loadu_si128((const __m128i*)src);
-	__m128i s1 = _mm_loadu_si128((const __m128i*)(src + gap * 2));
-	__m128i s2 = _mm_loadu_si128((const __m128i*)(src + gap * 4));
-	__m128i s3 = _mm_loadu_si128((const __m128i*)(src + gap * 6));
-	__m128i e0l, e1l, e2l, e3l;
-	__m128i o0l, o1l, o2l, o3l;
-	__m128i e0h, e1h, e2h, e3h;
-	__m128i o0h, o1h, o2h, o3h;
-	idct4x4vert4(_mm_unpacklo_epi16(s0, s2), _mm_unpacklo_epi16(s1, s3), e0l, e1l, e2l, e3l);
-	__m128i t0 = _mm_loadu_si128((const __m128i*)(src + gap));
-	__m128i t1 = _mm_loadu_si128((const __m128i*)(src + gap * 3));
-	__m128i t2 = _mm_loadu_si128((const __m128i*)(src + gap * 5));
-	__m128i t3 = _mm_loadu_si128((const __m128i*)(src + gap * 7));
-	idct8x8vertodd4(_mm_unpacklo_epi16(t0, t2), _mm_unpacklo_epi16(t1, t3), o0l, o1l, o2l, o3l);
-	dst0 = _mm_add_epi32(e0l, o0l);
-	dst7 = _mm_sub_epi32(e0l, o0l);
-	dst1 = _mm_add_epi32(e1l, o1l);
-	dst6 = _mm_sub_epi32(e1l, o1l);
-	dst2 = _mm_add_epi32(e2l, o2l);
-	dst5 = _mm_sub_epi32(e2l, o2l);
-	dst3 = _mm_add_epi32(e3l, o3l);
-	dst4 = _mm_sub_epi32(e3l, o3l);
-}
-
-static inline void idct16x16vertodd4(int idx, const __m128i& a0, const __m128i& a1, const __m128i& a2, const __m128i& a3, const __m128i& e0, const __m128i& e1, __m128i& dst0, __m128i& dst1, __m128i& dst2, __m128i& dst3) {
-	__m128i b0 = _mm_add_epi32(_mm_madd_epi16(a0, *(const __m128i*)idct16coeffs[idx * 8]), _mm_madd_epi16(a1, *(const __m128i*)idct16coeffs[idx * 8 + 1]));
-	__m128i b1 = _mm_add_epi32(_mm_madd_epi16(a2, *(const __m128i*)idct16coeffs[idx * 8 + 2]), _mm_madd_epi16(a3, *(const __m128i*)idct16coeffs[idx * 8 + 3]));
-	__m128i d0 = _mm_add_epi32(b0, b1);
-	dst0 = _mm_add_epi32(e0, d0);
-	dst2 = _mm_sub_epi32(e0, d0);
-	__m128i b2 = _mm_add_epi32(_mm_madd_epi16(a0, *(const __m128i*)idct16coeffs[idx * 8 + 4]), _mm_madd_epi16(a1, *(const __m128i*)idct16coeffs[idx * 8 + 5]));
-	__m128i b3 = _mm_add_epi32(_mm_madd_epi16(a2, *(const __m128i*)idct16coeffs[idx * 8 + 6]), _mm_madd_epi16(a3, *(const __m128i*)idct16coeffs[idx * 8 + 7]));
-	__m128i d1 = _mm_add_epi32(b2, b3);
-	dst1 = _mm_add_epi32(e1, d1);
-	dst3 = _mm_sub_epi32(e1, d1);
-}
-
-static inline void idct16x16vertodd4pack(int idx, int16_t* dst, int pos0, int pos1, const __m128i& a0, const __m128i& a1, const __m128i& a2, const __m128i& a3, const __m128i& e0, const __m128i& e1) {
-	__m128i l0, l1, h0, h1;
-	idct16x16vertodd4(idx, a0, a1, a2, a3, e0, e1, l0, l1, h0, h1);
-	__m128i r0 = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(l0, *(const __m128i*)rounding), 7), _mm_srai_epi32(_mm_add_epi32(l1, *(const __m128i*)rounding), 7));
-	__m128i r1 = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(h1, *(const __m128i*)rounding), 7), _mm_srai_epi32(_mm_add_epi32(h0, *(const __m128i*)rounding), 7));
-	_mm_storeu_si128((__m128i*)(dst + 16 * pos0), r0);
-	_mm_storeu_si128((__m128i*)(dst + 16 * pos1), r1);
-}
-
-static inline void idct16x16vertodd(const int16_t* src, int gap, int16_t* out, const __m128i& even0, const __m128i& even1, const __m128i& even2, const __m128i& even3, const __m128i& even4, const __m128i& even5, const __m128i& even6, const __m128i& even7) {
-	__m128i i0 = _mm_loadu_si128((const __m128i*)(src + gap * 1));
-	__m128i i1 = _mm_loadu_si128((const __m128i*)(src + gap * 3));
-	__m128i i2 = _mm_loadu_si128((const __m128i*)(src + gap * 5));
-	__m128i i3 = _mm_loadu_si128((const __m128i*)(src + gap * 7));
-	__m128i i4 = _mm_loadu_si128((const __m128i*)(src + gap * 9));
-	__m128i i5 = _mm_loadu_si128((const __m128i*)(src + gap * 11));
-	__m128i i6 = _mm_loadu_si128((const __m128i*)(src + gap * 13));
-	__m128i i7 = _mm_loadu_si128((const __m128i*)(src + gap * 15));
-	__m128i s0 = _mm_unpacklo_epi16(i0, i2);
-	__m128i s1 = _mm_unpacklo_epi16(i1, i3);
-	__m128i s2 = _mm_unpacklo_epi16(i4, i6);
-	__m128i s3 = _mm_unpacklo_epi16(i5, i7);
-
-	idct16x16vertodd4pack(0, out, 0, 7, s0, s1, s2, s3, even0, even1);
-	idct16x16vertodd4pack(1, out, 1, 6, s0, s1, s2, s3, even2, even3);
-	idct16x16vertodd4pack(2, out, 2, 5, s0, s1, s2, s3, even4, even5);
-	idct16x16vertodd4pack(3, out, 3, 4, s0, s1, s2, s3, even6, even7);
-}
-
 static inline __m128i idct16x16vertodd4col(const int16_t coef[][8], const __m128i& a0, const __m128i& a1, const __m128i& a2, const __m128i& a3) {
 	__m128i b0 = _mm_add_epi32(_mm_madd_epi16(a0, *(const __m128i*)coef[0]), _mm_madd_epi16(a1, *(const __m128i*)coef[1]));
 	__m128i b1 = _mm_add_epi32(_mm_madd_epi16(a2, *(const __m128i*)coef[2]), _mm_madd_epi16(a3, *(const __m128i*)coef[3]));
@@ -466,8 +399,8 @@ static inline void idct16x16vertodd(const int16_t* src, int gap, __m128i odd[]) 
 	__m128i i5 = _mm_loadu_si128((const __m128i*)(src + gap * 11));
 	__m128i i6 = _mm_loadu_si128((const __m128i*)(src + gap * 13));
 	__m128i i7 = _mm_loadu_si128((const __m128i*)(src + gap * 15));
-	idct16x16vertoddhalf(idct16coeffs, odd, _mm_unpacklo_epi16(i0, i2), _mm_unpacklo_epi16(i1, i3), _mm_unpacklo_epi16(i4, i6), _mm_unpacklo_epi16(i5, i7));
-	idct16x16vertoddhalf(idct16coeffs, odd + 8, _mm_unpackhi_epi16(i0, i2), _mm_unpackhi_epi16(i1, i3), _mm_unpackhi_epi16(i4, i6), _mm_unpackhi_epi16(i5, i7));
+	idct16x16vertoddhalf(idct16coeffs, odd, _mm_unpacklo_epi16(i0, i1), _mm_unpacklo_epi16(i2, i3), _mm_unpacklo_epi16(i4, i5), _mm_unpacklo_epi16(i6, i7));
+	idct16x16vertoddhalf(idct16coeffs, odd + 8, _mm_unpackhi_epi16(i0, i1), _mm_unpackhi_epi16(i2, i3), _mm_unpackhi_epi16(i4, i5), _mm_unpackhi_epi16(i6, i7));
 }
 
 static inline void idct16x16vert_storehalf(int pos, __m128i dst[], const __m128i odd[], const __m128i& e0, const __m128i& o0) {
@@ -531,15 +464,7 @@ static inline void idct16x16vert(const int16_t* src, int gap, int16_t* out) {
 
 static void transform_ac16x16bit(uint8_t* out, const int16_t* in, int16_t* tmp, int stride, int bitdepth) {
 	int x, y;
-#if 1
 	idct16x16vert(in, 16, tmp);
-#else
-	for (x = 0; x < 16; x += 8) {
-		__m128i t0, t1, t2, t3, t4, t5, t6, t7;
-		idct16x16even8l(in + x, 16 * 2, t0, t1, t2, t3, t4, t5, t6, t7);
-		idct16x16vertodd(in + x, 16, tmp + x, t0, t1, t2, t3, t4, t5, t6, t7);
-	}
-#endif
 	for (y = 0; y < 16; y++) {
 		idct16x16horiz(tmp + y * 16, out + y * stride, bitdepth);
 	}
