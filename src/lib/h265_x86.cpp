@@ -399,8 +399,8 @@ static inline void idct16x16vertodd(const int16_t* src, int gap, __m128i odd[]) 
 	__m128i i5 = _mm_loadu_si128((const __m128i*)(src + gap * 11));
 	__m128i i6 = _mm_loadu_si128((const __m128i*)(src + gap * 13));
 	__m128i i7 = _mm_loadu_si128((const __m128i*)(src + gap * 15));
-	idct16x16vertoddhalf(idct16coeffs, odd, _mm_unpacklo_epi16(i0, i1), _mm_unpacklo_epi16(i2, i3), _mm_unpacklo_epi16(i4, i5), _mm_unpacklo_epi16(i6, i7));
-	idct16x16vertoddhalf(idct16coeffs, odd + 8, _mm_unpackhi_epi16(i0, i1), _mm_unpackhi_epi16(i2, i3), _mm_unpackhi_epi16(i4, i5), _mm_unpackhi_epi16(i6, i7));
+	idct16x16vertoddhalf(idct16coeffs, odd, _mm_unpackhi_epi16(i0, i1), _mm_unpackhi_epi16(i2, i3), _mm_unpackhi_epi16(i4, i5), _mm_unpackhi_epi16(i6, i7));
+	idct16x16vertoddhalf(idct16coeffs, odd + 8, _mm_unpacklo_epi16(i0, i1), _mm_unpacklo_epi16(i2, i3), _mm_unpacklo_epi16(i4, i5), _mm_unpacklo_epi16(i6, i7));
 }
 
 static inline void idct16x16vert_storehalf(int pos, __m128i dst[], const __m128i odd[], const __m128i& e0, const __m128i& o0) {
@@ -415,14 +415,14 @@ static inline void idct16x16vert_latter(int pos, int16_t* out, const __m128i hal
 	__m128i e0a = _mm_add_epi32(e0, *(const __m128i*)rounding);
 	__m128i u0 = _mm_add_epi32(e0a, o0);
 	__m128i u7 = _mm_sub_epi32(e0a, o0);
-	__m128i t0h = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(u0, odd[pos]), 7), _mm_srai_epi32(_mm_sub_epi32(u0, odd[pos]), 7));
-	__m128i t7h = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(u7, odd[7 - pos]), 7), _mm_srai_epi32(_mm_sub_epi32(u7, odd[7 - pos]), 7));
-	__m128i t0l = _mm_load_si128(half + pos);
-	__m128i t7l = _mm_load_si128(half + 7 - pos);
-	_mm_storeu_si128((__m128i*)(out + 16 * pos), _mm_unpacklo_epi64(t0l, t0h));
-	_mm_storeu_si128((__m128i*)(out + 16 * (7 - pos)), _mm_unpacklo_epi64(t7l, t7h));
-	_mm_storeu_si128((__m128i*)(out + 16 * (8 + pos)), _mm_unpackhi_epi64(t7l, t7h));
-	_mm_storeu_si128((__m128i*)(out + 16 * (15 - pos)), _mm_unpackhi_epi64(t0l, t0h));
+	__m128i t0l = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(u0, odd[pos]), 7), _mm_srai_epi32(_mm_sub_epi32(u0, odd[pos]), 7));
+	__m128i t7l = _mm_packs_epi32(_mm_srai_epi32(_mm_add_epi32(u7, odd[7 - pos]), 7), _mm_srai_epi32(_mm_sub_epi32(u7, odd[7 - pos]), 7));
+//	__m128i t0l = _mm_load_si128(half + pos);
+//	__m128i t7l = _mm_load_si128(half + 7 - pos);
+	_mm_storeu_si128((__m128i*)(out + 16 * pos), _mm_unpacklo_epi64(t0l, *(half + pos)));
+	_mm_storeu_si128((__m128i*)(out + 16 * (7 - pos)), _mm_unpacklo_epi64(t7l, *(half + 7 - pos)));
+	_mm_storeu_si128((__m128i*)(out + 16 * (8 + pos)), _mm_unpackhi_epi64(t7l, *(half + 7 - pos)));
+	_mm_storeu_si128((__m128i*)(out + 16 * (15 - pos)), _mm_unpackhi_epi64(t0l, *(half + pos)));
 }
 
 static inline void idct16x16verteven(const int16_t* src, int gap, int16_t* out, const __m128i odd[]) {
@@ -435,19 +435,19 @@ static inline void idct16x16verteven(const int16_t* src, int gap, int16_t* out, 
 	__m128i o0l, o1l, o2l, o3l;
 	__m128i e0, e1, e2, e3;
 	__m128i o0, o1, o2, o3;
-	idct4x4vert4(_mm_unpacklo_epi16(s0, s2), _mm_unpacklo_epi16(s1, s3), e0l, e1l, e2l, e3l);
+	idct4x4vert4(_mm_unpackhi_epi16(s0, s2), _mm_unpackhi_epi16(s1, s3), e0l, e1l, e2l, e3l);
 	__m128i t0 = _mm_loadu_si128((const __m128i*)(src + gap));
 	__m128i t1 = _mm_loadu_si128((const __m128i*)(src + gap * 3));
 	__m128i t2 = _mm_loadu_si128((const __m128i*)(src + gap * 5));
 	__m128i t3 = _mm_loadu_si128((const __m128i*)(src + gap * 7));
-	idct8x8vertodd4(_mm_unpacklo_epi16(t0, t2), _mm_unpacklo_epi16(t1, t3), o0l, o1l, o2l, o3l);
+	idct8x8vertodd4(_mm_unpackhi_epi16(t0, t2), _mm_unpackhi_epi16(t1, t3), o0l, o1l, o2l, o3l);
 	idct16x16vert_storehalf(0, tmp, odd, e0l, o0l);
 	idct16x16vert_storehalf(1, tmp, odd, e1l, o1l);
 	idct16x16vert_storehalf(2, tmp, odd, e2l, o2l);
 	idct16x16vert_storehalf(3, tmp, odd, e3l, o3l);
 
-	idct4x4vert4(_mm_unpackhi_epi16(s0, s2), _mm_unpackhi_epi16(s1, s3), e0, e1, e2, e3);
-	idct8x8vertodd4(_mm_unpackhi_epi16(t0, t2), _mm_unpackhi_epi16(t1, t3), o0, o1, o2, o3);
+	idct4x4vert4(_mm_unpacklo_epi16(s0, s2), _mm_unpacklo_epi16(s1, s3), e0, e1, e2, e3);
+	idct8x8vertodd4(_mm_unpacklo_epi16(t0, t2), _mm_unpacklo_epi16(t1, t3), o0, o1, o2, o3);
 	idct16x16vert_latter(0, out, tmp, odd + 8, e0, o0);
 	idct16x16vert_latter(1, out, tmp, odd + 8, e1, o1);
 	idct16x16vert_latter(2, out, tmp, odd + 8, e2, o2);
