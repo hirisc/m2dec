@@ -440,6 +440,11 @@ typedef struct h265d_ctu_t {
 	h265d_sao_vlines_t sao_vlines;
 	h265d_sao_hlines_t sao_hlines[2][2];
 	uint8_t* sao_signbuf;
+#if defined(_M_IX86) || defined(_M_AMD64)
+__declspec(align(16))
+#else
+__attribute__((aligned(16)))
+#endif
 	int16_t coeff_buf[32 * 32 * 2];
 } h265d_ctu_t;
 
