@@ -422,6 +422,7 @@ typedef struct h265d_ctu_t {
 	uint8_t not_first_row : 1;
 	int8_t order_luma[4], order_chroma;
 	const h265d_sps_t* sps;
+	int16_t *coeff_buf;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
 	h265d_neighbour_t neighbour_left[16];
@@ -440,12 +441,7 @@ typedef struct h265d_ctu_t {
 	h265d_sao_vlines_t sao_vlines;
 	h265d_sao_hlines_t sao_hlines[2][2];
 	uint8_t* sao_signbuf;
-#if defined(_M_IX86) || defined(_M_AMD64)
-__declspec(align(16))
-#else
-__attribute__((aligned(16)))
-#endif
-	int16_t coeff_buf[32 * 32 * 2];
+	int16_t coeff_buffer[32 * 32 * 2 + 7];
 } h265d_ctu_t;
 
 typedef struct {

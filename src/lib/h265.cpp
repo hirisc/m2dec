@@ -1769,6 +1769,8 @@ void transform_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
 void transform_ac8x8(uint8_t* dst, int16_t* src, int stride);
 void transform_ac16x16(uint8_t* dst, int16_t* src, int stride);
 void transform_ac32x32(uint8_t* dst, int16_t* src, int stride);
+void transform_ac4x4chroma(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac8x8chroma(uint8_t* dst, int16_t* coeff, int stride);
 void transform_ac16x16chroma(uint8_t* dst, int16_t* src, int stride);
 void transform_ac32x32chroma(uint8_t* dst, int16_t* src, int stride);
 #else
@@ -2049,12 +2051,14 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 #endif
 		},
 		{
-			transform_acNxN<2, 2>,
-			transform_acNxN<3, 2>,
 #ifdef X86ASM
+			transform_ac4x4chroma,
+			transform_ac8x8chroma,
 			transform_ac16x16chroma,
 			transform_ac32x32chroma
 #else
+			transform_acNxN<2, 2>,
+			transform_acNxN<3, 2>,
 			transform_acNxN<4, 2>,
 			transform_acNxN<5, 2>
 #endif
@@ -3870,6 +3874,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	} else {
 		dst.scaling_func = scaling_default_func;
 	}
+	dst.coeff_buf = reinterpret_cast<int16_t*>((reinterpret_cast<uintptr_t>(dst.coeff_buffer) + 15) & ~15);
 	int ctu_address = hdr.slice_segment_address;
 	dst.idx_in_slice = 0;
 	dst.pos_y = ctu_address / sps.ctb_info.columns;
