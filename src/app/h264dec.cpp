@@ -103,7 +103,7 @@ class option_t {
 	}
 public:
 	option_t(int argc, char *argv[])
-		: pos_(0), skipped_num_(0), fw_(0), codec_(M2Decoder::MODE_H264), dpb_(-1), force_exec_(false), dpb_emptify_(false), dec_(0) {
+		: pos_(0), skipped_num_(0), fw_(0), codec_(M2Decoder::MODE_NONE), dpb_(-1), force_exec_(false), dpb_emptify_(false), dec_(0) {
 		FILE *fi;
 		int opt;
 		int filewrite_mode = FileWriter::WRITE_NONE;
@@ -149,6 +149,9 @@ public:
 		if ((argc <= optind) ||	!(fi = fopen(argv[optind], "rb"))) {
 			BlameUser();
 			/* NOTREACHED */
+		}
+		if (codec_ == M2Decoder::MODE_NONE) {
+			codec_ = detect_file(argv[optind]);
 		}
 		if (filewrite_mode != FileWriter::WRITE_NONE) {
 			fw_ = file_writer_create(argv[optind], filewrite_mode);
