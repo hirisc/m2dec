@@ -84,6 +84,13 @@ static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* p
 	size_t sao_right_len = sizeof(ctu->sao_vlines.right[0][0][0]) << sps.ctb_info.size_log2;
 	size_t sao_line_len = (sizeof(ctu->sao_hlines[0][0].bottom[0]) * col) << sps.ctb_info.size_log2;
 	size_t sao_map_len = (sizeof(ctu->sao_hlines[0][0].reserved_flag[0]) * col + 7) >> 3;
+#ifdef X86ASM
+#define ALIGN16(x) (((x) + 15) & ~15)
+	next = (uint8_t*)ALIGN16((uintptr_t)next);
+	sao_right_len = ALIGN16(sao_right_len);
+	sao_line_len = ALIGN16(sao_line_len);
+	sao_map_len = ALIGN16(sao_map_len);
+#endif
 	for (int i = 0; i < 2; ++i) {
 		for (int col = 0; col < 2; ++col) {
 			h265d_sao_hlines_t& hlines = ctu->sao_hlines[i][col];
