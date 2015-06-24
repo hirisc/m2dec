@@ -204,7 +204,8 @@ static void sub_layer_info_read(h265d_sub_layer_info_t& dst, uint32_t present, d
 	if (IS_ACTIVE(present, 15)) {
 		dst.sub_layer_profile_first8bit = get_bits(&st, 8);
 		dst.sub_layer_profile_compatibility_flag = get_bits32(&st, 32);
-		for (int i = 0; i < NUM_ELEM(dst.sub_layer_second48bit); ++i) {
+		int max = NUM_ELEM(dst.sub_layer_second48bit);
+		for (int i = 0; i < max; ++i) {
 			dst.sub_layer_second48bit[i] = get_bits(&st, 8);
 		}
 	}
@@ -1116,8 +1117,8 @@ static inline uint32_t inter_pred_idc(m2d_cabac_t& cabac, dec_bits& st, int widt
 	}
 }
 
-static inline uint32_t ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int max, int8_t* ctx) {
-	uint32_t idx;
+static inline int ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int max, int8_t* ctx) {
+	int idx;
 	int max_tmp = std::min(max, 2);
 	for (idx = 0; idx < max_tmp; ++idx) {
 		if (cabac_decode_decision_raw(&cabac, &st, ctx + idx)) {
@@ -1132,7 +1133,7 @@ static inline uint32_t ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int max, int
 	return idx;
 }
 
-static inline uint32_t ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int lx, const uint8_t num_ref_idx_minus1[]) {
+static inline int ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int lx, const uint8_t num_ref_idx_minus1[]) {
 	int num = num_ref_idx_minus1[lx];
 	return (0 < num) ? ref_idx_lx(cabac, st, num, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->ref_idx_lx[lx]) : 0;
 }
@@ -1588,7 +1589,6 @@ static inline uint32_t sig_coeff_flags_read(m2d_cabac_t& cabac, dec_bits& st, si
 }
 
 static inline uint32_t sig_coeff_greater(int colour, int subblock_idx, uint8_t& greater1ctx, h265d_sigcoeff_t coeff[], uint32_t num_coeff, m2d_cabac_t& cabac, dec_bits& st) {
-	uint32_t num_greater1 = 0;
 	uint32_t ctxset = (((colour == 0) && (subblock_idx != 0)) ? 2 : 0) + (greater1ctx == 0);
 	uint32_t greater1offset = ctxset * 4 + ((colour == 0) ? 0 : 16);
 	greater1ctx = 1;
@@ -2118,7 +2118,7 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 		if (((unsigned)(last_subblock_pos - 1) <= (unsigned)(i - 1)) || coded_sub_block_flag(dst.cabac, st, prev_sbf, colour)) {
 			sub_block_info.set_flag();
 			h265d_sigcoeff_t sig_coeff_flags[4 * 4];
-			uint32_t num_coeff = sig_coeff_flags_read(dst.cabac, st, sig_coeff_flag_inc, order.inner_xy_pos, (i == last_subblock_pos), num, sig_coeff_flags, sxy, prev_sbf);
+			uint32_t num_coeff = sig_coeff_flags_read(dst.cabac, st, sig_coeff_flag_inc, order.inner_xy_pos, ((uint32_t)i == last_subblock_pos), num, sig_coeff_flags, sxy, prev_sbf);
 			if (num_coeff == 0) {
 				break;
 			}
@@ -2211,10 +2211,7 @@ uint32_t sum_edge_base(uint8_t* dst, int len, int valid_main, int valid_sub, int
 }
 
 template <int N>
-uint32_t sum_edge(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {}
-
-template <>
-uint32_t sum_edge<1>(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {
+uint32_t sum_edge(uint8_t* dst, int len, int valid_main, int valid_sub, int stride, int sub_stride) {
 	return sum_edge_base(dst, len, valid_main, valid_sub, stride, sub_stride, load_1pix());
 }
 
@@ -2870,7 +2867,6 @@ static void record_block_boundary(h265d_ctu_t& ctu, int size_log2, int offset_x,
 	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
 		return;
 	}
-	int stride = ctu.sps->ctb_info.stride;
 	int edgemax = 1 << (ctu.sps->ctb_info.size_log2 - 3);
 	int len = 1 << (size_log2 - 2);
 	if (offset_x || !(unavail & 1)) {
@@ -3541,7 +3537,6 @@ static inline void sao_diag_edge(uint8_t* dst, const int8_t offset[], int width,
 			width -= 1;
 		}
 	}
-	int ystart = 0;
 	if (unavail & 2) {
 		dst += stride;
 		height -= 1;
@@ -3820,7 +3815,7 @@ static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
 	uint32_t idx_in_slice = dst.idx_in_slice;
 	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 2 + (!dst.pos_x || !idx_in_slice);
-	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left, dst.neighbour_top + dst.pos_x * sizeof(dst.neighbour_left));
+	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left, dst.neighbour_top + dst.pos_x * NUM_ELEM(dst.neighbour_left));
 	deblock_ctu(dst);
 }
 
@@ -3873,7 +3868,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 		dst.qpc_delta[1] = header.slice_qpc_delta[1];
 	}
 	neighbour_init(dst.neighbour_left, NUM_ELEM(dst.neighbour_left));
-	size_t neighbour_flags_top_len = sps.ctb_info.columns * sizeof(dst.neighbour_left);
+	size_t neighbour_flags_top_len = sps.ctb_info.columns * NUM_ELEM(dst.neighbour_left);
 	neighbour_init(dst.neighbour_top, neighbour_flags_top_len);
 	memset(dst.qp_history[0], dst.qpy, sizeof(dst.qp_history));
 	memset(dst.deblock_boundary, 0, sizeof(dst.deblock_boundary));

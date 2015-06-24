@@ -368,8 +368,9 @@ typedef struct {
 } h265d_slice_header_t;
 
 typedef struct {
-	uint8_t pred_mode : 6;
-	uint8_t depth : 2;
+	uint8_t pred_mode;
+	uint8_t depth;
+	int16_t mv[2];
 } h265d_neighbour_t;
 
 typedef struct {
