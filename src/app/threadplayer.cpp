@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
-#include <ctype.h>
 #include <algorithm>
 #include <functional>
 #include <vector>
@@ -247,41 +246,6 @@ public:
 	}
 	M2Decoder::type_t next_codec() {
 		return codec_;
-	}
-	static void to_lower_ext(const char *src, char *dst, int len) {
-		for (int i = 0; i < len; ++i) {
-			const char s = src[i];
-			if (s == '\0') {
-				dst[i] = s;
-				break;
-			}
-			dst[i] = tolower(s);
-		}
-	}
-	static M2Decoder::type_t detect_file(const char *filename) {
-		static const struct {
-			M2Decoder::type_t type;
-			const char *ext;
-		} ext_map[] = {
-			{ M2Decoder::MODE_MPEG2, "m2v"},
-			{ M2Decoder::MODE_MPEG2PS, "vob"},
-			{ M2Decoder::MODE_H264, "264"},
-			{ M2Decoder::MODE_H264, "jsv"},
-			{ M2Decoder::MODE_H265, "265"},
-			{ M2Decoder::MODE_NONE, ""}
-		};
-		char ext[16];
-		const char *ext_p = strrchr(filename, '.');
-		if (ext_p++ != 0) {
-			to_lower_ext(ext_p, ext, sizeof(ext));
-			int i = -1;
-			while (ext_map[++i].type != M2Decoder::MODE_NONE) {
-				if (strcmp(ext_map[i].ext, ext) == 0) {
-					return ext_map[i].type;
-				}
-			}
-		}
-		return M2Decoder::MODE_MPEG2;
 	}
 };
 
