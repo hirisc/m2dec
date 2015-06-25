@@ -30,6 +30,9 @@
 #include <algorithm>
 #include "h265.h"
 #include "m2d_macro.h"
+#if (defined(__GNUC__) && defined(__SSE2__)) || defined(_M_IX86) || defined(_M_AMD64)
+#define X86ASM
+#endif
 
 typedef enum {
 	WRONG_PARAM = -1,
@@ -81,6 +84,13 @@ static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* p
 	size_t sao_right_len = sizeof(ctu->sao_vlines.right[0][0][0]) << sps.ctb_info.size_log2;
 	size_t sao_line_len = (sizeof(ctu->sao_hlines[0][0].bottom[0]) * col) << sps.ctb_info.size_log2;
 	size_t sao_map_len = (sizeof(ctu->sao_hlines[0][0].reserved_flag[0]) * col + 7) >> 3;
+#ifdef X86ASM
+#define ALIGN16(x) (((x) + 15) & ~15)
+	next = (uint8_t*)ALIGN16((uintptr_t)next);
+	sao_right_len = ALIGN16(sao_right_len);
+	sao_line_len = ALIGN16(sao_line_len);
+	sao_map_len = ALIGN16(sao_map_len);
+#endif
 	for (int i = 0; i < 2; ++i) {
 		for (int col = 0; col < 2; ++col) {
 			h265d_sao_hlines_t& hlines = ctu->sao_hlines[i][col];
@@ -1760,6 +1770,17 @@ static inline void transformdst_dconly(uint8_t *dst, int16_t* coeff, int stride)
 	dst[3] = CLIP255C(dst[3] + e3);
 }
 
+#ifdef X86ASM
+void transformdst_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac4x4(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac8x8(uint8_t* dst, int16_t* src, int stride);
+void transform_ac16x16(uint8_t* dst, int16_t* src, int stride);
+void transform_ac32x32(uint8_t* dst, int16_t* src, int stride);
+void transform_ac4x4chroma(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac8x8chroma(uint8_t* dst, int16_t* coeff, int stride);
+void transform_ac16x16chroma(uint8_t* dst, int16_t* src, int stride);
+void transform_ac32x32chroma(uint8_t* dst, int16_t* src, int stride);
+#else
 template <typename F>
 static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Saturate) {
 	int c0 = coeff[0];
@@ -1776,7 +1797,7 @@ static inline void transformdst_line4(int16_t *dst, const int16_t* coeff, F Satu
 	dst[3] = Saturate(d0 * 55 + d2 * 29 - d3);
 }
 
-static inline void transformdst_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
+static inline void transformdst_ac4x4(uint8_t* dst, int16_t* coeff, int stride) {
 	int16_t* tmp = coeff + 16;
 	for (int x = 0; x < 4; ++x) {
 		transformdst_line4(tmp + x * 4, coeff + x, sat16<7>());
@@ -1788,6 +1809,7 @@ static inline void transformdst_acNxN(uint8_t* dst, int16_t* coeff, int stride) 
 		tmp++;
 	}
 }
+#endif
 
 template <int LOG2, typename T0, typename F>
 static inline void transform_line4(T0 *dst, const int16_t* coeff, F Saturate) {
@@ -1996,7 +2018,7 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
 			transform_horiz<3, 1>,
 			transform_horiz<4, 1>,
 			transform_horiz<5, 1>
@@ -2010,7 +2032,7 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
 			transform_vert<3, 1>,
 			transform_vert<4, 1>,
 			transform_vert<5, 1>
@@ -2024,16 +2046,29 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 	},
 	{
 		{
-			transformdst_acNxN,
+			transformdst_ac4x4,
+#ifdef X86ASM
+			transform_ac8x8,
+			transform_ac16x16,
+			transform_ac32x32
+#else
 			transform_acNxN<3, 1>,
 			transform_acNxN<4, 1>,
 			transform_acNxN<5, 1>
+#endif
 		},
 		{
+#ifdef X86ASM
+			transform_ac4x4chroma,
+			transform_ac8x8chroma,
+			transform_ac16x16chroma,
+			transform_ac32x32chroma
+#else
 			transform_acNxN<2, 2>,
 			transform_acNxN<3, 2>,
 			transform_acNxN<4, 2>,
 			transform_acNxN<5, 2>
+#endif
 		}
 	}
 };
@@ -3841,6 +3876,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	} else {
 		dst.scaling_func = scaling_default_func;
 	}
+	dst.coeff_buf = reinterpret_cast<int16_t*>((reinterpret_cast<uintptr_t>(dst.coeff_buffer) + 15) & ~15);
 	int ctu_address = hdr.slice_segment_address;
 	dst.idx_in_slice = 0;
 	dst.pos_y = ctu_address / sps.ctb_info.columns;

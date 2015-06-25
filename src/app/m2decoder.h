@@ -1,6 +1,7 @@
 #ifndef _M2DECODER_H_
 #define _M2DECODER_H_
 
+#include <ctype.h>
 #include "frames.h"
 #include "m2d.h"
 #include "mpeg2.h"
@@ -218,5 +219,42 @@ private:
 		return (indata[1] & 128) && ((nal_type == SLICE_IDR_NAL) || (nal_type == SLICE_NONIDR_NAL));
 	}
 };
+
+static void to_lower_ext(const char *src, char *dst, int len) {
+	for (int i = 0; i < len; ++i) {
+		const char s = src[i];
+		if (s == '\0') {
+			dst[i] = s;
+			break;
+		}
+		dst[i] = tolower(s);
+	}
+}
+
+static M2Decoder::type_t detect_file(const char *filename) {
+	static const struct {
+		M2Decoder::type_t type;
+		const char *ext;
+	} ext_map[] = {
+		{ M2Decoder::MODE_MPEG2, "m2v"},
+		{ M2Decoder::MODE_MPEG2PS, "vob"},
+		{ M2Decoder::MODE_H264, "264"},
+		{ M2Decoder::MODE_H264, "jsv"},
+		{ M2Decoder::MODE_H265, "265"},
+		{ M2Decoder::MODE_NONE, ""}
+	};
+	char ext[16];
+	const char *ext_p = strrchr(filename, '.');
+	if (ext_p++ != 0) {
+		to_lower_ext(ext_p, ext, sizeof(ext));
+		int i = -1;
+		while (ext_map[++i].type != M2Decoder::MODE_NONE) {
+			if (strcmp(ext_map[i].ext, ext) == 0) {
+				return ext_map[i].type;
+			}
+		}
+	}
+	return M2Decoder::MODE_MPEG2;
+}
 
 #endif /* _M2DECODER_H_*/
