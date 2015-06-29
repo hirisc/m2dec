@@ -206,6 +206,7 @@ typedef enum {
 	TRAIL_N = 0,
 	TRAIL_R = 1,
 	BLA_W_LP = 16,
+	BLA_N_LP = 18,
 	IDR_W_RADL = 19,
 	IDR_N_LP = 20,
 	RSV_IRAP_VCL23 = 23,
@@ -326,6 +327,11 @@ typedef struct {
 } h265d_sao_vlines_t;
 
 typedef struct {
+	uint16_t lsb;
+	uint16_t msb;
+} h265d_poc_t;
+
+typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
@@ -346,7 +352,7 @@ typedef struct {
 	uint32_t deblocking_filter_override_flag : 1;
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
-	uint16_t slice_pic_order_cnt_lsb;
+	h265d_poc_t slice_pic_order_cnt;
 	h265d_short_term_ref_pic_set_t short_term_ref_pic_set;
 } h265d_slice_header_body_t;
 
@@ -367,10 +373,19 @@ typedef struct {
 	h265d_entry_point_t entry_points;
 } h265d_slice_header_t;
 
+struct pred_info_t {
+	int16_t mvd[2][2];
+	uint16_t lx_flag0 : 1;
+	uint16_t lx_flag1 : 1;
+	uint16_t ref_idx0 : 4;
+	uint16_t ref_idx1 : 4;
+	uint16_t idc : 2;
+};
+
 typedef struct {
 	uint8_t pred_mode;
 	uint8_t depth;
-	int16_t mv[2];
+	pred_info_t pred;
 } h265d_neighbour_t;
 
 typedef struct {
