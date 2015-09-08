@@ -40,6 +40,7 @@ typedef uintptr_t cache_t;
 struct dec_bits_t {
 	cache_t cache_;
 	int cache_len_;
+	int8_t prev_[2];
 	const byte_t *buf_;
 	void (*load_bytes)(struct dec_bits_t *, int bytes);
 	const byte_t *buf_tail_;
