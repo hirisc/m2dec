@@ -111,6 +111,10 @@ static void load_bytes(dec_bits *ths, int read_bytes)
  */
 static int endofbuffer_check(dec_bits *ths)
 {
+	if (ths->buf_head_ != ths->buf_tail_) {
+		ths->prev_[0] = ths->buf_tail_[-2];
+		ths->prev_[1] = ths->buf_tail_[-1];
+	}
 	cache_t cache_ = ths->cache_;
 	int cache_len_ = ths->cache_len_;
 	int ret = ths->error_func_(ths->error_arg_);

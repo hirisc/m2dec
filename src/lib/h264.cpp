@@ -4377,7 +4377,7 @@ static inline void ac4x4transform(uint8_t *dst, int *coeff, int stride, int num_
 		coeff[0] = dc;
 		ac4x4transform_acdc_luma(dst, coeff, stride);
 	} else {
-		acNxNtransform_dconly<4, 6, 0, cache_t>(dst, dc, stride);
+		acNxNtransform_dconly<4, 6, 0, uint32_t>(dst, dc, stride);
 	}
 }
 
@@ -4435,7 +4435,7 @@ static int mb_intra16x16_dconly(h264d_mb_current *mb, const mb_code *mbc, dec_bi
 		intra16x16_dc_transform(coeff, dc);
 		offset = mb->offset4x4;
 		for (int i = 0; i < 16; ++i) {
-			acNxNtransform_dconly<4, 6, 0, cache_t>(luma + *offset++, dc[i], stride);
+			acNxNtransform_dconly<4, 6, 0, uint32_t>(luma + *offset++, dc[i], stride);
 		}
 	}
 	mb->left4x4coef &= 0xffff0000;
@@ -10550,7 +10550,7 @@ static inline void deblock_pb(h264d_mb_current *mb)
 	uint8_t *luma = mb->frame->curr_luma;
 	uint8_t *chroma = mb->frame->curr_chroma;
 	deblock_info_t *curr = mb->deblock_base;
-	int idc;
+	int idc = 0;
 
 	for (int y = 0; y < max_y; ++y) {
 		for (int x = 0; x < max_x; ++x) {
@@ -11526,29 +11526,15 @@ static inline int get_coeff_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, 
 
 static inline int cabac_decode_bypass_coeff(h264d_cabac_t *cb, dec_bits *st)
 {
-	const int MAX = 16;
-	int range = cb->range;
-	int offset = cb->offset;
-	int i = MAX;
-	do {
-		offset = (offset * 2) | get_onebit(st);
-		if (offset < range) {
-			break;
-		}
-		offset -= range;
-	} while (--i);
-	i = MAX - i;
-	int lvl = 1;
-	while (i--) {
-		offset = (offset * 2) | get_onebit(st);
-		lvl *= 2;
-		if (range <= offset) {
-			offset -= range;
-			lvl++;
-		}
+	int len = 0;
+	while (cabac_decode_bypass(cb, st)) {
+		len++;
 	}
-	cb->offset = offset;
-	return lvl + 14;
+	int v0 = (1 << len) - 1;
+	if (len) {
+		v0 += cabac_decode_multibypass(cb, st, len);
+	}
+	return v0;
 }
 
 static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int cat, int *coeff_map, int map_cnt, int *coeff, const int16_t *qmat)
@@ -11583,7 +11569,7 @@ static inline void get_coeff_from_map_cabac(h264d_cabac_t *cb, dec_bits *st, int
 				abs_level++;
 			}
 			if (abs_level == 15) {
-				abs_level = cabac_decode_bypass_coeff(cb, st);
+				abs_level += cabac_decode_bypass_coeff(cb, st);
 			}
 		}
 		idx = zigzag[coeff_map[--mp] + coeff_offset];

@@ -89,26 +89,39 @@ int m2d_next_start_code(const byte_t *org_src, int byte_len)
 
 void m2d_load_bytes_skip03(dec_bits *ths, int read_bytes)
 {
-	int cache_len;
-	int shift_bits;
-	const byte_t *buf;
-	cache_t cache;
-
-	cache_len = ths->cache_len_;
-	ths->cache_len_ = read_bytes * 8 + cache_len;
-	shift_bits = (sizeof(cache) - read_bytes) * 8 - cache_len;
-	buf = ths->buf_;
-	cache = 0;
+	const byte_t* buf = ths->buf_;
+	const byte_t* tail = ths->buf_tail_;
+	cache_t cache = 0;
+	int read_actual = 0;
 	do {
 		byte_t c = *buf++;
 		if (c == 3) {
-			if (buf[-2] == 0 && buf[-3] == 0) {
-				c = *buf++;
+			int pos = buf - ths->buf_head_;
+			int b0, b1;
+			if (2 < pos) {
+				b0 = buf[-2];
+				b1 = buf[-3];
+			} else if (pos == 2) {
+				b0 = buf[-2];
+				b1 = ths->prev_[1];
+			} else {
+				b0 = ths->prev_[1];
+				b1 = ths->prev_[0];
+			}
+			if (b0 == 0 && b1 == 0) {
+				if (buf == tail) {
+					break;
+				} else {
+					c = *buf++;
+				}
 			}
 		}
 		cache = (cache << 8) | c;
-	} while (--read_bytes);
-	ths->cache_ = ths->cache_ | (cache << shift_bits);
+		read_actual++;
+	} while (--read_bytes && (buf != tail));
+
+	ths->cache_ = ths->cache_ | (cache << ((sizeof(cache) - read_actual) * 8 - ths->cache_len_));
+	ths->cache_len_ += read_actual * 8;
 	ths->buf_ = buf;
 }
 
