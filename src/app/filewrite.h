@@ -46,11 +46,14 @@ public:
 		}
 		if (modify) {
 			char dstfile[256];
+			const char *head = strrchr(basename, '/');
+			head = head ? head + 1 : strrchr(basename, '\\');
+			head = head ? head + 1 : basename;
 			const char *ext = strrchr(basename, '.');
 			if (!ext++) {
 				return false;
 			}
-			strcpy(std::copy(basename, ext, dstfile), get_extension());
+			strcpy(std::copy(head, ext, dstfile), get_extension());
 			fo_ = fopen(dstfile, "wb");
 		} else {
 			fo_ = fopen(basename, "wb");

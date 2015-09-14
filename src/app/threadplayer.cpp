@@ -18,6 +18,8 @@
 
 #include "unithread.h"
 
+#define NELEM(a) (sizeof(a) / sizeof(a[0]))
+
 class Uncopyable {
 protected:
 	Uncopyable() {}
@@ -364,8 +366,7 @@ private:
 
 void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
 	uint8_t* dst1 = dst + (stride >> 1);
-	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
-	msk = _mm_shuffle_epi32(msk, 0);
+	__m128i msk = _mm_shuffle_epi32(_mm_cvtsi32_si128(0x00ff00ff), 0);
 	int width = (stride + 1) >> 1;
 	do {
 		for (int x = 0; x < width; x += 16) {
@@ -386,154 +387,6 @@ void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
 	} while (--height);
 }
 
-#if 0
-void display_write_halve(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
-		   uint16_t *pitches, int width, int height)
-{
-	const uint8_t *src = src_luma;
-	uint8_t *dst0 = dst[0];
-	int pitch0 = pitches[0];
-	int y = height - 1;
-	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
-	msk = _mm_shuffle_epi32(msk, 0);
-	do {
-		for (int x = 0; x < width; x += 16) {
-			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
-			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
-			__m128i d0l = _mm_and_si128(d0, msk);
-			__m128i d1l = _mm_and_si128(d1, msk);
-			d0 = _mm_srli_epi16(d0, 8);
-			d1 = _mm_srli_epi16(d1, 8);
-			d0 = _mm_add_epi16(d0, d0l);
-			d1 = _mm_add_epi16(d1, d1l);
-			__m128i d2 = _mm_load_si128((__m128i const *)&src[x * 2 + src_stride]);
-			__m128i d3 = _mm_load_si128((__m128i const *)&src[x * 2 + 16 + src_stride]);
-			__m128i d2l = _mm_and_si128(d2, msk);
-			__m128i d3l = _mm_and_si128(d3, msk);
-			d0 = _mm_add_epi16(d0, d2l);
-			d1 = _mm_add_epi16(d1, d3l);
-			d2 = _mm_srli_epi16(d2, 8);
-			d3 = _mm_srli_epi16(d3, 8);
-			d0 = _mm_add_epi16(d0, d2);
-			d1 = _mm_add_epi16(d1, d3);
-			d0 = _mm_srli_epi16(d0, 2);
-			d1 = _mm_srli_epi16(d1, 2);
-			d0 = _mm_packus_epi16(d0, d1);
-			_mm_storeu_si128((__m128i *)&dst0[x], d0);
-		}
-		src += src_stride * 2;
-		dst0 += pitch0;
-	} while (--y);
-
-	src = src_chroma;
-	dst0 = dst[1];
-	uint8_t *dst1 = dst[2];
-	width = width >> 1;
-	height = height >> 1;
-	src_stride *= 2;
-	pitch0 = pitches[1];
-	int pitch1 = pitches[2];
-	do {
-		for (int x = 0; x < width; x += 8) {
-			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 4]);
-			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 4 + 16]);
-			__m128i d0l = _mm_and_si128(d0, msk);
-			__m128i d1l = _mm_and_si128(d1, msk);
-			d0 = _mm_srli_epi16(d0, 8);
-			d1 = _mm_srli_epi16(d1, 8);
-			d0l = _mm_packus_epi16(d0l, d1l);
-			d0 = _mm_packus_epi16(d0, d1);
-			d0l = _mm_and_si128(d0l, msk);
-			d0 = _mm_and_si128(d0, msk);
-			d0l = _mm_packus_epi16(d0l, d0l);
-			d0 = _mm_packus_epi16(d0, d0);
-			_mm_storel_epi64((__m128i *)&dst0[x], d0l);
-			_mm_storel_epi64((__m128i *)&dst1[x], d0);
-		}
-		src += src_stride;
-		dst0 += pitch0;
-		dst1 += pitch1;
-	} while (--height);
-}
-
-void display_write_normal(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
-		   uint16_t *pitches, int width, int height)
-{
-	const uint8_t *src = src_luma;
-	uint8_t *dst0 = dst[0];
-	int pitch0 = pitches[0];
-	int y = height - 1;
-	do {
-		for (int x = 0; x < width; x += 32) {
-			__m128i d0 = _mm_load_si128((__m128i const *)&src[x]);
-			__m128i d1 = _mm_load_si128((__m128i const *)&src[x + 16]);
-			_mm_storeu_si128((__m128i *)&dst0[x], d0);
-			_mm_storeu_si128((__m128i *)&dst0[x + 16], d1);
-		}
-		src += src_stride;
-		dst0 += pitch0;
-	} while (--y);
-	memcpy(dst0, src, width);
-
-	src = src_chroma;
-	dst0 = dst[1];
-	uint8_t *dst1 = dst[2];
-	height = (height >> 1) - 1;
-	pitch0 = pitches[1];
-	int pitch1 = pitches[2];
-	__m128i msk = _mm_cvtsi32_si128(0x00ff00ff);
-	msk = _mm_shuffle_epi32(msk, 0);
-	do {
-		for (int x = 0; x < width; x += 16) {
-			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
-			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
-			__m128i d0l = _mm_and_si128(d0, msk);
-			__m128i d1l = _mm_and_si128(d1, msk);
-			d0 = _mm_srli_epi16(d0, 8);
-			d1 = _mm_srli_epi16(d1, 8);
-			d0l = _mm_packus_epi16(d0l, d1l);
-			d0 = _mm_packus_epi16(d0, d1);
-			_mm_storeu_si128((__m128i *)&dst0[x], d0l);
-			_mm_storeu_si128((__m128i *)&dst1[x], d0);
-		}
-		src += src_stride;
-		dst0 += pitch0;
-		dst1 += pitch1;
-	} while (--height);
-	for (int j = 0; j < width; j += 2) {
-		dst0[j] = src[j];
-		dst1[j] = src[j + 1];
-	}
-}
-
-void display_write_small(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride,
-		   uint16_t *pitches, int width, int height)
-{
-	uint8_t *dst0 = dst[0];
-	for (int i = 0; i < height; ++i) {
-		memcpy(dst0, src_luma, width);
-		src_luma += src_stride;
-		dst0 += pitches[0];
-	}
-	width >>= 1;
-	height >>= 1;
-	uint8_t *dst1 = dst[1];
-	uint8_t *dst2 = dst[2];
-	for (int i = 0; i < height; ++i) {
-		for (int j = 0; j < width; ++j) {
-			dst1[j] = src_chroma[j * 2];
-			dst2[j] = src_chroma[j * 2 + 1];
-		}
-		src_chroma += src_stride;
-		dst1 += pitches[1];
-		dst2 += pitches[2];
-	}
-}
-#endif
-
-const int MAX_WIDTH = 1920;
-const int MAX_HEIGHT = 1088;
-const int MAX_LEN = (MAX_WIDTH * MAX_HEIGHT * 3) >> 1;
 const int FILE_READ_SIZE = 65536 * 2;
 const int IBUFNUM = 3;
 
@@ -677,8 +530,6 @@ struct UniSurface {
 	std::vector<uint8_t> cbcr_base_;
 	uint8_t* cbcr_;
 	int width_, height_;
-	int scale_;
-//	void (*display_write)(uint8_t **dst, const uint8_t *src_luma, const uint8_t *src_chroma, int src_stride, uint16_t *pitches, int width, int height);
 #endif /* ENABLE_DISPLAY */
 	int suspended_;
 	void *id_;
@@ -686,7 +537,6 @@ struct UniSurface {
 #ifdef ENABLE_DISPLAY
 		screen_(0), renderer_(0), texture_(0),
 		width_(0), height_(0),
-		scale_(1),
 #endif /* ENABLE_DISPLAY */
 		suspended_(0), id_(0) {
 #ifdef ENABLE_DISPLAY
@@ -706,9 +556,6 @@ struct UniSurface {
 			id_ = out.id;
 			change(out);
 		}
-//		SDL_LockYUVOverlay(yuv);
-//		display_write(yuv->pixels, out.luma, out.chroma, out.width, yuv->pitches, yuv->w, yuv->h);
-//		SDL_UnlockYUVOverlay(yuv);
 		deinterleave(out.chroma, &cbcr_[0], out.width, (out.height - out.crop[3]) >> 1);
 		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], out.width, &cbcr_[out.width >> 1], out.width);
 		SDL_RenderClear(renderer_);
@@ -772,30 +619,34 @@ private:
 			}
 		}
 	}
+	static void adjust_windowsize(int width, int height, int& dwidth, int& dheight) {
+		while ((1440 < width) || (720 < height)) {
+			width >>= 1;
+			height >>= 1;
+		}
+		dwidth = width;
+		dheight = height;
+	}
 	void change(const Frame& out) {
-		int width = width_ * scale_;
-		int height = height_ * scale_;
-		if ((width != (out.width - out.crop[1])) || (height != (out.height - out.crop[3]))) {
+		if ((width_ != (out.width - out.crop[1])) || (height_ != (out.height - out.crop[3]))) {
+			static Uint32 winflg_cand[] = {
+				SDL_WINDOW_OPENGL, 0
+			};
 			teardown();
-			width = out.width - out.crop[1];
-			height = out.height - out.crop[3];
-			cbcr_base_.resize(((width * height) >> 1) + 15);
+			width_ = out.width - out.crop[1];
+			height_ = out.height - out.crop[3];
+			cbcr_base_.resize(((width_ * height_) >> 1) + 15);
 			cbcr_ = reinterpret_cast<uint8_t*>(ALIGN16(reinterpret_cast<uintptr_t>(&cbcr_base_[0])));
-			if ((1440 < width) || (720 < height)) {
-				scale_ = 2;
-//				width >>= 1;
-//				height >>= 1;
-//				display_write = display_write_halve;
-//			} else if ((32 <= width) && (2 < height)) {
-//				display_write = display_write_normal;
-//			} else {
-//				display_write = display_write_small;
+			int dwidth, dheight;
+			adjust_windowsize(width_, height_, dwidth, dheight);
+			for (int i = 0; i < NELEM(winflg_cand); ++i) {
+				screen_ = SDL_CreateWindow("disp", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, dwidth, dheight, winflg_cand[i]);
+				if (screen_) {
+					renderer_ = SDL_CreateRenderer(screen_, -1, 0);
+					texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, width_, height_);
+					break;
+				}
 			}
-			width_ = width;
-			height_ = height;
-			screen_ = SDL_CreateWindow("disp", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_OPENGL);
-			renderer_ = SDL_CreateRenderer(screen_, -1, 0);
-			texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, width, height);
 		}
 	}
 #endif /* ENABLE_DISPLAY */
