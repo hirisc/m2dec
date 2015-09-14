@@ -332,6 +332,12 @@ typedef struct {
 } h265d_poc_t;
 
 typedef struct {
+	int32_t poc;
+	bool in_use;
+	bool is_longterm;
+} h265d_ref_pic_list_elem_t;
+
+typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
@@ -353,6 +359,7 @@ typedef struct {
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
 	h265d_poc_t slice_pic_order_cnt;
+	h265d_ref_pic_list_elem_t ref_list[2][16];
 	h265d_short_term_ref_pic_set_t short_term_ref_pic_set;
 } h265d_slice_header_body_t;
 
@@ -403,6 +410,8 @@ typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t
 typedef struct {
 	int poc;
 	int16_t frame_idx;
+	uint8_t in_use : 1;
+	uint8_t is_longterm : 1;
 	uint8_t is_idr : 1;
 	uint8_t is_terminal : 1;
 } h265d_dpb_elem_t;

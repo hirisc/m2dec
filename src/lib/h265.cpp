@@ -773,6 +773,32 @@ static void pred_weight_table(h265d_slice_header_body_t& dst, const h265d_pps_t&
 	assert(0);
 }
 
+static int init_ref_pic_list_short_lx(h265d_ref_pic_list_elem_t list[], const h265d_short_term_ref_pic_elem_t& ref, int curr_poc, int rest) {
+	unsigned used = ref.used_by_curr_pic_flag;
+	int i;
+	for (i = 0; (i < ref.num_pics) && (i < rest); ++i) {
+		if (used & 1) {
+			int poc = curr_poc + ref.delta_poc[i];
+			list[i].poc = poc;
+			list[i].in_use = true;
+			list[i].is_longterm = false;
+		}
+		used >>= 1;
+	}
+	return i;
+}
+
+static void init_ref_pic_list(h265d_ref_pic_list_elem_t list[][16], const h265d_short_term_ref_pic_set_t& srps, const h265d_slice_header_body_t& hdr, int curr_poc) {
+	for (int lx = 0; lx < 2; ++lx) {
+		int num_tmp = std::max(hdr.num_ref_idx_lx_active_minus1[lx] + 1, static_cast<int>(srps.total_curr));
+		int idx = 0;
+		while (idx < num_tmp) {
+			idx += init_ref_pic_list_short_lx(list[lx], srps.ref[lx], curr_poc, num_tmp - idx);
+			idx += init_ref_pic_list_short_lx(list[lx], srps.ref[lx ^ 1], curr_poc, num_tmp - idx);
+		}
+	}
+}
+
 static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	if (get_onebit(&st)) {
 		READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_lx_active_minus1[0], 14, st);
@@ -785,6 +811,7 @@ static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pp
 	if (pps.lists_modification_present_flag && (1 < dst.short_term_ref_pic_set.total_curr)) {
 		assert(0);
 	}
+	init_ref_pic_list(dst.ref_list, dst.short_term_ref_pic_set, dst, pic_order_cnt(dst.slice_pic_order_cnt, sps));
 	if (dst.slice_type == 0) {
 		dst.mvd_l1_zero_flag = get_onebit(&st);
 	}
@@ -3247,9 +3274,9 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
 		quad_tree(dst, st, size_log2, unavail, offset_x, valid_x, offset_y, valid_y, left, top);
-		quad_tree(dst, st, size_log2, unavail & ~1, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
-		quad_tree(dst, st, size_log2, unavail & ~2, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
-		quad_tree(dst, st, size_log2, 0, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
+		quad_tree(dst, st, size_log2, (unavail & ~1) | 4, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
+		quad_tree(dst, st, size_log2, unavail & ~10, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
+		quad_tree(dst, st, size_log2, 12, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
 		coding_unit_header(dst, st, size_log2, unavail, left, top);
 		if (dst.slice_header->body.slice_type < 2) {
@@ -3720,17 +3747,6 @@ struct swap_hline {
 	}
 };
 
-struct copy_hline {
-	void operator()(uint8_t* a, const uint8_t* b, int len) const {
-		uint32_t* a32 = reinterpret_cast<uint32_t*>(a);
-		const uint32_t* b32 = reinterpret_cast<const uint32_t*>(b);
-		int cnt = len >> 2;
-		for (int x = 0; x < cnt; ++x) {
-			a32[x] = b32[x];
-		}
-	}
-};
-
 template <typename F>
 static void sao_swap_hline(const uint8_t* record_bits, uint8_t* src, uint8_t* mod, int xpos, int xnum, int width, F Modify) {
 	record_bits += xpos >> 3;
@@ -3895,8 +3911,8 @@ static void sao_oneframe(h265d_ctu_t& ctu) {
 			h265d_sao_hlines_t* prev = ctu.sao_hlines[y & 1];
 			ctu.luma = ctu.frame_info.curr_luma + stride * len * y;
 			ctu.chroma = ctu.frame_info.curr_chroma + stride * (len >> 1) * y;
-			sao_swap_hline(prev[0].reserved_flag, ctu.luma - stride, prev[0].bottom, 0, xmax, len, copy_hline());
-			sao_swap_hline(prev[1].reserved_flag, ctu.chroma - stride, prev[1].bottom, 0, xmax, len, copy_hline());
+			sao_swap_hline(prev[0].reserved_flag, ctu.luma - stride, prev[0].bottom, 0, xmax, len, memcpy);
+			sao_swap_hline(prev[1].reserved_flag, ctu.chroma - stride, prev[1].bottom, 0, xmax, len, memcpy);
 		}
 		sao_map += xmax;
 		unavail = (y < ymax - 2) ? 1 : 9;
@@ -3910,7 +3926,7 @@ static inline uint32_t get_avail(int xpos, int ypos, int cols, int rows) {
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
 	uint32_t idx_in_slice = dst.idx_in_slice;
-	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 2 + (!dst.pos_x || !idx_in_slice);
+	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 10 + (!dst.pos_x || !idx_in_slice) * 5;
 	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left, dst.neighbour_top + dst.pos_x * NUM_ELEM(dst.neighbour_left));
 	deblock_ctu(dst);
 }
