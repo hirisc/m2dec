@@ -333,6 +333,8 @@ typedef struct {
 
 typedef struct {
 	int32_t poc;
+	int32_t num;
+	int16_t frame_idx;
 	bool in_use;
 	bool is_longterm;
 } h265d_ref_pic_list_elem_t;
@@ -382,11 +384,8 @@ typedef struct {
 
 struct pred_info_t {
 	int16_t mvd[2][2];
-	uint16_t lx_flag0 : 1;
-	uint16_t lx_flag1 : 1;
-	uint16_t ref_idx0 : 4;
-	uint16_t ref_idx1 : 4;
-	uint16_t idc : 2;
+	uint8_t lx_idc; // bit0: l0_flag, bit1: l1_flag, bit2-7: idc
+	uint8_t ref_idx; // bit0-3: l0_idx, bit4-7: l1_idx
 };
 
 typedef struct {
