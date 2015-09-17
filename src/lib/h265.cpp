@@ -3137,8 +3137,6 @@ static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx,
 
 static int mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, h265d_neighbour_t* neighbour, int span, int lx, int ref_idx, int16_t mvp[]) {
 	if ((unavail & 5) != 5) {
-		int16_t mvplist[2][2];
-		int pos;
 		int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
 		bool matched = false;
 		if (!(unavail & 4)) {
@@ -3163,19 +3161,113 @@ static int mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, h265d_neighbour_t* ne
 	return 0;
 }
 
-static void interpolate00(uint8_t* dst, int stride, int width, int height, const uint8_t* ref) {
+static void interpolate00(uint8_t* dst, int16_t tmp[], const uint8_t* ref, int xstride, int ystride, int width, int height, int xpos, int ypos) {
+	if (((unsigned)xstride <= (unsigned)xpos) || ((unsigned)ystride <= (unsigned)ypos)) {
+
+	}
 	for (int y = 0; y < height; ++y) {
-		memcpy(dst + stride * y, ref + stride * y, width * sizeof(*dst));
+		memcpy(dst + xstride * y, ref + xstride * y, width * sizeof(*dst));
 	}
 }
 
-static void inter_pred_luma(uint8_t* dst, int stride, int width, int height, const uint8_t* ref, int mvx, int mvy, int xpos, int ypos) {
-	int mvoffset = (mvy >> 2) * stride + (mvx >> 2);
-	if (!(mvx & 3) && !(mvy & 3)) {
-		if ((xpos < 0) || (stride <= xpos)) {
-		} else {
-			interpolate00(dst, stride, width, height, ref + mvoffset);
+struct inter_luma_fir1 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
+		return -a0 + 4 * a1 - 10 * a2 + 58 * a3 + 17 * a4 - 5 * a5 + a6;
+	}
+};
+
+struct inter_luma_fir3 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
+		return a0 - 5 * a1 + 17 * a2 + 58 * a3 - 10 * a4 + 4 * a5 - a6;
+	}
+};
+
+template <typename T0, typename T1, typename F>
+static inline void interpolate_frac1(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int shift, F Fir) {
+	for (int y = 0; y < height; y++) {
+		int a0 = in[0];
+		int a1 = in[refxinc];
+		int a2 = in[refxinc * 2];
+		int a3 = in[refxinc * 3];
+		int a4 = in[refxinc * 4];
+		int a5 = in[refxinc * 5];
+		in += refxinc * 6;
+		for (int x = 0; x < width; x += 2) {
+			// -1, 4, -10, 58, 17, -5, 1
+			int a6 = in[refxinc * x];
+			int a7 = in[refxinc * (x + 1)];
+			out[dstxinc * x] = Fir(a0, a1, a2, a3, a4, a5, a6) >> shift;
+			out[dstxinc * (x + 1)] = Fir(a1, a2, a3, a4, a5, a6, a7) >> shift;
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
 		}
+		in = in + refyinc - refxinc * 6;
+		out += dstyinc;
+	}
+}
+
+static void trim_boundary(int16_t*& dst, const uint8_t*& ref, int stride, int& width, int pos, int pregap, int postgap, int refinc, int dstinc) {
+	if (pos < pregap) {
+		int gap = pregap - pos;
+		gap = std::min(gap, width);
+		ref += gap * refinc;
+		if (gap < width) {
+			width -= gap;
+			dst += gap * dstinc;
+		}
+	} else if (stride <= pos + postgap) {
+		int gap = pos - stride + postgap;
+		gap = std::min(gap, width);
+		if (gap < width) {
+			width -= gap;
+		}
+	}
+}
+
+static void interpolate_umv(int16_t*& dst, const uint8_t*& ref, int xstride, int ystride, int& width, int& height, int xpos, int ypos, int xpre, int xpost, int ypre, int ypost) {
+	trim_boundary(dst, ref, xstride, width, xpos, xpre, xpost, 1, 1);
+	trim_boundary(dst, ref, ystride, height, ypos, ypre, ypost, xstride, width + xpre + xpost);
+}
+
+static void interpolate13(uint8_t* dst, int16_t buf[], const uint8_t* ref, int xstride, int ystride, int width, int height, int xpos, int ypos) {
+	int16_t* tmp = buf;
+	int width_org = width;
+	int height_org = height;
+	if (((unsigned)(xstride - (3 + 3)) <= (unsigned)(xpos - 3)) || ((unsigned)(ystride - 4) <= (unsigned)(ypos - 2))) {
+		// -3, -2 to +3, +4
+		interpolate_umv(tmp, ref, xstride, ystride, width, height, xpos, ypos, 3, 3, 2, 4);
+	}
+	interpolate_frac1(ref - 2 * xstride - 3, tmp, width, height + 6, 1, xstride, 1, width_org, 0, inter_luma_fir1());
+	interpolate_frac1(buf, dst, width, height, width_org, 1, xstride, 1, 6, inter_luma_fir3());
+}
+
+static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int xstride, int ystride, int width, int height, int mvx, int mvy, int xpos, int ypos) {
+	int mvxint = mvx >> 2;
+	int mvyint = mvy >> 2;
+	int mvoffset = mvyint * xstride + mvxint;
+	int frac = (mvx & 3) | ((mvy & 3) << 2);
+	xpos += mvxint;
+	ypos += mvyint;
+	switch (frac) {
+	case 0:
+		interpolate00(dst, tmp, ref + mvoffset, xstride, ystride, width, height, xpos, ypos);
+		break;
+	case 13:
+		interpolate13(dst, tmp, ref + mvoffset, xstride, ystride, width, height, xpos, ypos);
+		break;
+	}
+}
+
+static void fill_mvinfo(h265d_neighbour_t* neighbour, int offset, int len, int lx, int mvx, int mvy) {
+	neighbour += offset >> 2;
+	len >>= 2;
+	for (int i = 0; i < len; ++i) {
+		neighbour[i].pred.mvd[lx][0] = mvx;
+		neighbour[i].pred.mvd[lx][1] = mvy;
 	}
 }
 
@@ -3189,13 +3281,14 @@ static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int off
 	}
 	int mvx = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
 	int mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
+	fill_mvinfo(left, offset_x, width, lx, mvx, mvy);
+	fill_mvinfo(top, offset_y, height, lx, mvx, mvy);
 	int stride = ctu.sps->ctb_info.stride;
-	int poc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
 	int offset = stride * offset_y + offset_x;
-	const uint8_t* ref = 0;
-	int xpos = ctu.pos_x + offset_x + ((mvx + 3) >> 2);
-	int ypos = 0;
-	inter_pred_luma(ctu.luma + offset, stride, width, height, ref + offset, mvx, mvy, xpos, ypos);
+	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
+	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
+	const uint8_t* ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx].luma + stride * ypos + xpos;
+	inter_pred_luma(ctu.luma + offset, ctu.coeff_buf, ref, stride, ctu.sps->pic_height_in_luma_samples, width, height, mvx, mvy, xpos, ypos);
 }
 
 static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
