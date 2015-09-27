@@ -39,6 +39,10 @@ public:
 			fclose(fo_);
 		}
 	}
+	static const char* filename(const char *path) {
+		const char* head;
+		return ((head = strrchr(path, '/')) != 0) ? head + 1 : (((head = strrchr(path, '\\')) != 0) ? head + 1 : path);
+	}
 	bool set_file(const char *basename, bool modify) {
 		if (fo_) {
 			fclose(fo_);
@@ -46,9 +50,7 @@ public:
 		}
 		if (modify) {
 			char dstfile[256];
-			const char *head = strrchr(basename, '/');
-			head = head ? head + 1 : strrchr(basename, '\\');
-			head = head ? head + 1 : basename;
+			const char *head = filename(basename);
 			const char *ext = strrchr(basename, '.');
 			if (!ext++) {
 				return false;
