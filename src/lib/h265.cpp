@@ -1112,7 +1112,7 @@ static inline uint32_t split_cu_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t 
 }
 
 static inline uint32_t cu_skip_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top) {
-	int idx = (!(unavail & 1) && (left->pred_mode & 1)) + (!(unavail & 2) && (top->pred_mode & 1));
+	int idx = (!(unavail & 1) && (left->pred_mode_skip & 1)) + (!(unavail & 2) && (top->pred_mode_skip & 1));
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cu_skip_flag + idx);
 }
 
@@ -1416,6 +1416,10 @@ static void intra_pred_candidate(uint8_t cand[], uint8_t candA, uint8_t candB) {
 		}
 		cand[2] = candC;
 	}
+}
+
+static void intra_pred_candidate(uint8_t cand[], const h265d_neighbour_t* candA, const h265d_neighbour_t* candB) {
+	intra_pred_candidate(cand, candA->pred_mode_skip >> 1, candB->pred_mode_skip >> 1);
 }
 
 static const int8_t h265d_scan_order2x2diag_inverse[2 * 2] = {
@@ -2970,13 +2974,25 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 	uint32_t split;
 	if (dst.sps->ctb_info.transform_log2 < size_log2) {
 		split = 1;
-	} else if ((depth == 0) && dst.intra_split) {
-		split = 2;
 	} else {
-		if ((dst.sps->ctb_info.transform_log2_min < size_log2) && (depth < dst.sps->max_transform_hierarchy_depth_intra)) {
-			split = split_transform_flag(dst.cabac, st, size_log2);
+		if (is_intra) {
+			if ((depth == 0) && dst.intra_split) {
+				split = 2;
+			} else {
+				if ((dst.sps->ctb_info.transform_log2_min < size_log2) && (depth < dst.sps->max_transform_hierarchy_depth_intra)) {
+					split = split_transform_flag(dst.cabac, st, size_log2);
+				} else {
+					split = 0;
+				}
+			}
 		} else {
-			split = 0;
+			if ((dst.sps->ctb_info.transform_log2_min < size_log2) && (depth < dst.sps->max_transform_hierarchy_depth_inter)) {
+				split = split_transform_flag(dst.cabac, st, size_log2);
+			} else if ((depth == 0) && dst.intra_split) {
+				split = 1;
+			} else {
+				split = 0;
+			}
 		}
 	}
 	uint8_t cbf;
@@ -3037,10 +3053,19 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 	}
 }
 
-static inline void cu_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint32_t mode, uint32_t num) {
+static inline void cu_intra_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint32_t mode, uint32_t num) {
+	mode <<= 1;
 	for (uint32_t i = 0; i < num; ++i) {
-		dst0[i].pred_mode = mode;
-		dst1[i].pred_mode = mode;
+		dst0[i].pred_mode_skip = mode;
+		dst1[i].pred_mode_skip = mode;
+	}
+}
+
+static inline void cu_inter_skip_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], int skip, uint32_t num) {
+	uint32_t mode = skip | (INTRA_DC << 1);
+	for (uint32_t i = 0; i < num; ++i) {
+		dst0[i].pred_mode_skip = mode;
+		dst1[i].pred_mode_skip = mode;
 	}
 }
 
@@ -3182,8 +3207,20 @@ struct inter_luma_fir3 {
 	}
 };
 
-template <typename T0, typename T1, typename F>
-static inline void interpolate_frac1(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int shift, F Fir) {
+struct noround {
+	int operator()(int val, int shift) const {
+		return val >> shift;
+	}
+};
+
+struct round8 {
+	int operator()(int val, int shift) const {
+		return (val + (1 << (shift - 1))) >> shift;
+	}
+};
+
+template <typename T0, typename T1, typename F0, typename F1>
+static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int shift, F0 Fir, F1 Round) {
 	for (int y = 0; y < height; y++) {
 		int a0 = in[0];
 		int a1 = in[refxinc];
@@ -3193,11 +3230,10 @@ static inline void interpolate_frac1(const T0* in, T1* out, int width, int heigh
 		int a5 = in[refxinc * 5];
 		in += refxinc * 6;
 		for (int x = 0; x < width; x += 2) {
-			// -1, 4, -10, 58, 17, -5, 1
 			int a6 = in[refxinc * x];
 			int a7 = in[refxinc * (x + 1)];
-			out[dstxinc * x] = Fir(a0, a1, a2, a3, a4, a5, a6) >> shift;
-			out[dstxinc * (x + 1)] = Fir(a1, a2, a3, a4, a5, a6, a7) >> shift;
+			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6), shift);
+			out[dstxinc * (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7), shift);
 			a0 = a2;
 			a1 = a3;
 			a2 = a4;
@@ -3210,54 +3246,69 @@ static inline void interpolate_frac1(const T0* in, T1* out, int width, int heigh
 	}
 }
 
-static void trim_boundary(int16_t*& dst, const uint8_t*& ref, int stride, int& width, int pos, int pregap, int postgap, int refinc, int dstinc) {
-	if (pos < pregap) {
-		int gap = pregap - pos;
-		gap = std::min(gap, width);
-		ref += gap * refinc;
-		if (gap < width) {
-			width -= gap;
-			dst += gap * dstinc;
+#define CLAMPX(x, xmax) (((x) < 0) ? 0 : (((xmax) <= (x)) ? (xmax) - 1 : (x)))
+
+template <typename T0, typename T1, typename F>
+static inline void interpolate_luma_umv(const T0* ref, T1* out, int width, int height, int refyinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, int shift, F Fir) {
+	for (int y = 0; y < height; y++) {
+		const T0* in = ref + refyinc * CLAMPX(ypos + y, ypos_max);
+		int a0 = in[CLAMPX(xpos, xpos_max)];
+		int a1 = in[CLAMPX(xpos + 1, xpos_max)];
+		int a2 = in[CLAMPX(xpos + 2, xpos_max)];
+		int a3 = in[CLAMPX(xpos + 3, xpos_max)];
+		int a4 = in[CLAMPX(xpos + 4, xpos_max)];
+		int a5 = in[CLAMPX(xpos + 5, xpos_max)];
+		for (int x = 0; x < width; x += 2) {
+			int a6 = in[CLAMPX(xpos + x + 6, xpos_max)];
+			int a7 = in[CLAMPX(xpos + x + 7, xpos_max)];
+			out[x] = Fir(a0, a1, a2, a3, a4, a5, a6) >> shift;
+			out[x + 1] = Fir(a1, a2, a3, a4, a5, a6, a7) >> shift;
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
 		}
-	} else if (stride <= pos + postgap) {
-		int gap = pos - stride + postgap;
-		gap = std::min(gap, width);
-		if (gap < width) {
-			width -= gap;
-		}
+		out += dstyinc;
 	}
 }
 
-static void interpolate_umv(int16_t*& dst, const uint8_t*& ref, int xstride, int ystride, int& width, int& height, int xpos, int ypos, int xpre, int xpost, int ypre, int ypost) {
-	trim_boundary(dst, ref, xstride, width, xpos, xpre, xpost, 1, 1);
-	trim_boundary(dst, ref, ystride, height, ypos, ypre, ypost, xstride, width + xpre + xpost);
-}
-
-static void interpolate13(uint8_t* dst, int16_t buf[], const uint8_t* ref, int xstride, int ystride, int width, int height, int xpos, int ypos) {
+template <int L_GAP, int R_GAP, int T_GAP, int B_GAP, typename F0, typename F1>
+static void interpolate_luma(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal, F1 Vertical) {
 	int16_t* tmp = buf;
-	int width_org = width;
-	int height_org = height;
-	if (((unsigned)(xstride - (3 + 3)) <= (unsigned)(xpos - 3)) || ((unsigned)(ystride - 4) <= (unsigned)(ypos - 2))) {
-		// -3, -2 to +3, +4
-		interpolate_umv(tmp, ref, xstride, ystride, width, height, xpos, ypos, 3, 3, 2, 4);
+	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
+		interpolate_luma_umv(ref, tmp, width, height + T_GAP + B_GAP, stride, width, xpos - L_GAP, ypos - T_GAP, xmax, ymax, 0, Horizontal);
+	} else {
+		interpolate_luma_no_umv(ref - T_GAP * stride - L_GAP, tmp, width, height + T_GAP + B_GAP, 1, stride, 1, width, 0, Horizontal, noround());
 	}
-	interpolate_frac1(ref - 2 * xstride - 3, tmp, width, height + 6, 1, xstride, 1, width_org, 0, inter_luma_fir1());
-	interpolate_frac1(buf, dst, width, height, width_org, 1, xstride, 1, 6, inter_luma_fir3());
+	interpolate_luma_no_umv(buf, dst, width, height, width, 1, stride, 1, 12, Vertical, round8());
 }
 
-static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int xstride, int ystride, int width, int height, int mvx, int mvy, int xpos, int ypos) {
+static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
 	int mvxint = mvx >> 2;
 	int mvyint = mvy >> 2;
-	int mvoffset = mvyint * xstride + mvxint;
 	int frac = (mvx & 3) | ((mvy & 3) << 2);
 	xpos += mvxint;
 	ypos += mvyint;
 	switch (frac) {
 	case 0:
-		interpolate00(dst, tmp, ref + mvoffset, xstride, ystride, width, height, xpos, ypos);
+		interpolate00(dst, tmp, ref, stride, ymax, width, height, xpos, ypos);
+		break;
+	case 5:
+		interpolate_luma<3, 2, 3, 2>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir1());
+		break;
+	case 7:
+		interpolate_luma<2, 3, 3, 2>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir1());
 		break;
 	case 13:
-		interpolate13(dst, tmp, ref + mvoffset, xstride, ystride, width, height, xpos, ypos);
+		interpolate_luma<3, 2, 2, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir3());
+		break;
+	case 15:
+		interpolate_luma<2, 3, 2, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir3());
+		break;
+	default:
+//		assert(0);
 		break;
 	}
 }
@@ -3288,7 +3339,7 @@ static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int off
 	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
 	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
 	const uint8_t* ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx].luma + stride * ypos + xpos;
-	inter_pred_luma(ctu.luma + offset, ctu.coeff_buf, ref, stride, ctu.sps->pic_height_in_luma_samples, width, height, mvx, mvy, xpos, ypos);
+	inter_pred_luma(ctu.luma + offset, ctu.coeff_buf, ref, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
 }
 
 static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
@@ -3325,14 +3376,16 @@ static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint3
 	}
 }
 
-static bool prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top, bool& rqt_root_cbf_inferred) {
 	h265d_inter_part_mode_t mode = part_mode_inter(dst.cabac, st, size_log2, dst.sps->ctb_info.size_log2_min, dst.sps->amp_enabled_flag);
 	int len = 1 << size_log2;
 	int len_s;
+	rqt_root_cbf_inferred = false;
 	switch (mode) {
 	case PART_2Nx2N:
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len, left, top);
-		return false;
+		if (prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len, left, top)) {
+			rqt_root_cbf_inferred = true;
+		}
 		break;
 	case PART_2NxN:
 		len_s = len >> 1;
@@ -3372,7 +3425,7 @@ static bool prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2,
 		prediction_unit(dst, st, size_log2, unavail, offset_x + len - len_s, offset_y, len_s, len, left, top);
 		break;
 	}
-	return true;
+	return mode;
 }
 
 static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top) {
@@ -3394,7 +3447,7 @@ static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d
 		uint8_t candidate[3];
 		h265d_neighbour_t* left_tmp = left + (i >> 1);
 		h265d_neighbour_t* top_tmp = top + (i & 1);
-		intra_pred_candidate(candidate, left_tmp->pred_mode, top_tmp->pred_mode);
+		intra_pred_candidate(candidate, left_tmp, top_tmp);
 		uint8_t mode;
 		if (pred_flag & 1) {
 			mode = candidate[mpm_idx(dst.cabac, st)];
@@ -3403,7 +3456,7 @@ static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d
 		}
 		dst.order_luma[i] = mode;
 		pred_flag >>= 1;
-		cu_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
+		cu_intra_pred_mode_fill(left_tmp, top_tmp, mode, neighbour_num);
 	}
 	if (part_num != 4) {
 		memset(dst.order_luma + 1, dst.order_luma[0], sizeof(dst.order_luma[0]) * 3);
@@ -3414,20 +3467,29 @@ static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d
 	}
 }
 
+static void pred_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	cu_header_intra(dst, st, size_log2, left, top);
+	transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, true);
+}
+
 static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
-	cu_pred_mode_fill(left, top, skip, 1 << (size_log2 - 2));
+	cu_inter_skip_mode_fill(left, top, skip, 1 << (size_log2 - 2));
 	if (skip) {
 		int len = 1 << size_log2;
 		prediction_unit_merge(dst, st, 0, 0, len, len);
 	} else {
 		if (pred_mode_flag(dst.cabac, st) != 0) {
-			cu_header_intra(dst, st, size_log2, left, top);
-			return;
-		}
-		bool rqt_root_cbf_needed = prediction_unit_cases(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
-		if (!rqt_root_cbf_needed || rqt_root_cbf(dst.cabac, st)) {
-			transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, false);
+			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
+//			cu_header_intra(dst, st, size_log2, left, top);
+//			return;
+		} else {
+			bool rqt_root_cbf_inferred;
+			h265d_inter_part_mode_t mode = prediction_unit_cases(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top, rqt_root_cbf_inferred);
+			if (rqt_root_cbf_inferred || rqt_root_cbf(dst.cabac, st)) {
+				dst.intra_split = (mode != PART_2Nx2N) && (dst.sps->max_transform_hierarchy_depth_inter == 0);
+				transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, false);
+			}
 		}
 	}
 }
@@ -3463,8 +3525,9 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		if (dst.slice_header->body.slice_type < 2) {
 			pred_inter(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
 		} else {
-			cu_header_intra(dst, st, size_log2, left, top);
-			transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, true);
+			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
+//			cu_header_intra(dst, st, size_log2, left, top);
+//			transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, true);
 		}
 	}
 }
@@ -4114,7 +4177,7 @@ static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 
 static inline void neighbour_init(h265d_neighbour_t neighbour[], size_t num) {
 	static const h265d_neighbour_t neighbour_init = {
-		INTRA_DC, 0
+		INTRA_DC * 2, 0
 	};
 	std::fill(neighbour, neighbour + num, neighbour_init);
 }
@@ -4195,7 +4258,7 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	uint32_t num = NUM_ELEM(dst.neighbour_left);
 	h265d_neighbour_t* top = dst.neighbour_top + pos_x * num;
 	for (uint32_t i = 0; i < num; ++i) {
-		top[i].pred_mode = INTRA_DC;
+		top[i].pred_mode_skip = INTRA_DC << 1;
 	}
 	memset(dst.qp_history[0], dst.qpy, sizeof(dst.qp_history));
 	return (dst.sps->ctb_info.rows <= dst.pos_y);
