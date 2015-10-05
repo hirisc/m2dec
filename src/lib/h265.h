@@ -384,12 +384,13 @@ typedef struct {
 
 struct pred_info_t {
 	int16_t mvd[2][2];
-	uint8_t lx_idc; // bit0: l0_flag, bit1: l1_flag, bit2-7: idc
-	uint8_t ref_idx; // bit0-3: l0_idx, bit4-7: l1_idx
+	int8_t ref_idx[2];
 };
 
 typedef struct {
-	uint8_t pred_mode_skip;
+	uint8_t skip : 1;
+	uint8_t intra : 1;
+	uint8_t pred_mode : 6;
 	uint8_t depth;
 	pred_info_t pred;
 } h265d_neighbour_t;

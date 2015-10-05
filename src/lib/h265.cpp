@@ -52,6 +52,8 @@ typedef enum {
 #define CHECK_RANGE2(val, min, max, st) {if (((val) < (min)) || ((max) < (val))) error_report(st);}
 #define NEGATE(val, sign) (((val) ^ (unsigned)-(signed)(sign)) + (sign))
 #define CLIP3(low, high, val) (((low) <= (val)) ? (((val) <= (high)) ? (val) : (high)) : (low))
+#define MINV(a, b) (((a) <= (b)) ? (a) : (b))
+#define MAXV(a, b) (((a) >= (b)) ? (a) : (b))
 
 int h265d_init(h265d_context *h2, int dpb_max, int (*header_callback)(void *, void *), void *arg) {
 	if (!h2) {
@@ -790,7 +792,7 @@ static int init_ref_pic_list_short_lx(h265d_ref_pic_list_elem_t list[], const h2
 
 static void init_ref_pic_list(h265d_ref_pic_list_elem_t list[][16], const h265d_short_term_ref_pic_set_t& srps, const h265d_slice_header_body_t& hdr, int curr_poc) {
 	for (int lx = 0; lx < 2; ++lx) {
-		int num_tmp = std::max(hdr.num_ref_idx_lx_active_minus1[lx] + 1, static_cast<int>(srps.total_curr));
+		int num_tmp = MAXV(hdr.num_ref_idx_lx_active_minus1[lx] + 1, static_cast<int>(srps.total_curr));
 		int idx = 0;
 		while (idx < num_tmp) {
 			idx += init_ref_pic_list_short_lx(list[lx], srps.ref[lx], curr_poc, num_tmp - idx);
@@ -1112,7 +1114,7 @@ static inline uint32_t split_cu_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t 
 }
 
 static inline uint32_t cu_skip_flag(m2d_cabac_t& cabac, dec_bits& st, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top) {
-	int idx = (!(unavail & 1) && (left->pred_mode_skip & 1)) + (!(unavail & 2) && (top->pred_mode_skip & 1));
+	int idx = (!(unavail & 1) && (left->skip)) + (!(unavail & 2) && (top->skip));
 	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->cu_skip_flag + idx);
 }
 
@@ -1183,7 +1185,7 @@ static inline uint32_t inter_pred_idc(m2d_cabac_t& cabac, dec_bits& st, int widt
 
 static inline int ref_idx_lx(m2d_cabac_t& cabac, dec_bits& st, int max, int8_t* ctx) {
 	int idx;
-	int max_tmp = std::min(max, 2);
+	int max_tmp = MINV(max, 2);
 	for (idx = 0; idx < max_tmp; ++idx) {
 		if (cabac_decode_decision_raw(&cabac, &st, ctx + idx)) {
 			break;
@@ -1209,19 +1211,15 @@ static inline uint32_t abs_mvd_greater_flag(m2d_cabac_t& cabac, dec_bits& st, in
 static inline uint32_t abs_mvd_minus2(m2d_cabac_t& cabac, dec_bits& st) {
 	int bits;
 	for (bits = 0; cabac_decode_bypass(&cabac, &st); bits++);
-	if (bits) {
-		return (2 << bits) - 2 + cabac_decode_multibypass(&cabac, &st, bits + 1);
-	} else {
-		return 0;
-	}
+	return (2 << bits) - 2 + cabac_decode_multibypass(&cabac, &st, bits + 1);
 }
 
 static inline uint32_t mvd_sign_flag(m2d_cabac_t& cabac, dec_bits& st) {
 	return cabac_decode_bypass(&cabac, &st);
 }
 
-static inline uint32_t mvp_lx_flag(m2d_cabac_t& cabac, dec_bits& st, int idx) {
-	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->mvp_flag + idx);
+static inline uint32_t mvp_lx_flag(m2d_cabac_t& cabac, dec_bits& st) {
+	return cabac_decode_decision_raw(&cabac, &st, reinterpret_cast<h265d_cabac_context_t*>(cabac.context)->mvp_flag);
 }
 
 static inline uint32_t rqt_root_cbf(m2d_cabac_t& cabac, dec_bits& st) {
@@ -1419,7 +1417,7 @@ static void intra_pred_candidate(uint8_t cand[], uint8_t candA, uint8_t candB) {
 }
 
 static void intra_pred_candidate(uint8_t cand[], const h265d_neighbour_t* candA, const h265d_neighbour_t* candB) {
-	intra_pred_candidate(cand, candA->pred_mode_skip >> 1, candB->pred_mode_skip >> 1);
+	intra_pred_candidate(cand, candA->pred_mode, candB->pred_mode);
 }
 
 static const int8_t h265d_scan_order2x2diag_inverse[2 * 2] = {
@@ -1662,7 +1660,7 @@ static inline uint32_t sig_coeff_greater(int colour, int subblock_idx, uint8_t& 
 	greater1ctx = 1;
 	uint32_t max_flags = 0;
 	int last_greater1_idx = -1;
-	uint32_t max_num = std::min(num_coeff, 8U);
+	uint32_t max_num = MINV(num_coeff, 8U);
 	for (uint32_t j = 0; j < max_num; ++j) {
 		if (coeff_abs_level_greater1_flag(cabac, st, greater1offset + greater1ctx)) {
 			greater1ctx = 0;
@@ -1698,7 +1696,7 @@ static inline uint32_t sig_coeff_writeback(uint32_t num_coeff, h265d_sigcoeff_t 
 		uint32_t abs_level = coeff[i].val;
 		if (max_coeffs & 1) {
 			abs_level += coeff_abs_level_remaining(cabac, st, rice_param);
-			rice_param = std::min(rice_param + ((static_cast<uint32_t>(3) << rice_param) < abs_level), static_cast<uint32_t>(4));
+			rice_param = MINV(rice_param + ((static_cast<uint32_t>(3) << rice_param) < abs_level), static_cast<uint32_t>(4));
 		}
 		level_sum += abs_level;
 		last_write_pos = write_pos + xy_pos[coeff[i].pos];
@@ -2500,7 +2498,7 @@ static inline void get_multipix_raw_core(uint8_t* dst, const uint8_t* src, int o
 		pregap = offset_min - offset;
 		src += stride * offset_min;
 	}
-	int midlen = std::min(offset_max - offset - pregap, len);
+	int midlen = MINV(offset_max - offset - pregap, len);
 	int postgap = len - pregap - midlen;
 	uint8_t* dst_ofs = dst + pregap * N;
 	if (stride == N) {
@@ -2524,13 +2522,13 @@ struct get_multipix_raw {
 
 struct get_pix_filtered_strong {
 	uint32_t operator()(const uint8_t* src, int offset, int offset_min, int offset_max, int stride) const {
-		return ((63 - offset) * src[(offset_min < 0) ? -stride : 0] + (offset + 1) * src[stride * std::min(63, offset_max - 1)] + 32) >> 6;
+		return ((63 - offset) * src[(offset_min < 0) ? -stride : 0] + (offset + 1) * src[stride * MINV(63, offset_max - 1)] + 32) >> 6;
 	}
 };
 
 static inline void get_multipix_filtered_strong_core(uint8_t* dst, const uint8_t* src, int offset, int offset_min, int offset_max, int size_log2, int len, int stride, int sub_stride) {
 	uint32_t c0 = src[(offset_min < 0) ? -stride : 0];
-	uint32_t c1 = src[stride * std::min(63, offset_max - 1)];
+	uint32_t c1 = src[stride * MINV(63, offset_max - 1)];
 	for (int i = 0; i < len; ++i) {
 		dst[i] = ((63 - offset) * c0 + (offset + 1) * c1 + 32) >> 6;
 		offset++;
@@ -2575,7 +2573,7 @@ static inline void get_multipix_filtered_core(uint8_t* dst, const uint8_t* src, 
 		c0 = c1 = src[(offset + 1) * stride];
 	}
 	src += offset * stride;
-	int midlen = std::min(offset_max - offset - 1, len);
+	int midlen = MINV(offset_max - offset - 1, len);
 	for (int i = 0; i < midlen; ++i) {
 		src += stride;
 		uint32_t c2 = src[0];
@@ -2686,7 +2684,7 @@ static void intra_pred_get_ref(uint8_t dst[], const uint8_t src[], int size_log2
 	}
 	int base_pos = pos_tbl[extra_len];
 	if (0 < valid_main) {
-		GetMultiPix(dst, src - sub_stride, base_pos, (0 < valid_sub) ? -1 : 0, std::min(2 << size_log2, valid_main), size_log2, base_len, main_stride, sub_stride);
+		GetMultiPix(dst, src - sub_stride, base_pos, (0 < valid_sub) ? -1 : 0, MINV(2 << size_log2, valid_main), size_log2, base_len, main_stride, sub_stride);
 	} else {
 		if (0 < valid_sub) {
 			memfill_pix<N>(dst, get_pix_raw<N>()(src - main_stride, 0, 0, 4, sub_stride), base_len);
@@ -3028,17 +3026,14 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 		depth += 1;
 		uint32_t block_len = 1 << size_log2;
 		transform_tree(dst, st, size_log2, unavail, depth, cbf, offset_x, valid_x, offset_y, valid_y, 0, pi0, is_intra);
-		transform_tree(dst, st, size_log2, unavail & ~1, depth, cbf, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), 1, pi1, is_intra);
-		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, 2, pi2, is_intra);
-		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), 3, pi3, is_intra);
+		transform_tree(dst, st, size_log2, unavail & ~1, depth, cbf, offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), 1, pi1, is_intra);
+		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, 2, pi2, is_intra);
+		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), 3, pi3, is_intra);
 	} else {
 		if (is_intra) {
 			intra_prediction(dst, size_log2, offset_x, (unavail & 2) ? -1 : valid_x, offset_y, (unavail & 1) ? -1 : valid_y, pred_idx);
 		}
-		cbf = cbf * 2;
-		if (is_intra || depth || cbf) {
-			cbf |= cbf_luma(dst.cabac, st, depth);
-		}
+		cbf = cbf * 2 | ((is_intra || depth || cbf) ? cbf_luma(dst.cabac, st, depth) : 1);
 		int32_t qp_delta = 0;
 		if (dst.qp_delta_req) {
 			dst.qp_delta_req = 0;
@@ -3054,18 +3049,24 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 }
 
 static inline void cu_intra_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint32_t mode, uint32_t num) {
-	mode <<= 1;
 	for (uint32_t i = 0; i < num; ++i) {
-		dst0[i].pred_mode_skip = mode;
-		dst1[i].pred_mode_skip = mode;
+		dst0[i].pred_mode = mode;
+		dst0[i].intra = 1;
+		dst0[i].skip = 0;
+		dst1[i].pred_mode = mode;
+		dst1[i].intra = 1;
+		dst1[i].skip = 0;
 	}
 }
 
-static inline void cu_inter_skip_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], int skip, uint32_t num) {
-	uint32_t mode = skip | (INTRA_DC << 1);
+static inline void cu_inter_skip_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint8_t skip, uint32_t num) {
 	for (uint32_t i = 0; i < num; ++i) {
-		dst0[i].pred_mode_skip = mode;
-		dst1[i].pred_mode_skip = mode;
+		dst0[i].pred_mode = INTRA_DC;
+		dst0[i].skip = skip;
+		dst0[i].intra = 0;
+		dst1[i].pred_mode = INTRA_DC;
+		dst1[i].skip = skip;
+		dst1[i].intra = 0;
 	}
 }
 
@@ -3078,10 +3079,372 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 	}
 }
 
-static void prediction_unit_merge(h265d_ctu_t& dst, dec_bits& st, int offset_x, int offset_y, int width, int height) {
-	if (1 < dst.slice_header->body.max_num_merge_cand) {
-		merge_idx(dst.cabac, st);
+static void fill_mvinfo(h265d_neighbour_t* neighbour, int len, int lx, int mvx, int mvy) {
+	len >>= 2;
+	for (int i = 0; i < len; ++i) {
+		neighbour[i].pred.mvd[lx][0] = mvx;
+		neighbour[i].pred.mvd[lx][1] = mvy;
 	}
+}
+
+static void fill_predinfo(h265d_neighbour_t* neighbour, int len, const pred_info_t& pred) {
+	len >>= 2;
+	for (int i = 0; i < len; ++i) {
+		neighbour[i].pred = pred;
+	}
+}
+
+static void interpolate00(uint8_t* dst, int16_t tmp[], const uint8_t* ref, int xstride, int ystride, int width, int height, int xpos, int ypos) {
+	if (((unsigned)xstride <= (unsigned)xpos) || ((unsigned)ystride <= (unsigned)ypos)) {
+
+	}
+	for (int y = 0; y < height; ++y) {
+		memcpy(dst + xstride * y, ref + xstride * y, width * sizeof(*dst));
+	}
+}
+
+struct inter_luma_fir1 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return -a0 + 4 * a1 - 10 * a2 + 58 * a3 + 17 * a4 - 5 * a5 + a6;
+	}
+};
+
+struct inter_luma_fir2 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return -(a0 + a7) + 4 * (a1 + a6) - 11 * (a2 + a5) + 40 * (a3 + a4);
+	}
+};
+
+struct inter_luma_fir3 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return a0 - 5 * a1 + 17 * a2 + 58 * a3 - 10 * a4 + 4 * a5 - a6;
+	}
+};
+
+struct noround {
+	int operator()(int val, int shift) const {
+		return val >> shift;
+	}
+};
+
+struct round8 {
+	int operator()(int val, int shift) const {
+		return (val + (1 << (shift - 1))) >> shift;
+	}
+};
+
+template <typename T0, typename T1, typename F0, typename F1>
+static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int xpos, int ypos, int shift, F0 Fir, F1 Round) {
+	in = in + ypos * refyinc + xpos;
+	for (int y = 0; y < height; y++) {
+		int a0 = in[0];
+		int a1 = in[refxinc];
+		int a2 = in[refxinc * 2];
+		int a3 = in[refxinc * 3];
+		int a4 = in[refxinc * 4];
+		int a5 = in[refxinc * 5];
+		int a6 = in[refxinc * 6];
+		in += refxinc * 7;
+		for (int x = 0; x < width; x += 2) {
+			int a7 = in[refxinc * x];
+			int a8 = in[refxinc * (x + 1)];
+			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6, a7), shift);
+			out[dstxinc * (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7, a8), shift);
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
+			a6 = a8;
+		}
+		in = in + refyinc - refxinc * 7;
+		out += dstyinc;
+	}
+}
+
+#define CLAMPX(x, xmax) (((x) < 0) ? 0 : (((xmax) <= (x)) ? (xmax) - 1 : (x)))
+
+template <typename T0, typename T1, typename F0, typename F1>
+static inline void interpolate_luma_umv(const T0* ref, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, int shift, F0 Fir, F1 Round) {
+	for (int y = 0; y < height; y++) {
+		int yp = CLAMPX(ypos + y, ypos_max);
+		const T0* in = ref + refyinc * yp;
+		int a0 = in[refxinc * CLAMPX(xpos, xpos_max)];
+		int a1 = in[refxinc * CLAMPX(xpos + 1, xpos_max)];
+		int a2 = in[refxinc * CLAMPX(xpos + 2, xpos_max)];
+		int a3 = in[refxinc * CLAMPX(xpos + 3, xpos_max)];
+		int a4 = in[refxinc * CLAMPX(xpos + 4, xpos_max)];
+		int a5 = in[refxinc * CLAMPX(xpos + 5, xpos_max)];
+		int a6 = in[refxinc * CLAMPX(xpos + 6, xpos_max)];
+		for (int x = 0; x < width; x += 2) {
+			int a7 = in[refxinc * CLAMPX(xpos + x + 7, xpos_max)];
+			int a8 = in[refxinc * CLAMPX(xpos + x + 8, xpos_max)];
+			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6, a7), shift);
+			out[dstxinc* (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7, a8), shift);
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
+			a6 = a8;
+		}
+		out += dstyinc;
+	}
+}
+
+template <int L_GAP, int R_GAP, typename F0>
+static void interpolate_luma_horiz(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal) {
+	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < 0) || (ymax <= ypos + height)) {
+		interpolate_luma_umv(ref, dst, width, height, 1, stride, 1, stride, xpos - L_GAP, ypos, xmax, ymax, 6, Horizontal, round8());
+	} else {
+		interpolate_luma_no_umv(ref, dst, width, height, 1, stride, 1, stride, xpos - L_GAP, ypos, 6, Horizontal, round8());
+	}
+}
+
+template <int T_GAP, int B_GAP, typename F0>
+static void interpolate_luma_vert(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Vertical) {
+	if ((xpos < 0) || (xmax <= xpos + width) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
+		interpolate_luma_umv(buf, dst, width, height, stride, 1, stride, 1, xpos, ypos - T_GAP, xmax, ymax, 12, Vertical, round8());
+	} else {
+		interpolate_luma_no_umv(buf, dst, width, height, stride, 1, stride, 1, xpos, ypos - T_GAP, 12, Vertical, round8());
+	}
+}
+
+template <int L_GAP, int R_GAP, int T_GAP, int B_GAP, typename F0, typename F1>
+static void interpolate_luma(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal, F1 Vertical) {
+	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
+		interpolate_luma_umv(ref, buf, width, height + T_GAP + B_GAP, 1, stride, 1, width, xpos - L_GAP, ypos - T_GAP, xmax, ymax, 0, Horizontal, noround());
+	} else {
+		interpolate_luma_no_umv(ref, buf, width, height + T_GAP + B_GAP, 1, stride, 1, width, xpos - L_GAP, ypos - T_GAP, 0, Horizontal, noround());
+	}
+	interpolate_luma_no_umv(buf, dst, width, height, width, 1, stride, 1, 0, 0, 12, Vertical, round8());
+}
+
+static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
+	int mvxint = mvx >> 2;
+	int mvyint = mvy >> 2;
+	int frac = (mvx & 3) | ((mvy & 3) << 2);
+	xpos += mvxint;
+	ypos += mvyint;
+	switch (frac) {
+	case 0:
+		interpolate00(dst, tmp, ref, stride, ymax, width, height, xpos, ypos);
+		break;
+	case 1:
+		interpolate_luma_horiz<3, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1());
+		break;
+	case 2:
+		interpolate_luma_horiz<3, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2());
+		break;
+	case 3:
+		interpolate_luma_horiz<2, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3());
+		break;
+	case 4:
+		interpolate_luma_vert<3, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1());
+		break;
+	case 5:
+		interpolate_luma<3, 3, 3, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir1());
+		break;
+	case 6:
+		interpolate_luma<3, 4, 3, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir1());
+		break;
+	case 7:
+		interpolate_luma<2, 4, 3, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir1());
+		break;
+	case 8:
+		interpolate_luma_vert<3, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2());
+		break;
+	case 9:
+		interpolate_luma<3, 3, 3, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir2());
+		break;
+	case 10:
+		interpolate_luma<3, 4, 3, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir2());
+		break;
+	case 11:
+		interpolate_luma<2, 4, 3, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir2());
+		break;
+	case 12:
+		interpolate_luma_vert<2, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3());
+		break;
+	case 13:
+		interpolate_luma<3, 3, 2, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir3());
+		break;
+	case 14:
+		interpolate_luma<3, 4, 2, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir3());
+		break;
+	case 15:
+		interpolate_luma<2, 4, 2, 4>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir3());
+		break;
+	default:
+//		assert(0);
+		break;
+	}
+}
+
+static const int8_t inter_chroma_coef[][4] = {
+	{0, 64, 0, 0},
+	{-2, 58, 10, -2},
+	{-4, 54, 16, -2},
+	{-6, 46, 28, -4},
+	{-4, 36, 36, -4},
+	{-4, 28, 46, -6},
+	{-2, 16, 54, -4},
+	{-2, 10, 58, -2}
+};
+
+template <typename T0, typename T1, typename F0>
+static inline void interpolate_chroma_vert(const T0* in, T1* out, int width, int height, int stride, int shift, int frac, F0 Round) {
+	int c0 = inter_chroma_coef[frac][0];
+	int c1 = inter_chroma_coef[frac][1];
+	int c2 = inter_chroma_coef[frac][2];
+	int c3 = inter_chroma_coef[frac][3];
+	for (int x = 0; x < width; x += 2) {
+		int a0 = in[0];
+		int b0 = in[1];
+		int a1 = in[width];
+		int b1 = in[width + 1];
+		int a2 = in[width * 2];
+		int b2 = in[width * 2 + 1];
+		in += width * 3;
+		for (int y = 0; y < height; y++) {
+			int a3 = in[width * y];
+			int b3 = in[width * y + 1];
+			out[stride * y] = Round(c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3, shift);
+			out[stride * y + 1] = Round(c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3, shift);
+			a0 = a1;
+			b0 = b1;
+			a1 = a2;
+			b1 = b2;
+			a2 = a3;
+			b2 = b3;
+		}
+		in = in + 2 - width * 3;
+		out += 2;
+	}
+}
+
+template <typename T0>
+static inline void load2pix_umv(const T0* in, int xpos, int xpos_max, int& cb, int& cr) {
+	int pos = CLAMPX(xpos, xpos_max) * 2;
+	cb = in[pos];
+	cr = in[pos + 1];
+}
+
+template <typename T0, typename T1>
+static inline void interpolate_chroma_umv(const T0* ref, T1* out, int width, int height, int refyinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, int shift, int frac) {
+	int c0 = inter_chroma_coef[frac][0];
+	int c1 = inter_chroma_coef[frac][1];
+	int c2 = inter_chroma_coef[frac][2];
+	int c3 = inter_chroma_coef[frac][3];
+	for (int y = 0; y < height; y++) {
+		const T0* in = ref + refyinc * CLAMPX(ypos + y, ypos_max);
+		int a0, b0, a1, b1, a2, b2;
+		load2pix_umv(in, xpos, xpos_max, a0, b0);
+		load2pix_umv(in, xpos + 1, xpos_max, a1, b1);
+		load2pix_umv(in, xpos + 2, xpos_max, a2, b2);
+		for (int x = 0; x < width; x += 2) {
+			int a3, b3;
+			load2pix_umv(in, xpos + 3, xpos_max, a3, b3);
+			out[x] = (c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3) >> shift;
+			out[x + 1] = (c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3) >> shift;
+			a0 = a1;
+			b0 = b1;
+			a1 = a2;
+			b1 = b2;
+			a2 = a3;
+			b2 = b3;
+		}
+		out += dstyinc;
+	}
+}
+
+static void inter_pred_chroma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
+	int mvxint = mvx >> 3;
+	int mvyint = mvy >> 3;
+	int fracx = mvx & 7;
+	int fracy = mvy & 7;
+	xpos += mvxint;
+	ypos += mvyint;
+	height >>= 1;
+	if (1) {//((xpos < 1) || (xmax <= xpos + width + 2) || (ypos < 1) || (ymax <= ypos + height + 2)) {
+		xpos >>= 1;
+		ypos >>= 1;
+		xmax >>= 1;
+		ymax >>= 1;
+		interpolate_chroma_umv(ref, tmp, width, height + 1 + 2, stride, width, xpos - 1, ypos - 1, xmax, ymax, 0, mvx & 7);
+	} else {
+//		interpolate_chroma_no_umv(ref - 1 * stride - 2, tmp, width, height + 1 + 2, 1, stride, 1, width, 0, fracx, noround());
+	}
+	interpolate_chroma_vert(tmp, dst, width, height, stride, 12, fracy, round8());
+}
+
+static void inter_pred_onedir(const h265d_ctu_t& ctu, int offset_x, int offset_y, int width, int height, int lx, int ref_idx, int mvx, int mvy) {
+	int stride = ctu.sps->ctb_info.stride;
+	int offset = stride * offset_y + offset_x;
+	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
+	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
+	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
+	if ((width | height) <= 32) {
+		inter_pred_luma(ctu.luma + offset, ctu.coeff_buf, ref.luma, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+		inter_pred_chroma(ctu.chroma + stride * (offset_y >> 1) + offset_x, ctu.coeff_buf, ref.chroma, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+	}
+}
+
+static void merge_pred(h265d_ctu_t& dst, const pred_info_t& pred, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	fill_predinfo(left, height, pred);
+	fill_predinfo(top, width, pred);
+	int ref0 = pred.ref_idx[0];
+	int ref1 = pred.ref_idx[1];
+	if ((0 <= ref0) && (0 <= ref1)) {
+	} else {
+		int lx, ref_idx;
+		if (0 <= ref1) {
+			lx = 1;
+			ref_idx = ref1;
+		} else {
+			lx = 0;
+			ref_idx = ref0;
+		}
+		inter_pred_onedir(dst, offset_x, offset_y, width, height, lx, ref_idx, pred.mvd[lx][0], pred.mvd[lx][1]);
+	}
+}
+
+static void add_merge_candidate(const pred_info_t* list[], int& idx, const h265d_neighbour_t* neighbour, int offset) {
+	if (!neighbour[offset].intra) {
+		for (int i = 0; i < idx; ++i) {
+			if (!memcmp(&neighbour[offset].pred, list[i], sizeof(*list[0]))) {
+				return;
+			}
+		}
+		list[idx++] = &neighbour[offset].pred;
+	}
+}
+
+static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	int max = ctu.slice_header->body.max_num_merge_cand;
+	int idx = (1 < max) ? merge_idx(ctu.cabac, st) : 0;
+	const pred_info_t* list[5];
+	int num = 0;
+	if (!(unavail & 1)) {
+		add_merge_candidate(list, num, left, (height >> 2) - 1);
+	}
+	if (num <= idx) {
+		if (!(unavail & 2)) {
+			add_merge_candidate(list, num, top, (width >> 2) - 1);
+		}
+		if (!(unavail & 4)) {
+			add_merge_candidate(list, num, left, height >> 2);
+		}
+		if (!(unavail & 8)) {
+			add_merge_candidate(list, num, top, width >> 2);
+		}
+	}
+	if (num <= idx) {
+		return;
+	}
+	merge_pred(ctu, *list[idx], unavail, offset_x, offset_y, width, height, left, top);
 }
 
 static inline int mvd_coding_suffix(m2d_cabac_t& cabac, dec_bits& st, int mvd) {
@@ -3117,7 +3480,8 @@ struct longterm_from_reflist {
 
 template <typename T, typename F>
 static inline bool same_attribute(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, T value, F GetValue) {
-	return (neighbour.pred.lx_idc & (1 << lx)) && (GetValue(ctu.slice_header->body.ref_list[lx][(neighbour.pred.ref_idx >> (lx * 4)) & 15]) == value);
+	int ref_idx = neighbour.pred.ref_idx[lx];
+	return (0 <= ref_idx) && (GetValue(ctu.slice_header->body.ref_list[lx][ref_idx]) == value);
 }
 
 static bool mvp1st(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[]) {
@@ -3141,7 +3505,7 @@ static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx,
 	}
 	if (!longterm) {
 		int poc = pic_order_cnt(ctu.slice_header->body.slice_pic_order_cnt, *ctu.sps);
-		int td = poc - ctu.slice_header->body.ref_list[lx][(neighbour.pred.ref_idx >> (lx * 4)) & 15].poc;
+		int td = poc - ctu.slice_header->body.ref_list[lx][neighbour.pred.ref_idx[lx]].poc;
 		int tb = poc - refpoc;
 		td = CLIP3(-128, 127, td);
 		tb = CLIP3(-128, 127, tb);
@@ -3186,142 +3550,6 @@ static int mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, h265d_neighbour_t* ne
 	return 0;
 }
 
-static void interpolate00(uint8_t* dst, int16_t tmp[], const uint8_t* ref, int xstride, int ystride, int width, int height, int xpos, int ypos) {
-	if (((unsigned)xstride <= (unsigned)xpos) || ((unsigned)ystride <= (unsigned)ypos)) {
-
-	}
-	for (int y = 0; y < height; ++y) {
-		memcpy(dst + xstride * y, ref + xstride * y, width * sizeof(*dst));
-	}
-}
-
-struct inter_luma_fir1 {
-	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
-		return -a0 + 4 * a1 - 10 * a2 + 58 * a3 + 17 * a4 - 5 * a5 + a6;
-	}
-};
-
-struct inter_luma_fir3 {
-	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
-		return a0 - 5 * a1 + 17 * a2 + 58 * a3 - 10 * a4 + 4 * a5 - a6;
-	}
-};
-
-struct noround {
-	int operator()(int val, int shift) const {
-		return val >> shift;
-	}
-};
-
-struct round8 {
-	int operator()(int val, int shift) const {
-		return (val + (1 << (shift - 1))) >> shift;
-	}
-};
-
-template <typename T0, typename T1, typename F0, typename F1>
-static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int shift, F0 Fir, F1 Round) {
-	for (int y = 0; y < height; y++) {
-		int a0 = in[0];
-		int a1 = in[refxinc];
-		int a2 = in[refxinc * 2];
-		int a3 = in[refxinc * 3];
-		int a4 = in[refxinc * 4];
-		int a5 = in[refxinc * 5];
-		in += refxinc * 6;
-		for (int x = 0; x < width; x += 2) {
-			int a6 = in[refxinc * x];
-			int a7 = in[refxinc * (x + 1)];
-			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6), shift);
-			out[dstxinc * (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7), shift);
-			a0 = a2;
-			a1 = a3;
-			a2 = a4;
-			a3 = a5;
-			a4 = a6;
-			a5 = a7;
-		}
-		in = in + refyinc - refxinc * 6;
-		out += dstyinc;
-	}
-}
-
-#define CLAMPX(x, xmax) (((x) < 0) ? 0 : (((xmax) <= (x)) ? (xmax) - 1 : (x)))
-
-template <typename T0, typename T1, typename F>
-static inline void interpolate_luma_umv(const T0* ref, T1* out, int width, int height, int refyinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, int shift, F Fir) {
-	for (int y = 0; y < height; y++) {
-		const T0* in = ref + refyinc * CLAMPX(ypos + y, ypos_max);
-		int a0 = in[CLAMPX(xpos, xpos_max)];
-		int a1 = in[CLAMPX(xpos + 1, xpos_max)];
-		int a2 = in[CLAMPX(xpos + 2, xpos_max)];
-		int a3 = in[CLAMPX(xpos + 3, xpos_max)];
-		int a4 = in[CLAMPX(xpos + 4, xpos_max)];
-		int a5 = in[CLAMPX(xpos + 5, xpos_max)];
-		for (int x = 0; x < width; x += 2) {
-			int a6 = in[CLAMPX(xpos + x + 6, xpos_max)];
-			int a7 = in[CLAMPX(xpos + x + 7, xpos_max)];
-			out[x] = Fir(a0, a1, a2, a3, a4, a5, a6) >> shift;
-			out[x + 1] = Fir(a1, a2, a3, a4, a5, a6, a7) >> shift;
-			a0 = a2;
-			a1 = a3;
-			a2 = a4;
-			a3 = a5;
-			a4 = a6;
-			a5 = a7;
-		}
-		out += dstyinc;
-	}
-}
-
-template <int L_GAP, int R_GAP, int T_GAP, int B_GAP, typename F0, typename F1>
-static void interpolate_luma(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal, F1 Vertical) {
-	int16_t* tmp = buf;
-	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
-		interpolate_luma_umv(ref, tmp, width, height + T_GAP + B_GAP, stride, width, xpos - L_GAP, ypos - T_GAP, xmax, ymax, 0, Horizontal);
-	} else {
-		interpolate_luma_no_umv(ref - T_GAP * stride - L_GAP, tmp, width, height + T_GAP + B_GAP, 1, stride, 1, width, 0, Horizontal, noround());
-	}
-	interpolate_luma_no_umv(buf, dst, width, height, width, 1, stride, 1, 12, Vertical, round8());
-}
-
-static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
-	int mvxint = mvx >> 2;
-	int mvyint = mvy >> 2;
-	int frac = (mvx & 3) | ((mvy & 3) << 2);
-	xpos += mvxint;
-	ypos += mvyint;
-	switch (frac) {
-	case 0:
-		interpolate00(dst, tmp, ref, stride, ymax, width, height, xpos, ypos);
-		break;
-	case 5:
-		interpolate_luma<3, 2, 3, 2>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir1());
-		break;
-	case 7:
-		interpolate_luma<2, 3, 3, 2>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir1());
-		break;
-	case 13:
-		interpolate_luma<3, 2, 2, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir3());
-		break;
-	case 15:
-		interpolate_luma<2, 3, 2, 3>(dst, tmp, ref, stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir3());
-		break;
-	default:
-//		assert(0);
-		break;
-	}
-}
-
-static void fill_mvinfo(h265d_neighbour_t* neighbour, int offset, int len, int lx, int mvx, int mvy) {
-	neighbour += offset >> 2;
-	len >>= 2;
-	for (int i = 0; i < len; ++i) {
-		neighbour[i].pred.mvd[lx][0] = mvx;
-		neighbour[i].pred.mvd[lx][1] = mvy;
-	}
-}
-
 static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, int lx, int ref_idx, int mvp_idx, const int16_t mvd[]) {
 	int16_t mvplist[2][2];
 	int mvp_num = 0;
@@ -3332,19 +3560,23 @@ static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int off
 	}
 	int mvx = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
 	int mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
-	fill_mvinfo(left, offset_x, width, lx, mvx, mvy);
-	fill_mvinfo(top, offset_y, height, lx, mvx, mvy);
-	int stride = ctu.sps->ctb_info.stride;
-	int offset = stride * offset_y + offset_x;
-	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
-	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
-	const uint8_t* ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx].luma + stride * ypos + xpos;
-	inter_pred_luma(ctu.luma + offset, ctu.coeff_buf, ref, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+	fill_mvinfo(left, height, lx, mvx, mvy);
+	fill_mvinfo(top, width, lx, mvx, mvy);
+	if ((width | height) <= 32) {
+		inter_pred_onedir(ctu, offset_x, offset_y, width, height, lx, ref_idx, mvx, mvy);
+	}
+}
+
+static void fill_invalid_ref_idx(h265d_neighbour_t* neighbour, int len, int lx) {
+	len >>= 2;
+	for (int i = 0; i < len; ++i) {
+		neighbour[i].pred.ref_idx[lx] = -1;
+	}
 }
 
 static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	if (merge_flag(dst.cabac, st)) {
-		prediction_unit_merge(dst, st, offset_x, offset_y, width, height);
+		prediction_unit_merge(dst, st, unavail, offset_x, offset_y, width, height, left, top);
 		return true;
 	} else {
 		int pred_idc;
@@ -3354,14 +3586,20 @@ static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint3
 		} else {
 			pred_idc = 0;
 		}
-		if (pred_idc != 1) {
+		if (pred_idc == 1) {
+			fill_invalid_ref_idx(left, height, 0);
+			fill_invalid_ref_idx(top, width, 0);
+		} else {
 			int ref_idx = ref_idx_lx(dst.cabac, st, 0, dst.slice_header->body.num_ref_idx_lx_active_minus1);
 			int16_t mvd[2];
 			mvd_coding(dst.cabac, st, mvd);
-			int mvp_idx = mvp_lx_flag(dst.cabac, st, 0);
+			int mvp_idx = mvp_lx_flag(dst.cabac, st);
 			pred_block(dst, unavail, offset_x, offset_y, width, height, left, top, 0, ref_idx, mvp_idx, mvd);
 		}
-		if (pred_idc != 0) {
+		if (pred_idc == 0) {
+			fill_invalid_ref_idx(left, height, 1);
+			fill_invalid_ref_idx(top, width, 1);
+		} else {
 			int ref_idx = ref_idx_lx(dst.cabac, st, 1, dst.slice_header->body.num_ref_idx_lx_active_minus1);
 			int16_t mvd[2];
 			if ((pred_idc == 1) || !dst.slice_header->body.mvd_l1_zero_flag) {
@@ -3369,7 +3607,7 @@ static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint3
 			} else {
 				memset(mvd, 0, sizeof(mvd));
 			}
-			int mvp_idx = mvp_lx_flag(dst.cabac, st, 1);
+			int mvp_idx = mvp_lx_flag(dst.cabac, st);
 			pred_block(dst, unavail, offset_x, offset_y, width, height, left, top, 1, ref_idx, mvp_idx, mvd);
 		}
 		return false;
@@ -3390,42 +3628,47 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxN:
 		len_s = len >> 1;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len_s, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top);
 		break;
 	case PART_Nx2N:
 		len_s = len >> 1;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3));
 		break;
 	case PART_NxN:
 		len_s = len >> 1;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len_s, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y + len_s, len_s, len_s, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len_s, left, top + (len >> 3));
+		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len_s, len_s, left + (len >> 3), top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y + len_s, len_s, len_s, left + (len >> 3), top + (len >> 3));
 		break;
 	case PART_2NxnU:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len - len_s, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top);
 		break;
 	case PART_2NxnD:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len - len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len - len_s, len, len_s, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top);
 		break;
 	case PART_nLx2N:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len - len_s, len, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4));
 		break;
 	case PART_nRx2N:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len - len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len - len_s, offset_y, len_s, len, left, top);
+		prediction_unit(dst, st, size_log2, unavail, offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2));
 		break;
 	}
 	return mode;
+}
+
+static inline void zero_scan_order(h265d_ctu_t& ctu) {
+	memset(ctu.order_luma, 0, sizeof(ctu.order_luma));
+	ctu.order_chroma = 0;
 }
 
 static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d_neighbour_t* left, h265d_neighbour_t* top) {
@@ -3474,19 +3717,19 @@ static void pred_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t u
 
 static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
-	cu_inter_skip_mode_fill(left, top, skip, 1 << (size_log2 - 2));
 	if (skip) {
 		int len = 1 << size_log2;
-		prediction_unit_merge(dst, st, 0, 0, len, len);
+		prediction_unit_merge(dst, st, unavail, offset_x, offset_y, len, len, left, top);
+		cu_inter_skip_mode_fill(left, top, 1, 1 << (size_log2 - 2));
 	} else {
 		if (pred_mode_flag(dst.cabac, st) != 0) {
 			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
-//			cu_header_intra(dst, st, size_log2, left, top);
-//			return;
 		} else {
 			bool rqt_root_cbf_inferred;
+			cu_inter_skip_mode_fill(left, top, 0, 1 << (size_log2 - 2));
 			h265d_inter_part_mode_t mode = prediction_unit_cases(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top, rqt_root_cbf_inferred);
 			if (rqt_root_cbf_inferred || rqt_root_cbf(dst.cabac, st)) {
+				zero_scan_order(dst);
 				dst.intra_split = (mode != PART_2Nx2N) && (dst.sps->max_transform_hierarchy_depth_inter == 0);
 				transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, false);
 			}
@@ -3517,17 +3760,15 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
 		quad_tree(dst, st, size_log2, unavail, offset_x, valid_x, offset_y, valid_y, left, top);
-		quad_tree(dst, st, size_log2, (unavail & ~1) | 4, offset_x + block_len, valid_x - block_len, offset_y, std::min(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
-		quad_tree(dst, st, size_log2, unavail & ~10, offset_x, std::min(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
-		quad_tree(dst, st, size_log2, 12, offset_x + block_len, std::min(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, std::min(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
+		quad_tree(dst, st, size_log2, (unavail & ~1) | 4, offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
+		quad_tree(dst, st, size_log2, unavail & ~10, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
+		quad_tree(dst, st, size_log2, 12, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
 		coding_unit_header(dst, st, size_log2, unavail, left, top);
 		if (dst.slice_header->body.slice_type < 2) {
 			pred_inter(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
 		} else {
 			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
-//			cu_header_intra(dst, st, size_log2, left, top);
-//			transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, true);
 		}
 	}
 }
@@ -4072,7 +4313,7 @@ static int sao_region(h265d_ctu_t& ctu, const h265d_sao_map_t* sao_map, int widt
 	sao_clear_vline(ctu.sao_vlines, xphase ^ 1, 0);
 	sao_clear_vline(ctu.sao_vlines, xphase ^ 1, 1);
 	x_num = sao_merged_num(sao_map, max);
-	int hlen = std::min(width * x_num, valid_width);
+	int hlen = MINV(width * x_num, valid_width);
 	int idx = sao_map[0].luma_idx;
 	if (idx) {
 		if (x_num < max) {
@@ -4176,10 +4417,12 @@ static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 }
 
 static inline void neighbour_init(h265d_neighbour_t neighbour[], size_t num) {
-	static const h265d_neighbour_t neighbour_init = {
-		INTRA_DC * 2, 0
-	};
-	std::fill(neighbour, neighbour + num, neighbour_init);
+	for (int i = 0; i < num; ++i) {
+		neighbour[i].skip = 0;
+		neighbour[i].intra = 1;
+		neighbour[i].pred_mode = INTRA_DC;
+		neighbour[i].depth = 0;
+	}
 }
 
 static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps, const h265d_sps_t& sps) {
@@ -4204,7 +4447,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	uint32_t y_offset = sps.ctb_info.columns * dst.pos_y;
 	dst.pos_x = ctu_address - y_offset;
 	dst.valid_x = sps.pic_width_in_luma_samples - (dst.pos_x << sps.ctb_info.size_log2);
-	dst.valid_y = std::min(sps.pic_height_in_luma_samples - (dst.pos_y << sps.ctb_info.size_log2), 1U << sps.ctb_info.size_log2);
+	dst.valid_y = MINV(sps.pic_height_in_luma_samples - (dst.pos_y << sps.ctb_info.size_log2), 1U << sps.ctb_info.size_log2);
 	uint32_t luma_offset = ((y_offset << sps.ctb_info.size_log2) + dst.pos_x) << sps.ctb_info.size_log2;
 	m2d_frame_t& frm = dst.frame_info.frames[dst.frame_info.index];
 	frm.width = sps.ctb_info.stride;
@@ -4240,7 +4483,7 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 		dst.pos_y++;
 		dst.valid_x = dst.sps->pic_width_in_luma_samples;
 		if (dst.pos_y == dst.sps->ctb_info.rows - 1) {
-			dst.valid_y = std::min(dst.sps->pic_height_in_luma_samples - (dst.pos_y << size_log2), 1U << size_log2);
+			dst.valid_y = MINV(dst.sps->pic_height_in_luma_samples - (dst.pos_y << size_log2), 1U << size_log2);
 		}
 		pos_x = 0;
 		uint32_t y_offset = dst.sps->ctb_info.columns << (size_log2 * 2);
@@ -4258,7 +4501,7 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	uint32_t num = NUM_ELEM(dst.neighbour_left);
 	h265d_neighbour_t* top = dst.neighbour_top + pos_x * num;
 	for (uint32_t i = 0; i < num; ++i) {
-		top[i].pred_mode_skip = INTRA_DC << 1;
+		top[i].pred_mode = INTRA_DC;
 	}
 	memset(dst.qp_history[0], dst.qpy, sizeof(dst.qp_history));
 	return (dst.sps->ctb_info.rows <= dst.pos_y);
