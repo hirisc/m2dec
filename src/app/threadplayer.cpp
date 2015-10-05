@@ -364,12 +364,12 @@ private:
 
 #include <emmintrin.h>
 
-void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
-	uint8_t* dst1 = dst + (stride >> 1);
+void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int width, int height) {
 	__m128i msk = _mm_shuffle_epi32(_mm_cvtsi32_si128(0x00ff00ff), 0);
-	int width = (stride + 1) >> 1;
+	int dst_width = (width >> 1) & ~15;
+	uint8_t* dst1 = dst + dst_width;
 	do {
-		for (int x = 0; x < width; x += 16) {
+		for (int x = 0; x < dst_width; x += 16) {
 			__m128i d0 = _mm_load_si128((__m128i const *)&src[x * 2]);
 			__m128i d1 = _mm_load_si128((__m128i const *)&src[x * 2 + 16]);
 			__m128i d0l = _mm_and_si128(d0, msk);
@@ -382,8 +382,8 @@ void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int height) {
 			_mm_storeu_si128((__m128i *)&dst1[x], d0);
 		}
 		src += stride;
-		dst += stride;
-		dst1 += stride;
+		dst += width;
+		dst1 += width;
 	} while (--height);
 }
 
@@ -556,7 +556,7 @@ struct UniSurface {
 			id_ = out.id;
 			change(out);
 		}
-		deinterleave(out.chroma, &cbcr_[0], out.width, (out.height - out.crop[3]) >> 1);
+		deinterleave(out.chroma + out.crop[0] + out.width * out.crop[2], &cbcr_[0], out.width, out.width - out.crop[0] - out.crop[1], (out.height - out.crop[2] - out.crop[3]) >> 1);
 		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], out.width, &cbcr_[out.width >> 1], out.width);
 		SDL_RenderClear(renderer_);
 		SDL_RenderCopy(renderer_, texture_, NULL, NULL);
