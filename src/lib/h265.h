@@ -388,10 +388,11 @@ struct pred_info_t {
 };
 
 typedef struct {
-	uint8_t skip : 1;
-	uint8_t intra : 1;
-	uint8_t pred_mode : 6;
-	uint8_t depth;
+	uint16_t intra : 1;
+	uint16_t skip : 1;
+	uint16_t nonzero_coef : 1;
+	uint16_t pred_mode : 6;
+	uint16_t depth : 4;
 	pred_info_t pred;
 } h265d_neighbour_t;
 

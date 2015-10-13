@@ -2057,7 +2057,80 @@ static inline void transform_acNxN(uint8_t* dst, int16_t* coeff, int stride) {
 	}
 }
 
-static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int stride) = {
+static void (* const transform_func[2][4][2][4])(uint8_t *dst, int16_t* coeff, int stride) = {
+	{
+	{
+		{
+			NxNtransform_dconly<4, 7, 1, uint64_t>,
+			NxNtransform_dconly<8, 7, 1, uint64_t>,
+			NxNtransform_dconly<16, 7, 1, uint64_t>,
+			NxNtransform_dconly<32, 7, 1, uint64_t>
+		},
+		{
+			NxNtransform_dconly<4, 7, 2, uint64_t>,
+			NxNtransform_dconly<8, 7, 2, uint64_t>,
+			NxNtransform_dconly<16, 7, 2, uint64_t>,
+			NxNtransform_dconly<32, 7, 2, uint64_t>
+		}
+	},
+	{
+		{
+			transform_horiz<2, 1>,
+			transform_horiz<3, 1>,
+			transform_horiz<4, 1>,
+			transform_horiz<5, 1>
+		},
+		{
+			transform_horiz<2, 2>,
+			transform_horiz<3, 2>,
+			transform_horiz<4, 2>,
+			transform_horiz<5, 2>
+		}
+	},
+	{
+		{
+			transform_vert<2, 1>,
+			transform_vert<3, 1>,
+			transform_vert<4, 1>,
+			transform_vert<5, 1>
+		},
+		{
+			transform_vert<2, 2>,
+			transform_vert<3, 2>,
+			transform_vert<4, 2>,
+			transform_vert<5, 2>
+		}
+	},
+	{
+		{
+#ifdef X86ASM
+			transform_ac4x4,
+			transform_ac8x8,
+			transform_ac16x16,
+			transform_ac32x32
+#else
+			transform_acNxN<2, 1>,
+			transform_acNxN<3, 1>,
+			transform_acNxN<4, 1>,
+			transform_acNxN<5, 1>
+#endif
+		},
+		{
+#ifdef X86ASM
+			transform_ac4x4chroma,
+			transform_ac8x8chroma,
+			transform_ac16x16chroma,
+			transform_ac32x32chroma
+#else
+			transform_acNxN<2, 2>,
+			transform_acNxN<3, 2>,
+			transform_acNxN<4, 2>,
+			transform_acNxN<5, 2>
+#endif
+		}
+	}
+	},
+	{
 	{
 		{
 			transformdst_dconly,
@@ -2127,11 +2200,12 @@ static void (* const transform_func[4][2][4])(uint8_t *dst, int16_t* coeff, int 
 #endif
 		}
 	}
+	}
 };
 
-static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t xy_pos_sum) {
+static inline void transform(int16_t coeff[], uint32_t size_log2, uint8_t* frame, uint32_t stride, int colour, uint32_t xy_pos_sum, bool is_intra) {
 	uint32_t size = 1 << size_log2;
-	transform_func[(size <= xy_pos_sum) * 2 + ((xy_pos_sum & (size - 1)) != 0)][(colour + 1) >> 1][size_log2 - 2](frame + (colour >> 1), coeff, stride);
+	transform_func[is_intra][(size <= xy_pos_sum) * 2 + ((xy_pos_sum & (size - 1)) != 0)][(colour + 1) >> 1][size_log2 - 2](frame + (colour >> 1), coeff, stride);
 }
 
 template <int N>
@@ -2156,7 +2230,7 @@ static inline void skip_transform(int16_t coeff[], uint8_t* frame, int stride, i
 	}
 }
 
-static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour, int pred_idx, uint8_t* frame) {
+static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, int colour, int pred_idx, uint8_t* frame, bool is_intra) {
 	static const uint8_t scan_order[35] = {
 		0, 0, 0, 0, 0, 0,
 		2, 2, 2, 2, 2, 2,
@@ -2221,16 +2295,16 @@ static void residual_coding(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, 
 		num = 15;
 	} while (0 <= --i);
 	if (!transform_skip) {
-		transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
+		transform(dst.coeff_buf, size_log2, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum, is_intra);
 	} else {
 		skip_transform(dst.coeff_buf, frame, dst.sps->ctb_info.stride, colour, xy_pos_sum);
 	}
 }
 
-static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx, uint32_t offset_x, uint32_t offset_y) {
+static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, uint8_t cbf, int idx, int pred_idx, uint32_t offset_x, uint32_t offset_y, bool is_intra) {
 	uint32_t stride = dst.sps->ctb_info.stride;
 	if (cbf & 1) {
-		residual_coding(dst, st, size_log2, 0, pred_idx, dst.luma + offset_y * stride + offset_x);
+		residual_coding(dst, st, size_log2, 0, pred_idx, dst.luma + offset_y * stride + offset_x, is_intra);
 	}
 	if (cbf & 6) {
 		if (2 < size_log2) {
@@ -2243,10 +2317,10 @@ static void transform_unit(h265d_ctu_t& dst, dec_bits& st, uint32_t size_log2, u
 		}
 		int offset_chroma = (offset_y >> 1) * stride + offset_x;
 		if (cbf & 4) {
-			residual_coding(dst, st, size_log2, 1, pred_idx, dst.chroma + offset_chroma);
+			residual_coding(dst, st, size_log2, 1, pred_idx, dst.chroma + offset_chroma, false);
 		}
 		if (cbf & 2) {
-			residual_coding(dst, st, size_log2, 2, pred_idx, dst.chroma + offset_chroma);
+			residual_coding(dst, st, size_log2, 2, pred_idx, dst.chroma + offset_chroma, false);
 		}
 	}
 }
@@ -2968,7 +3042,14 @@ static void record_block_boundary(h265d_ctu_t& ctu, int size_log2, int offset_x,
 	}
 }
 
-static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, uint32_t depth, uint8_t upper_cbf_cbcr, int offset_x, int valid_x, int offset_y, int valid_y, int idx, int pred_idx, bool is_intra) {
+static void update_nonzero_coef(h265d_ctu_t& ctu, int size_log2, int offset_x, int offset_y, uint32_t unavail, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
+		return;
+	}
+	record_block_boundary(ctu, size_log2, offset_x, offset_y, unavail, 1);
+}
+
+static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, uint32_t depth, uint8_t upper_cbf_cbcr, int offset_x, int valid_x, int offset_y, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top, int idx, int pred_idx, bool is_intra) {
 	uint32_t split;
 	if (dst.sps->ctb_info.transform_log2 < size_log2) {
 		split = 1;
@@ -3025,10 +3106,11 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 		}
 		depth += 1;
 		uint32_t block_len = 1 << size_log2;
-		transform_tree(dst, st, size_log2, unavail, depth, cbf, offset_x, valid_x, offset_y, valid_y, 0, pi0, is_intra);
-		transform_tree(dst, st, size_log2, unavail & ~1, depth, cbf, offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), 1, pi1, is_intra);
-		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, 2, pi2, is_intra);
-		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), 3, pi3, is_intra);
+		int blen = 1 << (size_log2 - 2);
+		transform_tree(dst, st, size_log2, unavail, depth, cbf, offset_x, valid_x, offset_y, valid_y, left, top, 0, pi0, is_intra);
+		transform_tree(dst, st, size_log2, unavail & ~1, depth, cbf, offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left + blen, top, 1, pi1, is_intra);
+		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left, top + blen, 2, pi2, is_intra);
+		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + blen, top + blen, 3, pi3, is_intra);
 	} else {
 		if (is_intra) {
 			intra_prediction(dst, size_log2, offset_x, (unavail & 2) ? -1 : valid_x, offset_y, (unavail & 1) ? -1 : valid_y, pred_idx);
@@ -3041,9 +3123,14 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 		}
 		qpy_update(dst, &dst.qp_history[0][offset_y >> 2], &dst.qp_history[1][offset_x >> 2], qp_delta);
 		if (cbf) {
-			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_x, offset_y);
+			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_x, offset_y, is_intra);
+			if (!is_intra && (cbf & 1)) {
+				update_nonzero_coef(dst, size_log2, offset_x, offset_y, unavail, left, top);
+			}
 		}
-		record_block_boundary(dst, size_log2, offset_x, offset_y, unavail, 2);
+		if (is_intra) {
+			record_block_boundary(dst, size_log2, offset_x, offset_y, unavail, 2);
+		}
 		qpy_fill(&dst.qp_history[0][offset_y >> 2], &dst.qp_history[1][offset_x >> 2], dst.qpy, 1 << (size_log2 - 2));
 	}
 }
@@ -3061,12 +3148,14 @@ static inline void cu_intra_pred_mode_fill(h265d_neighbour_t dst0[], h265d_neigh
 
 static inline void cu_inter_skip_mode_fill(h265d_neighbour_t dst0[], h265d_neighbour_t dst1[], uint8_t skip, uint32_t num) {
 	for (uint32_t i = 0; i < num; ++i) {
-		dst0[i].pred_mode = INTRA_DC;
-		dst0[i].skip = skip;
 		dst0[i].intra = 0;
-		dst1[i].pred_mode = INTRA_DC;
-		dst1[i].skip = skip;
+		dst0[i].skip = skip;
+		dst0[i].nonzero_coef = 0;
+		dst0[i].pred_mode = INTRA_DC;
 		dst1[i].intra = 0;
+		dst1[i].skip = skip;
+		dst1[i].nonzero_coef = 0;
+		dst1[i].pred_mode = INTRA_DC;
 	}
 }
 
@@ -3338,17 +3427,18 @@ static inline void interpolate_chroma_umv(const T0* ref, T1* out, int width, int
 	int c1 = inter_chroma_coef[frac][1];
 	int c2 = inter_chroma_coef[frac][2];
 	int c3 = inter_chroma_coef[frac][3];
+	width >>= 1;
 	for (int y = 0; y < height; y++) {
 		const T0* in = ref + refyinc * CLAMPX(ypos + y, ypos_max);
 		int a0, b0, a1, b1, a2, b2;
 		load2pix_umv(in, xpos, xpos_max, a0, b0);
 		load2pix_umv(in, xpos + 1, xpos_max, a1, b1);
 		load2pix_umv(in, xpos + 2, xpos_max, a2, b2);
-		for (int x = 0; x < width; x += 2) {
+		for (int x = 0; x < width; x++) {
 			int a3, b3;
-			load2pix_umv(in, xpos + 3, xpos_max, a3, b3);
-			out[x] = (c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3) >> shift;
-			out[x + 1] = (c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3) >> shift;
+			load2pix_umv(in, x + xpos + 3, xpos_max, a3, b3);
+			out[x * 2] = (c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3) >> shift;
+			out[x * 2 + 1] = (c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3) >> shift;
 			a0 = a1;
 			b0 = b1;
 			a1 = a2;
@@ -3365,12 +3455,10 @@ static void inter_pred_chroma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, in
 	int mvyint = mvy >> 3;
 	int fracx = mvx & 7;
 	int fracy = mvy & 7;
-	xpos += mvxint;
-	ypos += mvyint;
+	xpos = (xpos >> 1) + mvxint;
+	ypos = (ypos >> 1) + mvyint;
 	height >>= 1;
 	if (1) {//((xpos < 1) || (xmax <= xpos + width + 2) || (ypos < 1) || (ymax <= ypos + height + 2)) {
-		xpos >>= 1;
-		ypos >>= 1;
 		xmax >>= 1;
 		ymax >>= 1;
 		interpolate_chroma_umv(ref, tmp, width, height + 1 + 2, stride, width, xpos - 1, ypos - 1, xmax, ymax, 0, mvx & 7);
@@ -3411,34 +3499,39 @@ static void merge_pred(h265d_ctu_t& dst, const pred_info_t& pred, uint32_t unava
 	}
 }
 
-static void add_merge_candidate(const pred_info_t* list[], int& idx, const h265d_neighbour_t* neighbour, int offset) {
-	if (!neighbour[offset].intra) {
+static bool merge_available(int cx, int cy, int px, int py, int shift) {
+	return ((cx >> shift) != (px >> shift)) || ((cy >> shift) != (py >> shift));
+}
+
+static void add_merge_candidate(const pred_info_t* list[], int& idx, int curr_x, int curr_y, int neighbour_x, int neighbour_y, int par_merge, const h265d_neighbour_t& neighbour) {
+	if (merge_available(curr_x, curr_y, neighbour_x, neighbour_y, par_merge) && !neighbour.intra) {
 		for (int i = 0; i < idx; ++i) {
-			if (!memcmp(&neighbour[offset].pred, list[i], sizeof(*list[0]))) {
+			if (!memcmp(&neighbour.pred, list[i], sizeof(*list[0]))) {
 				return;
 			}
 		}
-		list[idx++] = &neighbour[offset].pred;
+		list[idx++] = &neighbour.pred;
 	}
 }
 
 static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	int max = ctu.slice_header->body.max_num_merge_cand;
 	int idx = (1 < max) ? merge_idx(ctu.cabac, st) : 0;
+	int par_merge = ctu.pps->log2_parallel_merge_level_minus2 + 2;
 	const pred_info_t* list[5];
 	int num = 0;
 	if (!(unavail & 1)) {
-		add_merge_candidate(list, num, left, (height >> 2) - 1);
+		add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height - 1, par_merge, left[(height >> 2) - 1]);
 	}
 	if (num <= idx) {
 		if (!(unavail & 2)) {
-			add_merge_candidate(list, num, top, (width >> 2) - 1);
+			add_merge_candidate(list, num, offset_x, offset_y, offset_x + width - 1, offset_y - 1, par_merge, top[(width >> 2) - 1]);
 		}
 		if (!(unavail & 4)) {
-			add_merge_candidate(list, num, left, height >> 2);
+			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
 		}
 		if (!(unavail & 8)) {
-			add_merge_candidate(list, num, top, width >> 2);
+			add_merge_candidate(list, num, offset_x, offset_y, offset_x + width, offset_y - 1, par_merge, top[width >> 2]);
 		}
 	}
 	if (num <= idx) {
@@ -3712,7 +3805,7 @@ static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d
 
 static void pred_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	cu_header_intra(dst, st, size_log2, left, top);
-	transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, true);
+	transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, left, top, 0, 0, true);
 }
 
 static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
@@ -3726,12 +3819,12 @@ static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t u
 			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
 		} else {
 			bool rqt_root_cbf_inferred;
-			cu_inter_skip_mode_fill(left, top, 0, 1 << (size_log2 - 2));
 			h265d_inter_part_mode_t mode = prediction_unit_cases(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top, rqt_root_cbf_inferred);
+			cu_inter_skip_mode_fill(left, top, 0, 1 << (size_log2 - 2));
 			if (rqt_root_cbf_inferred || rqt_root_cbf(dst.cabac, st)) {
 				zero_scan_order(dst);
 				dst.intra_split = (mode != PART_2Nx2N) && (dst.sps->max_transform_hierarchy_depth_inter == 0);
-				transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, 0, 0, false);
+				transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, left, top, 0, 0, false);
 			}
 		}
 	}
