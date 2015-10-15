@@ -3224,7 +3224,7 @@ struct round8 {
 
 template <typename T0, typename T1, typename F0, typename F1>
 static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int xpos, int ypos, int shift, F0 Fir, F1 Round) {
-	in = in + ypos * refyinc + xpos;
+	in = in + ypos * refyinc + xpos * refxinc;
 	for (int y = 0; y < height; y++) {
 		int a0 = in[0];
 		int a1 = in[refxinc];
@@ -3295,9 +3295,9 @@ static void interpolate_luma_horiz(uint8_t* dst, int16_t buf[], const uint8_t* r
 template <int T_GAP, int B_GAP, typename F0>
 static void interpolate_luma_vert(uint8_t* dst, int16_t buf[], const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Vertical) {
 	if ((xpos < 0) || (xmax <= xpos + width) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
-		interpolate_luma_umv(buf, dst, width, height, stride, 1, stride, 1, xpos, ypos - T_GAP, xmax, ymax, 12, Vertical, round8());
+		interpolate_luma_umv(ref, dst, height, width, stride, 1, stride, 1, ypos - T_GAP, xpos, ymax, xmax, 6, Vertical, round8());
 	} else {
-		interpolate_luma_no_umv(buf, dst, width, height, stride, 1, stride, 1, xpos, ypos - T_GAP, 12, Vertical, round8());
+		interpolate_luma_no_umv(ref, dst, height, width, stride, 1, stride, 1, ypos - T_GAP, xpos, 6, Vertical, round8());
 	}
 }
 
@@ -3308,7 +3308,7 @@ static void interpolate_luma(uint8_t* dst, int16_t buf[], const uint8_t* ref, in
 	} else {
 		interpolate_luma_no_umv(ref, buf, width, height + T_GAP + B_GAP, 1, stride, 1, width, xpos - L_GAP, ypos - T_GAP, 0, Horizontal, noround());
 	}
-	interpolate_luma_no_umv(buf, dst, width, height, width, 1, stride, 1, 0, 0, 12, Vertical, round8());
+	interpolate_luma_no_umv(buf, dst, height, width, width, 1, stride, 1, 0, 0, 12, Vertical, round8());
 }
 
 static void inter_pred_luma(uint8_t* dst, int16_t* tmp, const uint8_t* ref, int stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
@@ -3527,11 +3527,11 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 		if (!(unavail & 2)) {
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x + width - 1, offset_y - 1, par_merge, top[(width >> 2) - 1]);
 		}
-		if (!(unavail & 4)) {
-			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
-		}
 		if (!(unavail & 8)) {
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x + width, offset_y - 1, par_merge, top[width >> 2]);
+		}
+		if (!(unavail & 4)) {
+			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
 		}
 	}
 	if (num <= idx) {
@@ -3573,23 +3573,38 @@ struct longterm_from_reflist {
 
 template <typename T, typename F>
 static inline bool same_attribute(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, T value, F GetValue) {
+	if (neighbour.intra) {
+		return false;
+	}
 	int ref_idx = neighbour.pred.ref_idx[lx];
 	return (0 <= ref_idx) && (GetValue(ctu.slice_header->body.ref_list[lx][ref_idx]) == value);
 }
 
-static bool mvp1st(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[]) {
+static void add_mvp(const int16_t mv[], int16_t mvp[][2], int& idx) {
+	int mvx = mv[0];
+	int mvy = mv[1];
+	for (int i = 0; i < idx; ++i) {
+		if ((mvp[i][0] == mvx) && (mvp[i][1] == mvy)) {
+			return;
+		}
+	}
+	mvp[idx][0] = mvx;
+	mvp[idx][1] = mvy;
+	idx++;
+}
+
+static bool mvp1st(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[][2], int& idx) {
 	if (!same_attribute(ctu, neighbour, lx, refpoc, poc_from_reflist())) {
 		lx ^= 1;
 		if (!same_attribute(ctu, neighbour, lx, refpoc, poc_from_reflist())) {
 			return false;
 		}
 	}
-	mvp[0] = neighbour.pred.mvd[lx][0];
-	mvp[1] = neighbour.pred.mvd[lx][1];
+	add_mvp(neighbour.pred.mvd[lx], mvp, idx);
 	return true;
 }
 
-static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, bool longterm, int16_t mvp[]) {
+static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, bool longterm, int16_t mvp[][2], int& idx) {
 	if (!same_attribute(ctu, neighbour, lx, longterm, longterm_from_reflist())) {
 		lx ^= 1;
 		if (!same_attribute(ctu, neighbour, lx, longterm, longterm_from_reflist())) {
@@ -3609,45 +3624,45 @@ static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx,
 			int mvx = neighbour.pred.mvd[lx][i] * scale;
 			int mvabs = (abs(mvx) + 127) >> 8;
 			int mv = (mvx < 0) ? -mvabs : mvabs;
-			mvp[i] = CLIP3(-32768, 32767, mv);
+			mvp[idx][i] = CLIP3(-32768, 32767, mv);
 		}
+		idx++;
 	}
-	mvp[0] = neighbour.pred.mvd[lx][0];
-	mvp[1] = neighbour.pred.mvd[lx][1];
 	return true;
 }
 
-static int mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, h265d_neighbour_t* neighbour, int span, int lx, int ref_idx, int16_t mvp[]) {
-	if ((unavail & 5) != 5) {
-		int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
-		bool matched = false;
-		if (!(unavail & 4)) {
-			matched = mvp1st(ctu, neighbour[span], lx, refpoc, mvp);
+static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, h265d_neighbour_t* neighbour, int span, int lx, int ref_idx, bool above, int16_t mvp[][2], int& idx) {
+	uint32_t dir_flag = above ? (unavail >> 1) : unavail;
+	int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
+	bool matched = false;
+	if (!(dir_flag & 4)) {
+		matched = mvp1st(ctu, neighbour[span], lx, refpoc, mvp, idx);
+	}
+	if (!matched && !(dir_flag & 1)) {
+		matched = mvp1st(ctu, neighbour[span - 1], lx, refpoc, mvp, idx);
+	}
+	if (!matched && !(unavail & 3)) {
+		matched = mvp1st(ctu, neighbour[-1], lx, refpoc, mvp, idx);
+	}
+	if (!matched) {
+		bool longterm = ctu.slice_header->body.ref_list[lx][ref_idx].is_longterm;
+		if (!(dir_flag & 4)) {
+			matched = mvp2nd(ctu, neighbour[span], lx, refpoc, longterm, mvp, idx);
 		}
-		if (!matched && !(unavail & 1)) {
-			matched = mvp1st(ctu, neighbour[span - 1], lx, refpoc, mvp);
+		if (!matched && !(dir_flag & 1)) {
+			matched = mvp2nd(ctu, neighbour[span - 1], lx, refpoc, longterm, mvp, idx);
 		}
-		if (!matched) {
-			bool longterm = ctu.slice_header->body.ref_list[lx][ref_idx].is_longterm;
-			if (!(unavail & 4)) {
-				matched = mvp2nd(ctu, neighbour[span], lx, refpoc, longterm, mvp);
-			}
-			if (!matched && !(unavail & 1)) {
-				matched = mvp2nd(ctu, neighbour[span - 1], lx, refpoc, longterm, mvp);
-			}
-		}
-		if (matched) {
-			return 1;
+		if (!matched && !(unavail & 3)) {
+			matched = mvp2nd(ctu, neighbour[-1], lx, refpoc, longterm, mvp, idx);
 		}
 	}
-	return 0;
 }
 
 static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, int lx, int ref_idx, int mvp_idx, const int16_t mvd[]) {
 	int16_t mvplist[2][2];
 	int mvp_num = 0;
-	mvp_num += mvp_one_dir(ctu, unavail | 0x10, left, height >> 2, lx, ref_idx, mvplist[0]);
-	mvp_num += mvp_one_dir(ctu, (unavail >> 1), top, width >> 2, lx, ref_idx, mvplist[mvp_num]);
+	mvp_one_dir(ctu, unavail, left, height >> 2, lx, ref_idx, false, mvplist, mvp_num);
+	mvp_one_dir(ctu, unavail, top, width >> 2, lx, ref_idx, true, mvplist, mvp_num);
 	if (mvp_num < 2) {
 		memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
 	}
@@ -3707,6 +3722,11 @@ static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint3
 	}
 }
 
+#define DIV4ADJ0(inv) (((inv) & 3) | (((inv) & 3) << 2))
+#define DIV4ADJ1(inv) (((inv) & ~1) | 4)
+#define DIV4ADJ2(inv) ((inv) & ~10)
+#define DIV4ADJ3(inv) (12)
+
 static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top, bool& rqt_root_cbf_inferred) {
 	h265d_inter_part_mode_t mode = part_mode_inter(dst.cabac, st, size_log2, dst.sps->ctb_info.size_log2_min, dst.sps->amp_enabled_flag);
 	int len = 1 << size_log2;
@@ -3721,39 +3741,39 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxN:
 		len_s = len >> 1;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top);
+		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top);
 		break;
 	case PART_Nx2N:
 		len_s = len >> 1;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3));
+		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3));
 		break;
 	case PART_NxN:
 		len_s = len >> 1;
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len_s, len_s, left, top + (len >> 3));
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len_s, len_s, left + (len >> 3), top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y + len_s, len_s, len_s, left + (len >> 3), top + (len >> 3));
+		prediction_unit(dst, st, size_log2, DIV4ADJ0(unavail), offset_x, offset_y, len_s, len_s, left, top);
+		prediction_unit(dst, st, size_log2, DIV4ADJ1(unavail), offset_x + len_s, offset_y, len_s, len_s, left, top + (len >> 3));
+		prediction_unit(dst, st, size_log2, DIV4ADJ2(unavail), offset_x, offset_y + len_s, len_s, len_s, left + (len >> 3), top);
+		prediction_unit(dst, st, size_log2, DIV4ADJ3(unavail), offset_x + len_s, offset_y + len_s, len_s, len_s, left + (len >> 3), top + (len >> 3));
 		break;
 	case PART_2NxnU:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top);
+		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top);
 		break;
 	case PART_2NxnD:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len - len_s, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top);
+		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top);
 		break;
 	case PART_nLx2N:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4));
+		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4));
 		break;
 	case PART_nRx2N:
 		len_s = len >> 2;
 		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len - len_s, len, left, top);
-		prediction_unit(dst, st, size_log2, unavail, offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2));
+		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2));
 		break;
 	}
 	return mode;
@@ -3852,10 +3872,10 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		size_log2 -= 1;
 		uint32_t block_len = 1 << size_log2;
 		uint32_t info_offset = 1 << (size_log2 - 2);
-		quad_tree(dst, st, size_log2, unavail, offset_x, valid_x, offset_y, valid_y, left, top);
-		quad_tree(dst, st, size_log2, (unavail & ~1) | 4, offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
-		quad_tree(dst, st, size_log2, unavail & ~10, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
-		quad_tree(dst, st, size_log2, 12, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
+		quad_tree(dst, st, size_log2, DIV4ADJ0(unavail), offset_x, valid_x, offset_y, valid_y, left, top);
+		quad_tree(dst, st, size_log2, DIV4ADJ1(unavail), offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset);
+		quad_tree(dst, st, size_log2, DIV4ADJ2(unavail), offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top);
+		quad_tree(dst, st, size_log2, DIV4ADJ3(unavail), offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset);
 	} else {
 		coding_unit_header(dst, st, size_log2, unavail, left, top);
 		if (dst.slice_header->body.slice_type < 2) {
