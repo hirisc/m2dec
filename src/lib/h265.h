@@ -10,6 +10,7 @@
 #include "m2d.h"
 
 static const int H265D_MAX_FRAME_NUM = 16;
+static const int H265D_NEIGHBOUR_NUM = 16;
 
 typedef struct {
 	uint8_t sub_layer_profile_first8bit;
@@ -451,7 +452,7 @@ typedef struct h265d_ctu_t {
 	int16_t *coeff_buf;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
-	h265d_neighbour_t neighbour_left[16];
+	h265d_neighbour_t neighbour_left[H265D_NEIGHBOUR_NUM + 2];
 	h265d_neighbour_t* neighbour_top; // use 16 bytes for each CTU
 	uint8_t qp_history[2][16];
 	const h265d_scaling_func_t* scaling_func;
@@ -467,6 +468,7 @@ typedef struct h265d_ctu_t {
 	h265d_sao_vlines_t sao_vlines;
 	h265d_sao_hlines_t sao_hlines[2][2];
 	uint8_t* sao_signbuf;
+	int16_t pred_buffer[2][32 * 32];
 	int16_t coeff_buffer[32 * 32 * 2 + 7];
 } h265d_ctu_t;
 
