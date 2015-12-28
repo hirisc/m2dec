@@ -3189,7 +3189,68 @@ static void copy_predinfo(h265d_neighbour_t* neighbour, int len, const h265d_nei
 	}
 }
 
-//(dst, tmp, ref, src_stride, width, height, xpos, ypos, xmax, ymax
+#if 1
+#define INTER7(a0, a1, a2, a3, a4, a5, a6) (((a1) + (a4) * 4) * 4 + (a3) * 58 + (a4) + (a6) - ((a2) * 2 + (a5)) * 5 - (a0))
+#else
+static inline int INTER7(int a0, int a1, int a2, int a3, int a4, int a5, int a6) {
+//	return a1 * 4 - a2 * 10 + a3 * 58 + a4 * 17 - a5 * 5 + a6 - a0;
+	return (a1 + a4 * 4) * 4 + a3 * 58 + a4 + a6 - (a2 * 2 + a5) * 5 - a0;
+}
+#endif
+struct inter_luma_fir1 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
+		return INTER7(a0, a1, a2, a3, a4, a5, a6);
+	}
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return INTER7(a0, a1, a2, a3, a4, a5, a6);
+	}
+};
+
+struct inter_luma_fir2 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return 4 * ((a1 + a6) + 10 * (a3 + a4)) - 11 * (a2 + a5) - (a0 + a7);
+	}
+};
+
+struct inter_luma_fir3 {
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
+		return INTER7(a6, a5, a4, a3, a2, a1, a0);
+	}
+	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
+		return INTER7(a6, a5, a4, a3, a2, a1, a0);
+	}
+};
+
+#define CLAMPX(x, xmax) (((x) < 0) ? 0 : (((xmax) <= (x)) ? (xmax) - 1 : (x)))
+
+template <int SHIFT, int RND>
+struct store_pix {
+	template <typename T>
+	void operator()(T& dst, int val) const {
+		dst = (val + (RND ? (1 << (SHIFT - 1)) : 0)) >> SHIFT;
+	}
+};
+
+template <int SHIFT>
+struct add_store_pix {
+	template <typename T>
+	void operator()(T& dst, int val) const {
+		dst = (dst + val + (1 << (SHIFT - 1))) >> SHIFT;
+	}
+};
+
+struct address_noumv {
+	int operator()(int x, int xmax) const {
+		return x;
+	}
+};
+
+struct address_umv {
+	int operator()(int x, int xmax) const {
+		return CLAMPX(x, xmax);
+	}
+};
+
 template <typename T0, typename T1>
 static void interpolate00(T0* dst, int16_t tmp[], const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax) {
 	if (((unsigned)xmax <= (unsigned)xpos) || ((unsigned)ymax <= (unsigned)ypos)) {
@@ -3200,55 +3261,63 @@ static void interpolate00(T0* dst, int16_t tmp[], const T1* ref, int src_stride,
 	}
 }
 
-struct inter_luma_fir1 {
-	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
-		return -a0 + 4 * a1 - 10 * a2 + 58 * a3 + 17 * a4 - 5 * a5 + a6;
+struct interp_luma_v7update {
+	template <typename T0, typename F0, typename F1>
+	void operator()(int16_t* hl[], T0* out, int x, int h0, F0 Vert, F1 Store) const {
+		Store(out[x], Vert(hl[0][x], hl[1][x], hl[2][x], hl[3][x], hl[4][x], hl[5][x], h0));
+		hl[0][x] = h0;
 	}
 };
 
-struct inter_luma_fir2 {
-	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
-		return -(a0 + a7) + 4 * (a1 + a6) - 11 * (a2 + a5) + 40 * (a3 + a4);
+struct interp_luma_v8update {
+	template <typename T0, typename F0, typename F1>
+	void operator()(int16_t* hl[], T0* out, int x, int h0, F0 Vert, F1 Store) const {
+		Store(out[x], Vert(hl[0][x], hl[1][x], hl[2][x], hl[3][x], hl[4][x], hl[5][x], hl[6][x], h0));
+		hl[0][x] = h0;
 	}
 };
 
-struct inter_luma_fir3 {
-	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6, int a7) const {
-		return a0 - 5 * a1 + 17 * a2 + 58 * a3 - 10 * a4 + 4 * a5 - a6;
-	}
-};
-
-template <int SHIFT>
-struct noround {
-	int operator()(int val) const {
-		return val >> SHIFT;
-	}
-};
-
-template <int SHIFT, int RND>
-struct roundval {
-	int operator()(int val) const {
-		return (val + (RND ? (1 << (SHIFT - 1)) : 0)) >> SHIFT;
-	}
-};
-
-template <typename T0, typename T1, typename F0, typename F1>
-static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int xpos, int ypos, F0 Fir, F1 Round) {
-	in = in + ypos * refyinc + xpos * refxinc;
-	for (int y = 0; y < height; y++) {
-		int a0 = in[0];
-		int a1 = in[refxinc];
-		int a2 = in[refxinc * 2];
-		int a3 = in[refxinc * 3];
-		int a4 = in[refxinc * 4];
-		int a5 = in[refxinc * 5];
-		int a6 = in[refxinc * 6];
-		in += refxinc * 7;
+struct interpolate_lumahline7_base {
+	template <typename T0, typename T1, typename F0, typename F1, typename F2>
+	void operator()(const T0* in, T1* out, int width, int src_xstride, int src_ystride, int dst_xstride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Address, F1 Fir, F2 Store) const {
+		in = in + src_ystride * Address(ypos, ypos_max);
+		int a0 = in[Address(xpos, xpos_max) * src_xstride];
+		int a1 = in[Address(xpos + 1, xpos_max) * src_xstride];
+		int a2 = in[Address(xpos + 2, xpos_max) * src_xstride];
+		int a3 = in[Address(xpos + 3, xpos_max) * src_xstride];
+		int a4 = in[Address(xpos + 4, xpos_max) * src_xstride];
+		int a5 = in[Address(xpos + 5, xpos_max) * src_xstride];
 		for (int x = 0; x < width; x += 2) {
-			int a7 = in[refxinc * x];
-			int a8 = in[refxinc * (x + 1)];
-			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6, a7));
-			out[dstxinc * (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7, a8));
+			int a6 = in[Address(xpos + x + 6, xpos_max) * src_xstride];
+			int a7 = in[Address(xpos + x + 7, xpos_max) * src_xstride];
+			Store(out[x * dst_xstride], Fir(a0, a1, a2, a3, a4, a5, a6));
+			Store(out[(x + 1) * dst_xstride], Fir(a1, a2, a3, a4, a5, a6, a7));
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
+		}
+	}
+};
+
+struct interpolate_lumahline8_base {
+	template <typename T0, typename T1, typename F0, typename F1, typename F2>
+	void operator()(const T0* in, T1* out, int width, int src_xstride, int src_ystride, int dst_xstride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Address, F1 Fir, F2 Store) const {
+		in = in + src_ystride * Address(ypos, ypos_max);
+		int a0 = in[Address(xpos, xpos_max) * src_xstride];
+		int a1 = in[Address(xpos + 1, xpos_max) * src_xstride];
+		int a2 = in[Address(xpos + 2, xpos_max) * src_xstride];
+		int a3 = in[Address(xpos + 3, xpos_max) * src_xstride];
+		int a4 = in[Address(xpos + 4, xpos_max) * src_xstride];
+		int a5 = in[Address(xpos + 5, xpos_max) * src_xstride];
+		int a6 = in[Address(xpos + 6, xpos_max) * src_xstride];
+		for (int x = 0; x < width; x += 2) {
+			int a7 = in[Address(xpos + x + 7, xpos_max) * src_xstride];
+			int a8 = in[Address(xpos + x + 8, xpos_max) * src_xstride];
+			Store(out[x * dst_xstride], Fir(a0, a1, a2, a3, a4, a5, a6, a7));
+			Store(out[(x + 1) * dst_xstride], Fir(a1, a2, a3, a4, a5, a6, a7, a8));
 			a0 = a2;
 			a1 = a3;
 			a2 = a4;
@@ -3257,30 +3326,54 @@ static inline void interpolate_luma_no_umv(const T0* in, T1* out, int width, int
 			a5 = a7;
 			a6 = a8;
 		}
-		in = in + refyinc - refxinc * 7;
-		out += dstyinc;
 	}
-}
+};
 
-#define CLAMPX(x, xmax) (((x) < 0) ? 0 : (((xmax) <= (x)) ? (xmax) - 1 : (x)))
-
-template <typename T0, typename T1, typename F0, typename F1>
-static inline void interpolate_luma_umv(const T0* ref, T1* out, int width, int height, int refxinc, int refyinc, int dstxinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, F0 Fir, F1 Round) {
-	for (int y = 0; y < height; y++) {
-		int yp = CLAMPX(ypos + y, ypos_max);
-		const T0* in = ref + refyinc * yp;
-		int a0 = in[refxinc * CLAMPX(xpos, xpos_max)];
-		int a1 = in[refxinc * CLAMPX(xpos + 1, xpos_max)];
-		int a2 = in[refxinc * CLAMPX(xpos + 2, xpos_max)];
-		int a3 = in[refxinc * CLAMPX(xpos + 3, xpos_max)];
-		int a4 = in[refxinc * CLAMPX(xpos + 4, xpos_max)];
-		int a5 = in[refxinc * CLAMPX(xpos + 5, xpos_max)];
-		int a6 = in[refxinc * CLAMPX(xpos + 6, xpos_max)];
+struct interpolate_lumahline7v_base {
+	template <typename T0, typename T1, typename F0, typename F1, typename F2, typename F3, typename F4>
+	void operator()(const T0* in, int16_t* hl[], T1* out, int width, int stride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Address, F1 Horiz, F2 Vert, F3 Store, F4 Update) {
+		in = in + stride * Address(ypos, ypos_max);
+		int a0 = in[Address(xpos, xpos_max)];
+		int a1 = in[Address(xpos + 1, xpos_max)];
+		int a2 = in[Address(xpos + 2, xpos_max)];
+		int a3 = in[Address(xpos + 3, xpos_max)];
+		int a4 = in[Address(xpos + 4, xpos_max)];
+		int a5 = in[Address(xpos + 5, xpos_max)];
 		for (int x = 0; x < width; x += 2) {
-			int a7 = in[refxinc * CLAMPX(xpos + x + 7, xpos_max)];
-			int a8 = in[refxinc * CLAMPX(xpos + x + 8, xpos_max)];
-			out[dstxinc * x] = Round(Fir(a0, a1, a2, a3, a4, a5, a6, a7));
-			out[dstxinc* (x + 1)] = Round(Fir(a1, a2, a3, a4, a5, a6, a7, a8));
+			int a6 = in[Address(xpos + x + 6, xpos_max)];
+			int a7 = in[Address(xpos + x + 7, xpos_max)];
+			int h0 = Horiz(a0, a1, a2, a3, a4, a5, a6);
+			Update(hl, out, x, h0, Vert, Store);
+			int h1 = Horiz(a1, a2, a3, a4, a5, a6, a7);
+			Update(hl, out, x + 1, h1, Vert, Store);
+			a0 = a2;
+			a1 = a3;
+			a2 = a4;
+			a3 = a5;
+			a4 = a6;
+			a5 = a7;
+		}
+	}
+};
+
+struct interpolate_lumahline8v_base {
+	template <typename T0, typename T1, typename F0, typename F1, typename F2, typename F3, typename F4>
+	void operator()(const T0* in, int16_t* hl[], T1* out, int width, int stride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Address, F1 Horiz, F2 Vert, F3 Store, F4 Update) {
+		in = in + stride * Address(ypos, ypos_max);
+		int a0 = in[Address(xpos, xpos_max)];
+		int a1 = in[Address(xpos + 1, xpos_max)];
+		int a2 = in[Address(xpos + 2, xpos_max)];
+		int a3 = in[Address(xpos + 3, xpos_max)];
+		int a4 = in[Address(xpos + 4, xpos_max)];
+		int a5 = in[Address(xpos + 5, xpos_max)];
+		int a6 = in[Address(xpos + 6, xpos_max)];
+		for (int x = 0; x < width; x += 2) {
+			int a7 = in[Address(xpos + x + 7, xpos_max)];
+			int a8 = in[Address(xpos + x + 8, xpos_max)];
+			int h0 = Horiz(a0, a1, a2, a3, a4, a5, a6, a7);
+			Update(hl, out, x, h0, Vert, Store);
+			int h1 = Horiz(a1, a2, a3, a4, a5, a6, a7, a8);
+			Update(hl, out, x + 1, h1, Vert, Store);
 			a0 = a2;
 			a1 = a3;
 			a2 = a4;
@@ -3289,40 +3382,60 @@ static inline void interpolate_luma_umv(const T0* ref, T1* out, int width, int h
 			a5 = a7;
 			a6 = a8;
 		}
-		out += dstyinc;
+	}
+};
+
+template <typename T0, typename T1, typename F0, typename F1, typename F2, typename F3>
+static inline void interpolate_luma1hline_base(const T0* in, T1* out, int width, int src_xstride, int src_ystride, int dst_xstride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Interp, F1 Address, F2 Fir, F3 Store) {
+	Interp(in, out, width, src_xstride, src_ystride, dst_xstride, xpos, ypos, xpos_max, ypos_max, Address, Fir, Store);
+}
+
+template <typename T0, typename T1, typename F0, typename F1, typename F2, typename F3, typename F4, typename F5>
+static inline void interpolate_luma1hline_vert_base(const T0* in, int16_t* hl[], T1* out, int width, int stride, int xpos, int ypos, int xpos_max, int ypos_max, F0 Interp, F1 Address, F2 Horiz, F3 Vert, F4 Store, F5 Update) {
+	Interp(in, hl, out, width, stride, xpos, ypos, xpos_max, ypos_max, Address, Horiz, Vert, Store, Update);
+}
+
+template <int N, typename T0, typename T1, typename F0, typename F1, typename F2, typename F3, typename F4, typename F5, typename F6>
+static inline void interpolate_luma_base(const T0* in, T1* out, int16_t tmp[], int width, int height, int src_stride, int dst_stride, int xpos, int ypos, int xmax, int ymax, F0 Hline, F1 HVline, F2 Address, F3 Horiz, F4 Vert, F5 Store, F6 Update) {
+	int16_t* hlines[N - 1];
+	for (int y = 0; y < (N - 1); ++y) {
+		hlines[y] = tmp + y * width;
+		interpolate_luma1hline_base(in, tmp + y * width, width, 1, src_stride, 1, xpos, ypos + y, xmax, ymax, Hline, Address, Horiz, store_pix<0, 0>());
+	}
+	ypos += (N - 1);
+	for (int y = 0; y < height; ++y) {
+		interpolate_luma1hline_vert_base(in, hlines, out + dst_stride * y, width, src_stride, xpos, ypos + y, xmax, ymax, HVline, Address, Horiz, Vert, Store, Update);
+		std::rotate(hlines, hlines + 1, hlines + N - 1);
 	}
 }
 
-template <int L_GAP, int R_GAP, typename T, typename F0, typename F1>
-static void interpolate_luma_horiz(T* dst, int16_t buf[], const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal, F1 Store) {
-	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < 0) || (ymax <= ypos + height)) {
-		interpolate_luma_umv(ref, dst, width, height, 1, src_stride, 1, dst_stride, xpos - L_GAP, ypos, xmax, ymax, Horizontal, Store);
-	} else {
-		interpolate_luma_no_umv(ref, dst, width, height, 1, src_stride, 1, dst_stride, xpos - L_GAP, ypos, Horizontal, Store);
-	}
-}
-
-template <int T_GAP, int B_GAP, typename T, typename F0, typename F1>
-static void interpolate_luma_vert(T* dst, int16_t buf[], const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Vertical, F1 Store) {
-	if ((xpos < 0) || (xmax <= xpos + width) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
-		interpolate_luma_umv(ref, dst, height, width, src_stride, 1, dst_stride, 1, ypos - T_GAP, xpos, ymax, xmax, Vertical, Store);
-	} else {
-		interpolate_luma_no_umv(ref, dst, height, width, src_stride, 1, dst_stride, 1, ypos - T_GAP, xpos, Vertical, Store);
-	}
-}
-
-template <int L_GAP, int R_GAP, int T_GAP, int B_GAP, typename T, typename F0, typename F1, typename F2>
-static void interpolate_luma(T* dst, int16_t buf[], const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Horizontal, F1 Vertical, F2 Store) {
+template <int L_GAP, int R_GAP, int T_GAP, int B_GAP, int N, typename T, typename F0, typename F1, typename F2, typename F3, typename F4, typename F5>
+inline void interpolate_luma2d(T* dst, int16_t buf[], const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Hline, F1 HVline, F2 Horiz, F3 Vert, F4 Store, F5 Update) {
 	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || (ypos < T_GAP) || (ymax <= ypos + height + B_GAP)) {
-		interpolate_luma_umv(ref, buf, width, height + T_GAP + B_GAP, 1, src_stride, 1, width, xpos - L_GAP, ypos - T_GAP, xmax, ymax, Horizontal, noround<0>());
+		interpolate_luma_base<N>(ref, dst, buf, width, height, src_stride, dst_stride, xpos - L_GAP, ypos - T_GAP, xmax, ymax, Hline, HVline, address_umv(), Horiz, Vert, Store, Update);
 	} else {
-		interpolate_luma_no_umv(ref, buf, width, height + T_GAP + B_GAP, 1, src_stride, 1, width, xpos - L_GAP, ypos - T_GAP, Horizontal, noround<0>());
+		interpolate_luma_base<N>(ref, dst, buf, width, height, src_stride, dst_stride, xpos - L_GAP, ypos - T_GAP, xmax, ymax, Hline, HVline, address_noumv(), Horiz, Vert, Store, Update);
 	}
-	interpolate_luma_no_umv(buf, dst, height, width, width, 1, dst_stride, 1, 0, 0, Vertical, Store);
 }
 
-template <int RND, typename T>
-static void inter_pred_luma(T* dst, int16_t* tmp, const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
+template <typename T0, typename T1, typename F0, typename F1, typename F2, typename F3>
+static inline void interpolate_luma1d_base(T0* out, const T1* in, int width, int height, int src_xstride, int src_ystride, int dst_xstride, int dst_ystride, int xpos, int ypos, int xmax, int ymax, F0 Hline, F1 Address, F2 Horiz, F3 Store) {
+	for (int y = 0; y < height; ++y) {
+		interpolate_luma1hline_base(in, out + y * dst_ystride, width, src_xstride, src_ystride, dst_xstride, xpos, ypos + y, xmax, ymax, Hline, Address, Horiz, Store);
+	}
+}
+
+template <int L_GAP, int R_GAP, typename T0, typename T1, typename F0, typename F1, typename F2>
+static inline void interpolate_luma1d(T0* out, const T1* in, int src_xstride, int src_ystride, int dst_xstride, int dst_ystride, int width, int height, int xpos, int ypos, int xmax, int ymax, F0 Hline, F1 Horiz, F2 Store) {
+	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || ((unsigned)(ymax - height) <= (unsigned)ypos)) {
+		interpolate_luma1d_base(out, in, width, height, src_xstride, src_ystride, dst_xstride, dst_ystride, xpos - L_GAP, ypos, xmax, ymax, Hline, address_umv(), Horiz, Store);
+	} else {
+		interpolate_luma1d_base(out, in, width, height, src_xstride, src_ystride, dst_xstride, dst_ystride, xpos - L_GAP, ypos, xmax, ymax, Hline, address_noumv(), Horiz, Store);
+	}
+}
+
+template <int RND, typename T0, typename T1, typename F0, typename F1>
+static void interp_luma(T0* dst, int16_t* tmp, const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy, F0 StoreHalf, F1 StoreFull) {
 	int mvxint = mvx >> 2;
 	int mvyint = mvy >> 2;
 	int frac = (mvx & 3) | ((mvy & 3) << 2);
@@ -3333,52 +3446,49 @@ static void inter_pred_luma(T* dst, int16_t* tmp, const uint8_t* ref, int src_st
 		interpolate00(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax);
 		break;
 	case 1:
-		interpolate_luma_horiz<3, 3>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), roundval<RND ? 6 : 3, RND>());
+		interpolate_luma1d<3, 3>(dst, ref, 1, src_stride, 1, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), inter_luma_fir1(), StoreHalf);
 		break;
 	case 2:
-		interpolate_luma_horiz<3, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), roundval<RND ? 6 : 3, RND>());
+		interpolate_luma1d<3, 4>(dst, ref, 1, src_stride, 1, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline8_base(), inter_luma_fir2(), StoreHalf);
 		break;
 	case 3:
-		interpolate_luma_horiz<2, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), roundval<RND ? 6 : 3, RND>());
+		interpolate_luma1d<2, 4>(dst, ref, 1, src_stride, 1, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), inter_luma_fir3(), StoreHalf);
 		break;
 	case 4:
-		interpolate_luma_vert<3, 3>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), roundval<RND ? 6 : 3, RND>());
+		interpolate_luma1d<3, 3>(dst, ref, src_stride, 1, dst_stride, 1, height, width, ypos, xpos, ymax, xmax, interpolate_lumahline7_base(), inter_luma_fir1(), StoreHalf);
 		break;
 	case 5:
-		interpolate_luma<3, 3, 3, 3>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir1(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 3, 3, 3, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline7v_base(), inter_luma_fir1(), inter_luma_fir1(), StoreFull, interp_luma_v7update());
 		break;
 	case 6:
-		interpolate_luma<3, 4, 3, 3>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir1(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 4, 3, 3, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline8_base(), interpolate_lumahline8v_base(), inter_luma_fir2(), inter_luma_fir1(), StoreFull, interp_luma_v7update());
 		break;
 	case 7:
-		interpolate_luma<2, 4, 3, 3>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir1(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<2, 4, 3, 3, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline7v_base(), inter_luma_fir3(), inter_luma_fir1(), StoreFull, interp_luma_v7update());
 		break;
 	case 8:
-		interpolate_luma_vert<3, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), roundval<RND ? 6 : 3, RND>());
+		interpolate_luma1d<3, 4>(dst, ref, src_stride, 1, dst_stride, 1, height, width, ypos, xpos, ymax, xmax, interpolate_lumahline8_base(), inter_luma_fir2(), StoreHalf);
 		break;
 	case 9:
-		interpolate_luma<3, 3, 3, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir2(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 3, 3, 4, 8>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline7v_base(), inter_luma_fir1(), inter_luma_fir2(), StoreFull, interp_luma_v8update());
 		break;
 	case 10:
-		interpolate_luma<3, 4, 3, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir2(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 4, 3, 4, 8>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline8_base(), interpolate_lumahline8v_base(), inter_luma_fir2(), inter_luma_fir2(), StoreFull, interp_luma_v8update());
 		break;
 	case 11:
-		interpolate_luma<2, 4, 3, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir2(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<2, 4, 3, 4, 8>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline8v_base(), inter_luma_fir3(), inter_luma_fir2(), StoreFull, interp_luma_v8update());
 		break;
 	case 12:
-		interpolate_luma_vert<2, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), roundval<RND ? 6 : 0, RND>());
+		interpolate_luma1d<2, 4>(dst, ref, src_stride, 1, dst_stride, 1, height, width, ypos, xpos, ymax, xmax, interpolate_lumahline7_base(), inter_luma_fir3(), StoreHalf);
 		break;
 	case 13:
-		interpolate_luma<3, 3, 2, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir1(), inter_luma_fir3(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 3, 2, 4, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline7v_base(), inter_luma_fir1(), inter_luma_fir3(), StoreFull, interp_luma_v7update());
 		break;
 	case 14:
-		interpolate_luma<3, 4, 2, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir2(), inter_luma_fir3(), roundval<RND ? 12 : 6, RND>());
+		interpolate_luma2d<3, 4, 2, 4, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline8_base(), interpolate_lumahline8v_base(), inter_luma_fir2(), inter_luma_fir3(), StoreFull, interp_luma_v7update());
 		break;
 	case 15:
-		interpolate_luma<2, 4, 2, 4>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, inter_luma_fir3(), inter_luma_fir3(), roundval<RND ? 12 : 6, RND>());
-		break;
-	default:
-//		assert(0);
+		interpolate_luma2d<2, 4, 2, 4, 7>(dst, tmp, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, interpolate_lumahline7_base(), interpolate_lumahline7v_base(), inter_luma_fir3(), inter_luma_fir3(), StoreFull, interp_luma_v7update());
 		break;
 	}
 }
@@ -3411,8 +3521,8 @@ static inline void interpolate_chroma_vert(const T0* in, T1* out, int width, int
 		for (int y = 0; y < height; y++) {
 			int a3 = in[width * y];
 			int b3 = in[width * y + 1];
-			out[stride * y] = Round(c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3);
-			out[stride * y + 1] = Round(c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3);
+			Round(out[stride * y], c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3);
+			Round(out[stride * y + 1], c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3);
 			a0 = a1;
 			b0 = b1;
 			a1 = a2;
@@ -3477,38 +3587,67 @@ static void inter_pred_chroma(T* dst, int16_t* tmp, const uint8_t* ref, int src_
 	} else {
 //		interpolate_chroma_no_umv(ref - 1 * stride - 2, tmp, width, height + 1 + 2, 1, stride, 1, width, 0, fracx, noround());
 	}
-	interpolate_chroma_vert(tmp, dst, width, height, dst_stride, fracy, roundval<RND ? 12 : 0, RND>());
+	interpolate_chroma_vert(tmp, dst, width, height, dst_stride, fracy, store_pix<RND ? 12 : 0, RND>());
 }
 
-static void inter_pred_onedir(h265d_ctu_t& ctu, int offset_x, int offset_y, int width, int height, int pred_idc, int ref_idx, int mvx, int mvy) {
-	int stride = ctu.sps->ctb_info.stride;
-	int offset = stride * offset_y + offset_x;
+//static void inter_pred_onedir(h265d_ctu_t& ctu, int offset_x, int offset_y, int width, int height, int pred_idc, int ref_idx, int mvx, int mvy) {
+//	int stride = ctu.sps->ctb_info.stride;
+template <int RND, typename T, typename F0, typename F1>
+static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, int offset_y, int width, int height, int dst_stride, int lx, int ref_idx, int mvx, int mvy, F0 StoreHalf, F1 StoreFull) {
+	int src_stride = ctu.sps->ctb_info.stride;
 	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
 	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
-	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[pred_idc & 1][ref_idx].frame_idx];
+	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
+#if 1
+//	inter_pred_luma<0>(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+	int16_t tmp[64 * (32 + 3)];
+	interp_luma<RND>(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, StoreHalf, StoreFull);
+	inter_pred_chroma<RND>(dst1, tmp, ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+#else
 	if ((width | height) <= 32) {
 		if (pred_idc & 2) {
 			if (!(pred_idc & 1)) {
-				inter_pred_luma<0>(ctu.pred_buffer[0], ctu.coeff_buf, ref.luma, stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-				inter_pred_chroma<0>(ctu.pred_buffer[1], ctu.coeff_buf, ref.chroma, stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+				inter_pred_luma<0>(ctu.pred_buffer[0], ctu.coeff_buf, ref.luma, src_stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+				inter_pred_chroma<0>(ctu.pred_buffer[1], ctu.coeff_buf, ref.chroma, src_stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
 			}
 		} else {
-			inter_pred_luma<1>(ctu.luma + offset, ctu.coeff_buf, ref.luma, stride, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-			inter_pred_chroma<1>(ctu.chroma + stride * (offset_y >> 1) + offset_x, ctu.coeff_buf, ref.chroma, stride, stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+			inter_pred_luma<1>(ctu.luma + stride * offset_y + offset_x, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+			inter_pred_chroma<1>(ctu.chroma + stride * (offset_y >> 1) + offset_x, ctu.coeff_buf, ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+		}
+	}
+#endif
+}
+
+// FIXME: to be eliminated
+static void writeback_bidir(const uint16_t src[], uint8_t dst[], int stride, int width, int height) {
+	for (int y = 0; y < height; ++y) {
+		const uint16_t* s0 = src + y * stride;
+		uint8_t* d0 = dst + y * stride;
+		for (int x = 0; x < width; ++x) {
+			d0[x] = s0[x];
 		}
 	}
 }
 
-static void merge_pred(h265d_ctu_t& dst, const h265d_neighbour_t& base, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	copy_predinfo(left, height, base);
 	copy_predinfo(top, width, base);
 	int ref0 = base.pred.ref_idx[0];
 	int ref1 = base.pred.ref_idx[1];
+	int stride = ctu.sps->ctb_info.stride;
 	if (0 <= ref0) {
-		inter_pred_onedir(dst, offset_x, offset_y, width, height, (0 <= ref1) ? 2 : 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1]);
-	}
-	if (0 <= ref1) {
-		inter_pred_onedir(dst, offset_x, offset_y, width, height, (0 <= ref0) ? 3 : 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1]);
+		if (0 <= ref1) {
+			uint16_t dstbuf0[64 * 64];
+			uint16_t dstbuf1[64 * 32];
+			inter_pred_onedir<0>(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], store_pix<3, 0>(), store_pix<6, 0>());
+			inter_pred_onedir<1>(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], add_store_pix<3>(), add_store_pix<6>());
+			writeback_bidir(dstbuf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
+			writeback_bidir(dstbuf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
+		} else {
+			inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
+		}
+	} else {
+		inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
 	}
 }
 
@@ -3671,6 +3810,21 @@ static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbou
 	}
 }
 
+static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int& mvx, int& mvy) {
+	int16_t mvplist[2][2];
+	int mvp_num = 0;
+	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num);
+	mvp_one_dir(ctu, unavail, top, &lefttop, width >> 2, lx, ref_idx, mvplist, mvp_num);
+	if (mvp_num < 2) {
+		memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
+	}
+	mvx = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
+	mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
+	fill_mvinfo(left, height, lx, mvx, mvy);
+	fill_mvinfo(top, width, lx, mvx, mvy);
+}
+
+#if 0
 static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int pred_idc, int ref_idx, int mvp_idx, const int16_t mvd[]) {
 	int16_t mvplist[2][2];
 	int lx = pred_idc & 1;
@@ -3684,10 +3838,16 @@ static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int off
 	int mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
 	fill_mvinfo(left, height, lx, mvx, mvy);
 	fill_mvinfo(top, width, lx, mvx, mvy);
+	int stride = ctu.sps->ctb_info.stride;
+	if (2 <= pred_idc) {
+	} else {
+		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, lx, ref_idx, mvx, mvy);
+	}
 	if ((width | height) <= 32) {
 		inter_pred_onedir(ctu, offset_x, offset_y, width, height, pred_idc, ref_idx, mvx, mvy);
 	}
 }
+#endif
 
 static void fill_invalid_ref_idx(h265d_neighbour_t* neighbour, int len, int lx) {
 	len >>= 2;
@@ -3696,15 +3856,17 @@ static void fill_invalid_ref_idx(h265d_neighbour_t* neighbour, int len, int lx) 
 	}
 }
 
-static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, bool right_block = false) {
-	if (merge_flag(dst.cabac, st)) {
-		prediction_unit_merge(dst, st, right_block ? (unavail | 1) : unavail, offset_x, offset_y, width, height, left, top);
+static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, bool right_block = false) {
+	if (merge_flag(ctu.cabac, st)) {
+		prediction_unit_merge(ctu, st, right_block ? (unavail | 1) : unavail, offset_x, offset_y, width, height, left, top);
 		return true;
 	} else {
 		int pred_idc;
-		if (dst.slice_header->body.slice_type == 0) {
-			int depth = dst.sps->ctb_info.size_log2 - size_log2;
-			pred_idc = inter_pred_idc(dst.cabac, st, width, height, depth);
+		uint16_t bidir_buf0[64 * 64]; // FIXME: to be eliminated
+		uint16_t bidir_buf1[64 * 32]; // FIXME: to be eliminated
+		if (ctu.slice_header->body.slice_type == 0) {
+			int depth = ctu.sps->ctb_info.size_log2 - size_log2;
+			pred_idc = inter_pred_idc(ctu.cabac, st, width, height, depth);
 		} else {
 			pred_idc = 0;
 		}
@@ -3712,25 +3874,42 @@ static bool prediction_unit(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint3
 			fill_invalid_ref_idx(left, height, 0);
 			fill_invalid_ref_idx(top, width, 0);
 		} else {
-			int ref_idx = ref_idx_lx(dst.cabac, st, 0, dst.slice_header->body.num_ref_idx_lx_active_minus1);
+			int ref_idx = ref_idx_lx(ctu.cabac, st, 0, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
 			int16_t mvd[2];
-			mvd_coding(dst.cabac, st, mvd);
-			int mvp_idx = mvp_lx_flag(dst.cabac, st);
-			pred_block(dst, unavail, offset_x, offset_y, width, height, left, top, lefttop, pred_idc, ref_idx, mvp_idx, mvd);
+			mvd_coding(ctu.cabac, st, mvd);
+			int mvp_idx = mvp_lx_flag(ctu.cabac, st);
+			int mvx, mvy;
+			calc_mv(ctu, unavail, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvx, mvy);
+			if (pred_idc == 0) {
+				int stride = ctu.sps->ctb_info.stride;
+				inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvx, mvy, store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
+			} else {
+				inter_pred_onedir<0>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, store_pix<0, 0>(), store_pix<0, 0>());
+			}
 		}
 		if (pred_idc == 0) {
 			fill_invalid_ref_idx(left, height, 1);
 			fill_invalid_ref_idx(top, width, 1);
 		} else {
-			int ref_idx = ref_idx_lx(dst.cabac, st, 1, dst.slice_header->body.num_ref_idx_lx_active_minus1);
+			int ref_idx = ref_idx_lx(ctu.cabac, st, 1, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
 			int16_t mvd[2];
-			if ((pred_idc == 1) || !dst.slice_header->body.mvd_l1_zero_flag) {
-				mvd_coding(dst.cabac, st, mvd);
+			if ((pred_idc == 1) || !ctu.slice_header->body.mvd_l1_zero_flag) {
+				mvd_coding(ctu.cabac, st, mvd);
 			} else {
 				memset(mvd, 0, sizeof(mvd));
 			}
-			int mvp_idx = mvp_lx_flag(dst.cabac, st);
-			pred_block(dst, unavail, offset_x, offset_y, width, height, left, top, lefttop, pred_idc | 1, ref_idx, mvp_idx, mvd);
+			int mvp_idx = mvp_lx_flag(ctu.cabac, st);
+			int mvx, mvy;
+			calc_mv(ctu, unavail, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvx, mvy);
+			if (pred_idc == 1) {
+				int stride = ctu.sps->ctb_info.stride;
+				inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvx, mvy, store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
+			} else {
+				inter_pred_onedir<1>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, add_store_pix<3>(), add_store_pix<6>());
+				int stride = ctu.sps->ctb_info.stride;
+				writeback_bidir(bidir_buf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
+				writeback_bidir(bidir_buf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
+			}
 		}
 		return false;
 	}
