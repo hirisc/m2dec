@@ -3233,9 +3233,9 @@ struct store_pix {
 
 template <int SHIFT>
 struct add_store_pix {
-	template <typename T>
-	void operator()(T& dst, int val) const {
-		dst = (dst + val + (1 << (SHIFT - 1))) >> SHIFT;
+	void operator()(uint16_t& dst, int val) const {
+		int v0 = (int16_t)dst;
+		dst = (v0 + (val >> 6) + (1 << (SHIFT - 1))) >> SHIFT;
 	}
 };
 
@@ -3590,38 +3590,21 @@ static void inter_pred_chroma(T* dst, int16_t* tmp, const uint8_t* ref, int src_
 	interpolate_chroma_vert(tmp, dst, width, height, dst_stride, fracy, store_pix<RND ? 12 : 0, RND>());
 }
 
-//static void inter_pred_onedir(h265d_ctu_t& ctu, int offset_x, int offset_y, int width, int height, int pred_idc, int ref_idx, int mvx, int mvy) {
-//	int stride = ctu.sps->ctb_info.stride;
 template <int RND, typename T, typename F0, typename F1>
 static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, int offset_y, int width, int height, int dst_stride, int lx, int ref_idx, int mvx, int mvy, F0 StoreHalf, F1 StoreFull) {
 	int src_stride = ctu.sps->ctb_info.stride;
 	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
 	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
 	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
-#if 1
-//	inter_pred_luma<0>(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-	int16_t tmp[64 * (32 + 3)];
 	interp_luma<RND>(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, StoreHalf, StoreFull);
+	int16_t tmp[64 * (32 + 3)];
 	inter_pred_chroma<RND>(dst1, tmp, ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-#else
-	if ((width | height) <= 32) {
-		if (pred_idc & 2) {
-			if (!(pred_idc & 1)) {
-				inter_pred_luma<0>(ctu.pred_buffer[0], ctu.coeff_buf, ref.luma, src_stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-				inter_pred_chroma<0>(ctu.pred_buffer[1], ctu.coeff_buf, ref.chroma, src_stride, width, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-			}
-		} else {
-			inter_pred_luma<1>(ctu.luma + stride * offset_y + offset_x, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-			inter_pred_chroma<1>(ctu.chroma + stride * (offset_y >> 1) + offset_x, ctu.coeff_buf, ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
-		}
-	}
-#endif
 }
 
 // FIXME: to be eliminated
 static void writeback_bidir(const uint16_t src[], uint8_t dst[], int stride, int width, int height) {
 	for (int y = 0; y < height; ++y) {
-		const uint16_t* s0 = src + y * stride;
+		const uint16_t* s0 = src + y * width;
 		uint8_t* d0 = dst + y * stride;
 		for (int x = 0; x < width; ++x) {
 			d0[x] = s0[x];
@@ -3640,7 +3623,7 @@ static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t
 			uint16_t dstbuf0[64 * 64];
 			uint16_t dstbuf1[64 * 32];
 			inter_pred_onedir<0>(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], store_pix<3, 0>(), store_pix<6, 0>());
-			inter_pred_onedir<1>(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], add_store_pix<3>(), add_store_pix<6>());
+			inter_pred_onedir<1>(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], add_store_pix<4>(), add_store_pix<7>());
 			writeback_bidir(dstbuf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
 			writeback_bidir(dstbuf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
 		} else {
@@ -3824,31 +3807,6 @@ static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, h
 	fill_mvinfo(top, width, lx, mvx, mvy);
 }
 
-#if 0
-static void pred_block(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int pred_idc, int ref_idx, int mvp_idx, const int16_t mvd[]) {
-	int16_t mvplist[2][2];
-	int lx = pred_idc & 1;
-	int mvp_num = 0;
-	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num);
-	mvp_one_dir(ctu, unavail, top, &lefttop, width >> 2, lx, ref_idx, mvplist, mvp_num);
-	if (mvp_num < 2) {
-		memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
-	}
-	int mvx = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
-	int mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
-	fill_mvinfo(left, height, lx, mvx, mvy);
-	fill_mvinfo(top, width, lx, mvx, mvy);
-	int stride = ctu.sps->ctb_info.stride;
-	if (2 <= pred_idc) {
-	} else {
-		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, lx, ref_idx, mvx, mvy);
-	}
-	if ((width | height) <= 32) {
-		inter_pred_onedir(ctu, offset_x, offset_y, width, height, pred_idc, ref_idx, mvx, mvy);
-	}
-}
-#endif
-
 static void fill_invalid_ref_idx(h265d_neighbour_t* neighbour, int len, int lx) {
 	len >>= 2;
 	for (int i = 0; i < len; ++i) {
@@ -3884,7 +3842,7 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 				int stride = ctu.sps->ctb_info.stride;
 				inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvx, mvy, store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
 			} else {
-				inter_pred_onedir<0>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, store_pix<0, 0>(), store_pix<0, 0>());
+				inter_pred_onedir<0>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, store_pix<3, 0>(), store_pix<6, 0>());
 			}
 		}
 		if (pred_idc == 0) {
@@ -3905,7 +3863,7 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 				int stride = ctu.sps->ctb_info.stride;
 				inter_pred_onedir<1>(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvx, mvy, store_pix<3 << 1, 1>(), store_pix<6 << 1, 1>());
 			} else {
-				inter_pred_onedir<1>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, add_store_pix<3>(), add_store_pix<6>());
+				inter_pred_onedir<1>(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, add_store_pix<4>(), add_store_pix<7>());
 				int stride = ctu.sps->ctb_info.stride;
 				writeback_bidir(bidir_buf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
 				writeback_bidir(bidir_buf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
