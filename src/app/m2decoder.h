@@ -72,7 +72,7 @@ public:
 			}
 			delete frames_;
 		}
-		fprintf(stderr, "%d x %d x %d\n", info.src_width, info.src_height, info.frame_num);
+		fprintf(stderr, "%d x %d x %d\n", info.src_width - info.crop[0] - info.crop[1], info.src_height - info.crop[2] - info.crop[3], info.frame_num);
 		frames_ = new Frames(width, height, bufnum, info.additional_size, id);
 		func_->set_frames(context_, bufnum, frames_->aligned(), frames_->second(), info.additional_size);
 	}
