@@ -3493,101 +3493,105 @@ static void interp_luma(T0* dst, int16_t* tmp, const T1* ref, int src_stride, in
 	}
 }
 
-static const int8_t inter_chroma_coef[][4] = {
-	{0, 64, 0, 0},
-	{-2, 58, 10, -2},
-	{-4, 54, 16, -2},
-	{-6, 46, 28, -4},
-	{-4, 36, 36, -4},
-	{-4, 28, 46, -6},
-	{-2, 16, 54, -4},
-	{-2, 10, 58, -2}
+struct load2pixumv {
+	template <typename T0>
+	uint64_t operator()(const T0* in, int xpos, int xpos_max) const {
+		int pos = CLAMPX(xpos, xpos_max) * 2;
+		return ((uint64_t)in[pos] << 32) | in[pos + 1];
+	}
 };
 
-template <typename T0, typename T1, typename F0>
-static inline void interpolate_chroma_vert(const T0* in, T1* out, int width, int height, int stride, int frac, F0 Round) {
-	int c0 = inter_chroma_coef[frac][0];
-	int c1 = inter_chroma_coef[frac][1];
-	int c2 = inter_chroma_coef[frac][2];
-	int c3 = inter_chroma_coef[frac][3];
-	for (int x = 0; x < width; x += 2) {
-		int a0 = in[0];
-		int b0 = in[1];
-		int a1 = in[width];
-		int b1 = in[width + 1];
-		int a2 = in[width * 2];
-		int b2 = in[width * 2 + 1];
-		in += width * 3;
-		for (int y = 0; y < height; y++) {
-			int a3 = in[width * y];
-			int b3 = in[width * y + 1];
-			Round(out[stride * y], c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3);
-			Round(out[stride * y + 1], c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3);
-			a0 = a1;
-			b0 = b1;
-			a1 = a2;
-			b1 = b2;
-			a2 = a3;
-			b2 = b3;
-		}
-		in = in + 2 - width * 3;
-		out += 2;
+struct load2pix {
+	template <typename T0>
+	uint64_t operator()(const T0* in, int xpos, int xpos_max) const {
+		return ((uint64_t)in[xpos * 2] << 32) | in[xpos * 2 + 1];
+	}
+};
+
+static const int8_t inter_chroma_coeff[][4] = {
+	{0, 64, 0, 0},
+	{2, 58, 10, 2},
+	{4, 54, 16, 2},
+	{6, 46, 28, 4},
+	{4, 36, 36, 4},
+	{4, 28, 46, 6},
+	{2, 16, 54, 4},
+	{2, 10, 58, 2}
+};
+
+template <typename T0, typename F0, typename F1>
+static inline void interp_chroma1hline_base(const T0* ref, uint64_t* out, int width, int src_ystride, int xpos, int ypos, int xpos_max, int ypos_max, int c0, int c1, int c2, int c3, int shift, F0 AddressX, F1 AddressY) {
+	const T0* in = ref + src_ystride * AddressY(ypos, ypos_max);
+	uint64_t a0, a1, a2;
+	a0 = AddressX(in, xpos, xpos_max);
+	a1 = AddressX(in, xpos + 1, xpos_max);
+	a2 = AddressX(in, xpos + 2, xpos_max);
+	for (int x = 0; x < width; ++x) {
+		uint64_t a3;
+		a3 = AddressX(in, x + xpos + 3, xpos_max);
+		uint64_t v = ((((c1 * a1 + c2 * a2) | 0x80000000) - (c0 * a0 + c3 * a3)) >> shift) & ~0xf8000000LLU;
+		out[x] = v;
+		a0 = a1;
+		a1 = a2;
+		a2 = a3;
 	}
 }
 
-template <typename T0>
-static inline void load2pix_umv(const T0* in, int xpos, int xpos_max, int& cb, int& cr) {
-	int pos = CLAMPX(xpos, xpos_max) * 2;
-	cb = in[pos];
-	cr = in[pos + 1];
-}
-
-template <typename T0, typename T1>
-static inline void interpolate_chroma_umv(const T0* ref, T1* out, int width, int height, int refyinc, int dstyinc, int xpos, int ypos, int xpos_max, int ypos_max, int shift, int frac) {
-	int c0 = inter_chroma_coef[frac][0];
-	int c1 = inter_chroma_coef[frac][1];
-	int c2 = inter_chroma_coef[frac][2];
-	int c3 = inter_chroma_coef[frac][3];
-	width >>= 1;
-	for (int y = 0; y < height; y++) {
-		const T0* in = ref + refyinc * CLAMPX(ypos + y, ypos_max);
-		int a0, b0, a1, b1, a2, b2;
-		load2pix_umv(in, xpos, xpos_max, a0, b0);
-		load2pix_umv(in, xpos + 1, xpos_max, a1, b1);
-		load2pix_umv(in, xpos + 2, xpos_max, a2, b2);
-		for (int x = 0; x < width; x++) {
-			int a3, b3;
-			load2pix_umv(in, x + xpos + 3, xpos_max, a3, b3);
-			out[x * 2] = (c0 * a0 + c1 * a1 + c2 * a2 + c3 * a3) >> shift;
-			out[x * 2 + 1] = (c0 * b0 + c1 * b1 + c2 * b2 + c3 * b3) >> shift;
-			a0 = a1;
-			b0 = b1;
-			a1 = a2;
-			b1 = b2;
-			a2 = a3;
-			b2 = b3;
-		}
-		out += dstyinc;
+template <typename T0, typename T1, typename F0, typename F1, typename F2>
+static inline void interp_chroma1hline_vert_base(const T0* ref, uint64_t* hlines[], T1* out, int width, int src_ystride, int xpos, int ypos, int xpos_max, int ypos_max, int c0, int c1, int c2, int c3, int shift, int fracy, F0 AddressX, F1 AddressY, F2 Store) {
+	const T0* in = ref + src_ystride * AddressY(ypos, ypos_max);
+	uint64_t a0, a1, a2;
+	a0 = AddressX(in, xpos, xpos_max);
+	a1 = AddressX(in, xpos + 1, xpos_max);
+	a2 = AddressX(in, xpos + 2, xpos_max);
+	const int8_t* coef = inter_chroma_coeff[fracy];
+	for (int x = 0; x < width; ++x) {
+		uint64_t a3 = AddressX(in, x + xpos + 3, xpos_max);
+		uint64_t v = ((((c1 * a1 + c2 * a2) | 0x80000000) - (c0 * a0 + c3 * a3)) >> shift) & ~0xf8000000LLU;
+		uint64_t w = ((hlines[1][x] * coef[1]  + hlines[2][x] * coef[2]) | 0x80000000) - (hlines[0][x] * coef[0] + v * coef[3]);
+		Store(out[x * 2], (w >> 32));
+		Store(out[x * 2 + 1], w);
+		hlines[0][x] = v;
+		a0 = a1;
+		a1 = a2;
+		a2 = a3;
 	}
 }
 
-template <int RND, typename T>
-static void inter_pred_chroma(T* dst, int16_t* tmp, const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy) {
+template <typename T0, typename T1, typename F0, typename F1, typename F2>
+static inline void interp_chroma_base(const T0* in, uint64_t tmp[], T1* out, int width, int height, int src_stride, int dst_stride, int xpos, int ypos, int xmax, int ymax, int shift, int fracx, int fracy, F0 AddressX, F1 AddressY, F2 Store) {
+	int c0 = inter_chroma_coeff[fracx][0];
+	int c1 = inter_chroma_coeff[fracx][1];
+	int c2 = inter_chroma_coeff[fracx][2];
+	int c3 = inter_chroma_coeff[fracx][3];
+	uint64_t* hlines[3];
+	for (int y = 0; y < 3; ++y) {
+		uint64_t* t = tmp + y * width;
+		hlines[y] = t;
+		interp_chroma1hline_base(in, t, width, src_stride, xpos, ypos + y, xmax, ymax, c0, c1, c2, c3, 0, AddressX, AddressY);
+	}
+	ypos += 3;
+	for (int y = 0; y < height; ++y) {
+		interp_chroma1hline_vert_base(in, hlines, out + dst_stride * y, width, src_stride, xpos, ypos + y, xmax, ymax, c0, c1, c2, c3, 0, fracy, AddressX, AddressY, Store);
+		std::rotate(hlines, hlines + 1, hlines + 3);
+	}
+}
+
+template <int RND, typename T, typename F>
+static void interp_chroma(T* dst, uint64_t* tmp, const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy, F Store) {
 	int mvxint = mvx >> 3;
 	int mvyint = mvy >> 3;
-	int fracx = mvx & 7;
-	int fracy = mvy & 7;
 	xpos = (xpos >> 1) + mvxint;
 	ypos = (ypos >> 1) + mvyint;
+	width >>= 1;
 	height >>= 1;
-	if (1) {//((xpos < 1) || (xmax <= xpos + width + 2) || (ypos < 1) || (ymax <= ypos + height + 2)) {
-		xmax >>= 1;
-		ymax >>= 1;
-		interpolate_chroma_umv(ref, tmp, width, height + 1 + 2, src_stride, width, xpos - 1, ypos - 1, xmax, ymax, 0, mvx & 7);
+	xmax >>= 1;
+	ymax >>= 1;
+	if ((xpos < 1) || (xmax <= xpos + width + 2) || (ypos < 1) || (ymax <= ypos + height + 2)) {
+		interp_chroma_base(ref, tmp, dst, width, height, src_stride, dst_stride, xpos - 1, ypos - 1, xmax, ymax, 0, mvx & 7, mvy & 7, load2pixumv(), address_umv(), Store);
 	} else {
-//		interpolate_chroma_no_umv(ref - 1 * stride - 2, tmp, width, height + 1 + 2, 1, stride, 1, width, 0, fracx, noround());
+		interp_chroma_base(ref, tmp, dst, width, height, src_stride, dst_stride, xpos - 1, ypos - 1, xmax, ymax, 0, mvx & 7, mvy & 7, load2pix(), address_noumv(), Store);
 	}
-	interpolate_chroma_vert(tmp, dst, width, height, dst_stride, fracy, store_pix<RND ? 12 : 0, RND>());
 }
 
 template <int RND, typename T, typename F0, typename F1>
@@ -3597,8 +3601,7 @@ static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, 
 	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
 	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
 	interp_luma<RND>(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, StoreHalf, StoreFull);
-	int16_t tmp[64 * (32 + 3)];
-	inter_pred_chroma<RND>(dst1, tmp, ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy);
+	interp_chroma<RND>(dst1, (uint64_t*)(((uintptr_t)ctu.coeff_buf + 63) & ~63), ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, StoreFull);
 }
 
 // FIXME: to be eliminated
