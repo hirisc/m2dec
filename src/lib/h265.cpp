@@ -4691,7 +4691,7 @@ static inline uint32_t get_avail(int xpos, int ypos, int cols, int rows) {
 static void coding_tree_unit(h265d_ctu_t& dst, dec_bits& st) {
 	dst.sao_read(dst, *dst.slice_header, st);
 	uint32_t idx_in_slice = dst.idx_in_slice;
-	uint32_t unavail = (!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 10 + (!dst.pos_x || !idx_in_slice) * 5;
+	uint32_t unavail = ((!dst.pos_y || (idx_in_slice < dst.sps->ctb_info.columns)) * 10) | ((!dst.pos_x || !idx_in_slice) * 5) | 4;
 	quad_tree(dst, st, dst.sps->ctb_info.size_log2, unavail, 0, dst.valid_x, 0, dst.valid_y, dst.neighbour_left + 2, dst.neighbour_top + dst.pos_x * H265D_NEIGHBOUR_NUM, dst.neighbour_left[1]);
 	deblock_ctu(dst);
 }
