@@ -3672,7 +3672,9 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
 		}
 	}
-	if (num <= idx) {
+	if ((num <= idx) && ctu.slice_header->body.slice_temporal_mvp_enabled_flag) {
+		int lx = ((ctu.slice_header->body.slice_type == 0) && !ctu.slice_header->body.colocated_from_l0_flag);
+		int ref_idx = ctu.slice_header->body.collocated_ref_idx;
 		return;
 	}
 	merge_pred(ctu, *list[idx], unavail, offset_x, offset_y, width, height, left, top);
