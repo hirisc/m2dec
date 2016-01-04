@@ -3790,8 +3790,8 @@ static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbou
 		if (!matched && !(dir_flag & 1)) {
 			matched = mvp2nd(ctu, neighbour[span - 1], lx, refpoc, longterm, mvp, idx);
 		}
-		if (!matched && !(unavail & 3)) {
-			matched = mvp2nd(ctu, neighbour[-1], lx, refpoc, longterm, mvp, idx);
+		if (!matched && lefttop && !(unavail & 3)) {
+			matched = mvp2nd(ctu, *lefttop, lx, refpoc, longterm, mvp, idx);
 		}
 	}
 }
