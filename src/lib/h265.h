@@ -9,7 +9,8 @@
 #endif
 #include "m2d.h"
 
-static const int H265D_MAX_FRAME_NUM = 16;
+static const int H265D_MAX_FRAME_NUM = 8;
+static const int H265D_NEIGHBOUR_NUM = 16;
 
 typedef struct {
 	uint8_t sub_layer_profile_first8bit;
@@ -67,11 +68,12 @@ typedef struct {
 
 typedef struct {
 	uint8_t num_pics;
-	int16_t delta_poc[16];
 	uint16_t used_by_curr_pic_flag;
+	int16_t delta_poc[16];
 } h265d_short_term_ref_pic_elem_t;
 
 typedef struct {
+	uint8_t total_curr;
 	h265d_short_term_ref_pic_elem_t ref[2];
 } h265d_short_term_ref_pic_set_t;
 
@@ -163,8 +165,7 @@ typedef struct {
 
 typedef struct {
 	uint8_t sps_id;
-	uint8_t num_ref_idx_l0_default_active_minus1;
-	uint8_t num_ref_idx_l1_default_active_minus1;
+	uint8_t num_ref_idx_lx_default_active_minus1[2];
 	uint8_t init_qp_minus26;
 	uint8_t diff_cu_qp_delta_depth;
 	int8_t pps_cb_qp_offset;
@@ -204,7 +205,9 @@ typedef struct {
 
 typedef enum {
 	TRAIL_N = 0,
+	TRAIL_R = 1,
 	BLA_W_LP = 16,
+	BLA_N_LP = 18,
 	IDR_W_RADL = 19,
 	IDR_N_LP = 20,
 	RSV_IRAP_VCL23 = 23,
@@ -258,6 +261,17 @@ typedef enum {
 	INTRA_STRONG_FILTER = 64
 } h265d_intra_pred_mode_t;
 
+typedef enum {
+	PART_2Nx2N = 0,
+	PART_2NxN = 1,
+	PART_Nx2N = 2,
+	PART_NxN = 3,
+	PART_2NxnU = 4,
+	PART_2NxnD = 5,
+	PART_nLx2N = 6,
+	PART_nRx2N = 7
+} h265d_inter_part_mode_t;
+
 typedef struct {
 	int8_t sao_merge_flag[1];
 	int8_t sao_type_idx[1];
@@ -272,8 +286,8 @@ typedef struct {
 	int8_t merge_flag[1];
 	int8_t merge_idx[1];
 	int8_t inter_pred_idc[5];
-	int8_t ref_idx[2];
-	int8_t mvp_flag[1];
+	int8_t ref_idx_lx[2][2];
+	int8_t mvp_flag[2];
 	int8_t split_transform_flag[3];
 	int8_t cbf_luma[2];
 	int8_t cbf_chroma[4];
@@ -314,12 +328,30 @@ typedef struct {
 } h265d_sao_vlines_t;
 
 typedef struct {
+	uint16_t lsb;
+	uint16_t msb;
+} h265d_poc_t;
+
+typedef struct {
+	int32_t poc;
+	int32_t num;
+	int16_t frame_idx;
+	bool in_use;
+	bool is_longterm;
+} h265d_ref_pic_list_elem_t;
+
+typedef struct {
 	h265d_nal_t nal_type;
 	uint8_t slice_type;
 	int8_t slice_qpy;
 	int8_t slice_qpc_delta[2];
 	int8_t slice_beta_offset_div2;
 	int8_t slice_tc_offset_div2;
+	uint8_t num_ref_idx_lx_active_minus1[2];
+	uint8_t collocated_ref_idx;
+	int8_t max_num_merge_cand;
+	uint32_t mvd_l1_zero_flag : 1;
+	uint32_t colocated_from_l0_flag : 1;
 	uint32_t pic_output_flag : 1;
 	uint32_t colour_plane_id : 2;
 	uint32_t slice_temporal_mvp_enabled_flag : 1;
@@ -329,7 +361,8 @@ typedef struct {
 	uint32_t deblocking_filter_override_flag : 1;
 	uint32_t deblocking_filter_disabled_flag : 1;
 	uint32_t slice_loop_filter_across_slices_enabled_flag : 1;
-	uint16_t slice_pic_order_cnt_lsb;
+	h265d_poc_t slice_pic_order_cnt;
+	h265d_ref_pic_list_elem_t ref_list[2][16];
 	h265d_short_term_ref_pic_set_t short_term_ref_pic_set;
 } h265d_slice_header_body_t;
 
@@ -350,9 +383,18 @@ typedef struct {
 	h265d_entry_point_t entry_points;
 } h265d_slice_header_t;
 
+struct pred_info_t {
+	int16_t mvd[2][2];
+	int8_t ref_idx[2];
+};
+
 typedef struct {
-	uint8_t pred_mode : 6;
-	uint8_t depth : 2;
+	uint16_t intra : 1;
+	uint16_t skip : 1;
+	uint16_t nonzero_coef : 1;
+	uint16_t pred_mode : 6;
+	uint16_t depth : 4;
+	pred_info_t pred;
 } h265d_neighbour_t;
 
 typedef struct {
@@ -370,6 +412,8 @@ typedef int16_t (* h265d_scaling_func_t)(int32_t val, const h265d_scaling_info_t
 typedef struct {
 	int poc;
 	int16_t frame_idx;
+	uint8_t in_use : 1;
+	uint8_t is_longterm : 1;
 	uint8_t is_idr : 1;
 	uint8_t is_terminal : 1;
 } h265d_dpb_elem_t;
@@ -388,6 +432,7 @@ typedef struct {
 	int num;
 	int index;
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
+	h265d_neighbour_t* col[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
 	h265d_dpb_t dpb;
 } h265d_frame_info_t;
@@ -401,7 +446,6 @@ typedef struct h265d_ctu_t {
 	int8_t qp_delta_req, qpy;
 	int8_t qpc_delta[2];
 	h265d_scaling_info_t qp_scale[3];
-	uint8_t is_intra : 1;
 	uint8_t intra_split : 1;
 	uint8_t not_first_row : 1;
 	int8_t order_luma[4], order_chroma;
@@ -409,7 +453,7 @@ typedef struct h265d_ctu_t {
 	int16_t *coeff_buf;
 	const h265d_slice_header_t* slice_header;
 	const h265d_pps_t* pps;
-	h265d_neighbour_t neighbour_left[16];
+	h265d_neighbour_t neighbour_left[H265D_NEIGHBOUR_NUM + 2];
 	h265d_neighbour_t* neighbour_top; // use 16 bytes for each CTU
 	uint8_t qp_history[2][16];
 	const h265d_scaling_func_t* scaling_func;
@@ -425,6 +469,7 @@ typedef struct h265d_ctu_t {
 	h265d_sao_vlines_t sao_vlines;
 	h265d_sao_hlines_t sao_hlines[2][2];
 	uint8_t* sao_signbuf;
+	int16_t pred_buffer[2][32 * 32];
 	int16_t coeff_buffer[32 * 32 * 2 + 7];
 } h265d_ctu_t;
 
