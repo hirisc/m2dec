@@ -3175,14 +3175,19 @@ template <int RND>
 struct store_pix {
 	template <typename T>
 	void operator()(T& dst, int val, int shift) const {
-		dst = (val + (RND ? (1 << (shift - 1)) : 0)) >> shift;
+		if (RND) {
+			int v0 = (val + (RND << (shift - 1))) >> shift;
+			dst = CLAMPX(v0, 256);
+		} else {
+			dst = val >> shift;
+		}
 	}
 };
 
 struct add_store_pix {
-	void operator()(uint16_t& dst, int val, int shift) const {
-		int v0 = (int16_t)dst;
-		dst = (v0 + (val >> 6) + (1 << shift)) >> (shift + 1);
+	void operator()(int16_t& dst, int val, int shift) const {
+		int v0 = (dst + (val >> 6) + (1 << shift)) >> (shift + 1);
+		dst = CLAMPX(v0, 256);
 	}
 };
 
@@ -3203,8 +3208,8 @@ static void interpolate00_base(T0* dst, const T1* ref, int src_stride, int dst_s
 	for (int y = 0; y < height; ++y) {
 		const T1* in = &ref[Address(ypos + y, ymax) * src_stride];
 		for (int x = 0; x < width; ++x) {
-			int a0 = in[Address(xpos + x, xmax)] << 6;
-			Store(dst[x], a0, shift - 6);
+			int a0 = in[Address(xpos + x, xmax)] << 12;
+			Store(dst[x], a0, shift);
 		}
 		dst += dst_stride;
 	}
@@ -3385,7 +3390,7 @@ static inline void interpolate_luma1d_base(T0* out, const T1* in, int width, int
 
 template <int L_GAP, int R_GAP, typename T0, typename T1, typename F0, typename F1, typename F2>
 static inline void interpolate_luma1d(T0* out, const T1* in, int src_xstride, int src_ystride, int dst_xstride, int dst_ystride, int width, int height, int xpos, int ypos, int xmax, int ymax, int shift, F0 Hline, F1 Horiz, F2 Store) {
-	shift = shift >> 1;
+	shift = shift - 6;
 	if ((xpos < L_GAP) || (xmax <= xpos + width + R_GAP) || ((unsigned)(ymax - height) <= (unsigned)ypos)) {
 		interpolate_luma1d_base(out, in, width, height, src_xstride, src_ystride, dst_xstride, dst_ystride, xpos - L_GAP, ypos, xmax, ymax, shift, Hline, address_umv(), Horiz, Store);
 	} else {
@@ -3508,8 +3513,8 @@ static inline void interp_chroma1hline_vert_base(const T0* ref, uint64_t* hlines
 		uint64_t a3 = AddressX(in, x + xpos + 3, xpos_max);
 		uint64_t v = ((((c1 * a1 + c2 * a2) | 0x80000000) - (c0 * a0 + c3 * a3)) >> 0) & ~0xf8000000LLU;
 		uint64_t w = ((hlines[1][x] * coef[1]  + hlines[2][x] * coef[2]) | 0x80000000) - (hlines[0][x] * coef[0] + v * coef[3]);
-		Store(out[x * 2], (w >> 32), shift);
-		Store(out[x * 2 + 1], w, shift);
+		Store(out[x * 2], (int32_t)(w >> 32), shift);
+		Store(out[x * 2 + 1], (int32_t)((uint32_t)w ^ 0x80000000U), shift);
 		hlines[0][x] = v;
 		a0 = a1;
 		a1 = a2;
@@ -3555,18 +3560,18 @@ static void interp_chroma(T* dst, uint64_t* tmp, const uint8_t* ref, int src_str
 
 template <typename T, typename F0>
 static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, int offset_y, int width, int height, int dst_stride, int lx, int ref_idx, int mvx, int mvy, int shift, F0 Store) {
-	int src_stride = ctu.sps->ctb_info.stride;
-	int xpos = (ctu.pos_x << ctu.sps->ctb_info.size_log2) + offset_x;
-	int ypos = (ctu.pos_y << ctu.sps->ctb_info.size_log2) + offset_y;
+	int src_stride = ctu.size->stride;
+	int xpos = (ctu.pos_x << ctu.size->size_log2) + offset_x;
+	int ypos = (ctu.pos_y << ctu.size->size_log2) + offset_y;
 	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
 	interp_luma(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, shift, Store);
 	interp_chroma(dst1, (uint64_t*)(((uintptr_t)ctu.coeff_buf + 63) & ~63), ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, shift, Store);
 }
 
 // FIXME: to be eliminated
-static void writeback_bidir(const uint16_t src[], uint8_t dst[], int stride, int width, int height) {
+static void writeback_bidir(const int16_t src[], uint8_t dst[], int stride, int width, int height) {
 	for (int y = 0; y < height; ++y) {
-		const uint16_t* s0 = src + y * width;
+		const int16_t* s0 = src + y * width;
 		uint8_t* d0 = dst + y * stride;
 		for (int x = 0; x < width; ++x) {
 			d0[x] = static_cast<uint8_t>(s0[x]);
@@ -3577,12 +3582,12 @@ static void writeback_bidir(const uint16_t src[], uint8_t dst[], int stride, int
 static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	int ref0 = base.pred.ref_idx[0];
 	int ref1 = base.pred.ref_idx[1];
-	int stride = ctu.sps->ctb_info.stride;
+	int stride = ctu.size->stride;
 	bool no_bidir = false;
 	if (0 <= ref0) {
 		if ((0 <= ref1) && !(no_bidir = (width + height == 12))) {
-			uint16_t dstbuf0[64 * 64];
-			uint16_t dstbuf1[64 * 32];
+			int16_t dstbuf0[64 * 64];
+			int16_t dstbuf1[64 * 32];
 			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], 6, store_pix<0>());
 			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], 6, add_store_pix());
 			writeback_bidir(dstbuf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
@@ -3803,8 +3808,8 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 		return true;
 	} else {
 		int pred_idc;
-		uint16_t bidir_buf0[64 * 64]; // FIXME: to be eliminated
-		uint16_t bidir_buf1[64 * 32]; // FIXME: to be eliminated
+		int16_t bidir_buf0[64 * 64]; // FIXME: to be eliminated
+		int16_t bidir_buf1[64 * 32]; // FIXME: to be eliminated
 		if (ctu.slice_header->body.slice_type == 0) {
 			int depth = ctu.size->size_log2 - size_log2;
 			pred_idc = inter_pred_idc(ctu.cabac, st, width, height, depth);
@@ -3846,7 +3851,7 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 				int stride = ctu.size->stride;
 				inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvx, mvy, 12, store_pix<1>());
 			} else {
-				inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, 6, add_store_pix());
+				inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 1, ref_idx, mvx, mvy, 6, add_store_pix());
 				int stride = ctu.size->stride;
 				writeback_bidir(bidir_buf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
 				writeback_bidir(bidir_buf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
