@@ -109,7 +109,7 @@ typedef struct {
 	uint16_t stride;
 	uint16_t columns;
 	uint16_t rows;
-} h265d_sps_ctb_info_t;
+} h265d_ctb_info_t;
 
 typedef struct {
 	uint8_t chroma_format_idc;
@@ -146,7 +146,7 @@ typedef struct {
 	uint32_t used_by_curr_pic_lt_sps_flag;
 	uint16_t lt_ref_pic_poc_lsb_sps[32];
 	uint16_t cropping[4];
-	h265d_sps_ctb_info_t ctb_info;
+	h265d_ctb_info_t ctb_info;
 	h265d_sps_prefix_t prefix;
 	h265d_sub_layer_reordering_info_t max_buffering[8];
 	h265d_scaling_list_data_t scaling_list_data;
@@ -303,6 +303,11 @@ typedef struct {
 } h265d_cabac_context_t;
 
 typedef struct {
+	m2d_cabac_t cabac;
+	h265d_cabac_context_t* context;
+} h265d_cabac_t;
+
+typedef struct {
 	int8_t offset[4];
 	union {
 		uint8_t band_pos;
@@ -437,7 +442,7 @@ typedef struct {
 } h265d_frame_info_t;
 
 typedef struct h265d_ctu_t {
-	m2d_cabac_t cabac;
+	h265d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
 	uint16_t pos_in_slice;
 	uint32_t valid_x, valid_y;
@@ -448,6 +453,7 @@ typedef struct h265d_ctu_t {
 	uint8_t intra_split : 1;
 	uint8_t not_first_row : 1;
 	int8_t order_luma[4], order_chroma;
+	const h265d_ctb_info_t *size;
 	const h265d_sps_t* sps;
 	int16_t *coeff_buf;
 	const h265d_slice_header_t* slice_header;

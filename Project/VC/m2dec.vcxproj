@@ -14,17 +14,18 @@
     <ProjectGuid>{80E327AE-A6ED-406E-8AF3-5BC7BB231084}</ProjectGuid>
     <RootNamespace>m2dec</RootNamespace>
     <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>MultiByte</CharacterSet>
-    <PlatformToolset>v120</PlatformToolset>
+    <PlatformToolset>v140</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v120</PlatformToolset>
+    <PlatformToolset>v140</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -51,7 +52,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>C:\cygwin\usr\include\boost-1_33_1;$(SolutionDir)..\..\\src\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\\src\lib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;ENABLE_DISPLAY;UNIT_TEST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -62,6 +63,8 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ProjectReference>
       <UseLibraryDependencyInputs>true</UseLibraryDependencyInputs>
@@ -81,12 +84,14 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <PrecompiledHeader>
       </PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>..\lib</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\\src\lib</AdditionalIncludeDirectories>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <OutputFile>$(OutDir)m2dec.exe</OutputFile>
@@ -97,6 +102,7 @@
       <RandomizedBaseAddress>false</RandomizedBaseAddress>
       <DataExecutionPrevention>
       </DataExecutionPrevention>
+      <AdditionalDependencies />
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
