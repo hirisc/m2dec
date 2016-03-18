@@ -49,7 +49,6 @@ typedef struct {
 typedef struct {
 	uint32_t range;
 	uint32_t offset;
-	int8_t* context;
 } m2d_cabac_t;
 
 typedef struct {
@@ -134,9 +133,8 @@ static inline void init_cabac_engine(m2d_cabac_t *cb, dec_bits *st)
 	cb->offset = get_bits(st, 9);
 }
 
-static inline void init_cabac_context(m2d_cabac_t *cabac, int slice_qp, const m2d_cabac_init_mn_t *lut, int lut_len)
+static inline void init_cabac_context(m2d_cabac_t *cabac, int8_t* ctx, int slice_qp, const m2d_cabac_init_mn_t *lut, int lut_len)
 {
-	int8_t *ctx = cabac->context;
 	do {
 		int pre_state = ((lut->m * slice_qp) >> 4) + lut->n;
 		if (pre_state < 64) {

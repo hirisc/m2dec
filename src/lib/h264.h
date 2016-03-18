@@ -361,7 +361,10 @@ typedef struct {
 	int16_t scale[16];
 } h264d_bdirect_t;
 
-typedef m2d_cabac_t h264d_cabac_t;
+typedef struct {
+	m2d_cabac_t cabac;
+	int8_t* context;
+} h264d_cabac_t;
 
 #define ENC_SLICEHDR(hdr, a, b) (hdr = ((((b) + 6) << 4) | ((a) + 6)))
 #define DEC_SLICEHDR(hdr, a, b) (a = ((hdr & 15) - 6) * 2), (b = (((uint8_t)hdr >> 4) - 6) * 2)

@@ -10204,8 +10204,6 @@ static int more_rbsp_data(dec_bits *st)
 }
 
 static int post_process(h264d_context *h2d, h264d_mb_current *mb);
-static void init_cabac_context(m2d_cabac_t *cabac, int slice_qp, const m2d_cabac_init_mn_t *lut, int lut_len);
-static void init_cabac_engine(m2d_cabac_t *cb, dec_bits *st);
 static inline int cabac_decode_terminate(h264d_cabac_t *cb, dec_bits *st);
 static int mb_skip_cabac(h264d_mb_current *mb, dec_bits *st, int slice_type);
 
@@ -10217,9 +10215,9 @@ static int slice_data(h264d_context *h2d, dec_bits *st)
 	int is_ae = pps->entropy_coding_mode_flag;
 	if (is_ae) {
 		int idc = (hdr->slice_type == I_SLICE) ? 0 : hdr->cabac_init_idc + 1;
-		init_cabac_context(mb->cabac, mb->qp, ctx_idx_mn_IPB[idc], NUM_ARRAY(ctx_idx_mn_IPB[idc]));
+		init_cabac_context(&mb->cabac->cabac, mb->cabac->context, mb->qp, ctx_idx_mn_IPB[idc], NUM_ARRAY(ctx_idx_mn_IPB[idc]));
 		byte_align(st);
-		init_cabac_engine(mb->cabac, st);
+		init_cabac_engine(&mb->cabac->cabac, st);
 	}
 	do {
 		uint32_t skip_num;
@@ -11051,23 +11049,23 @@ static int post_process(h264d_context *h2d, h264d_mb_current *mb)
 	return is_filled;
 }
 
-static inline int cabac_decode_decision(h264d_cabac_t *cb, dec_bits *st, int ctxIdx)
-{
-	return cabac_decode_decision_raw(cb, st, &cb->context[ctxIdx]);
-}
+#define cabac_decode_decision_raw(cb, st, ctx) cabac_decode_decision_raw(&((cb)->cabac), (st), (ctx))
+#define cabac_decode_bypass(cb, st) cabac_decode_bypass(&((cb)->cabac), (st))
+#define cabac_decode_multibypass(cb, st, len) cabac_decode_multibypass(&((cb)->cabac), (st), (len))
+#define cabac_decode_decision(cb, st, ctxIdx) cabac_decode_decision_raw((cb), (st), &((cb)->context[ctxIdx]))
 
 static inline int cabac_decode_terminate(h264d_cabac_t *cb, dec_bits *st)
 {
-	int range = cb->range - 2;
-	int offset = cb->offset;
+	int range = cb->cabac.range - 2;
+	int offset = cb->cabac.offset;
 	if (range <= offset) {
-		cb->range = range;
+		cb->cabac.range = range;
 		return 1;
 	} else {
 		if (range < 256) {
-			cabac_renorm(cb, st, range, offset);
+			cabac_renorm(&(cb->cabac), st, range, offset);
 		} else {
-			cb->range = range;
+			cb->cabac.range = range;
 		}
 		return 0;
 	}
@@ -12051,7 +12049,7 @@ static inline int macroblock_layer_cabac(h264d_mb_current *mb, h264d_slice_heade
 	mbc = &mb->mb_decode[mbtype];
 	mbc->mb_dec(mb, mbc, st, avail);
 	if (mbtype == MB_IPCM) {
-		init_cabac_engine(mb->cabac, st);
+		init_cabac_engine(&mb->cabac->cabac, st);
 	}
 	return 0;
 }
