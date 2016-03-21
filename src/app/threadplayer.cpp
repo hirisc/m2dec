@@ -556,8 +556,8 @@ struct UniSurface {
 			id_ = out.id;
 			change(out);
 		}
-		deinterleave(out.chroma + out.crop[0] + out.width * out.crop[2], &cbcr_[0], out.width, out.width - out.crop[0] - out.crop[1], (out.height - out.crop[2] - out.crop[3]) >> 1);
-		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], out.width, &cbcr_[out.width >> 1], out.width);
+		deinterleave(out.chroma + out.crop[0] + out.width * out.crop[2], &cbcr_[0], out.width, width_, height_ >> 1);
+		SDL_UpdateYUVTexture(texture_, 0, out.luma, out.width, &cbcr_[0], width_, &cbcr_[width_ >> 1], width_);
 		SDL_RenderClear(renderer_);
 		SDL_RenderCopy(renderer_, texture_, NULL, NULL);
 #endif /* ENABLE_DISPLAY */
@@ -628,13 +628,15 @@ private:
 		dheight = height;
 	}
 	void change(const Frame& out) {
-		if ((width_ != (out.width - out.crop[1])) || (height_ != (out.height - out.crop[3]))) {
+		int curr_width = out.width - out.crop[0] - out.crop[1];
+		int curr_height = out.height - out.crop[2] - out.crop[3];
+		if ((width_ != curr_width) || (height_ != curr_height)) {
 			static Uint32 winflg_cand[] = {
 				SDL_WINDOW_OPENGL, 0
 			};
 			teardown();
-			width_ = out.width - out.crop[1];
-			height_ = out.height - out.crop[3];
+			width_ = curr_width;
+			height_ = curr_height;
 			cbcr_base_.resize(((width_ * height_) >> 1) + 15);
 			cbcr_ = reinterpret_cast<uint8_t*>(ALIGN16(reinterpret_cast<uintptr_t>(&cbcr_base_[0])));
 			int dwidth, dheight;

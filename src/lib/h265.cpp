@@ -3113,16 +3113,6 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 	}
 }
 
-static void fill_mvinfo(h265d_neighbour_t* neighbour, int len, int lx, int mvx, int mvy) {
-	len >>= 2;
-	for (int i = 0; i < len; ++i) {
-		neighbour[i].intra = 0;
-		neighbour[i].skip = 0;
-		neighbour[i].pred.mvd[lx][0] = mvx;
-		neighbour[i].pred.mvd[lx][1] = mvy;
-	}
-}
-
 static void copy_predinfo(h265d_neighbour_t* neighbour, int len, const h265d_neighbour_t& pred, bool no_bidir) {
 	len >>= 2;
 	for (int i = 0; i < len; ++i) {
@@ -3399,7 +3389,9 @@ static inline void interpolate_luma1d(T0* out, const T1* in, int src_xstride, in
 }
 
 template <typename T0, typename T1, typename F0>
-static void interp_luma(T0* dst, int16_t* tmp, const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy, int shift, F0 Store) {
+static void interp_luma(T0* dst, int16_t* tmp, const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, const int16_t mvxy[], int shift, F0 Store) {
+	int mvx = mvxy[0];
+	int mvy = mvxy[1];
 	int mvxint = mvx >> 2;
 	int mvyint = mvy >> 2;
 	int frac = (mvx & 3) | ((mvy & 3) << 2);
@@ -3542,7 +3534,9 @@ static inline void interp_chroma_base(const T0* in, uint64_t tmp[], T1* out, int
 }
 
 template <typename T, typename F>
-static void interp_chroma(T* dst, uint64_t* tmp, const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int mvx, int mvy, int shift, F Store) {
+static void interp_chroma(T* dst, uint64_t* tmp, const uint8_t* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, const int16_t mvxy[], int shift, F Store) {
+	int mvx = mvxy[0];
+	int mvy = mvxy[1];
 	int mvxint = mvx >> 3;
 	int mvyint = mvy >> 3;
 	xpos = (xpos >> 1) + mvxint;
@@ -3559,13 +3553,13 @@ static void interp_chroma(T* dst, uint64_t* tmp, const uint8_t* ref, int src_str
 }
 
 template <typename T, typename F0>
-static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, int offset_y, int width, int height, int dst_stride, int lx, int ref_idx, int mvx, int mvy, int shift, F0 Store) {
+static void inter_pred_onedir(h265d_ctu_t& ctu, T* dst0, T* dst1, int offset_x, int offset_y, int width, int height, int dst_stride, int lx, int ref_idx, const int16_t mvxy[], int shift, F0 Store) {
 	int src_stride = ctu.size->stride;
 	int xpos = (ctu.pos_x << ctu.size->size_log2) + offset_x;
 	int ypos = (ctu.pos_y << ctu.size->size_log2) + offset_y;
 	const m2d_frame_t& ref = ctu.frame_info.frames[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
-	interp_luma(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, shift, Store);
-	interp_chroma(dst1, (uint64_t*)(((uintptr_t)ctu.coeff_buf + 63) & ~63), ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvx, mvy, shift, Store);
+	interp_luma(dst0, ctu.coeff_buf, ref.luma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvxy, shift, Store);
+	interp_chroma(dst1, (uint64_t*)(((uintptr_t)ctu.coeff_buf + 63) & ~63), ref.chroma, src_stride, dst_stride, width, height, xpos, ypos, ctu.sps->pic_width_in_luma_samples, ctu.sps->pic_height_in_luma_samples, mvxy, shift, Store);
 }
 
 // FIXME: to be eliminated
@@ -3588,15 +3582,15 @@ static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t
 		if ((0 <= ref1) && !(no_bidir = (width + height == 12))) {
 			int16_t dstbuf0[64 * 64];
 			int16_t dstbuf1[64 * 32];
-			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], 6, store_pix<0>());
-			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], 6, add_store_pix());
+			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0], 6, store_pix<0>());
+			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1], 6, add_store_pix());
 			writeback_bidir(dstbuf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
 			writeback_bidir(dstbuf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
 		} else {
-			inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref0, base.pred.mvd[0][0], base.pred.mvd[0][1], 12, store_pix<1>());
+			inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref0, base.pred.mvd[0], 12, store_pix<1>());
 		}
 	} else {
-		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.pred.mvd[1][0], base.pred.mvd[1][1], 12, store_pix<1>());
+		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.pred.mvd[1], 12, store_pix<1>());
 	}
 	copy_predinfo(left, height, base, no_bidir);
 	copy_predinfo(top, width, base, no_bidir);
@@ -3781,7 +3775,7 @@ static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbou
 	}
 }
 
-static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int& mvx, int& mvy) {
+static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int16_t mvxy[]) {
 	int16_t mvplist[2][2];
 	int mvp_num = 0;
 	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num);
@@ -3789,17 +3783,75 @@ static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, h
 	if (mvp_num < 2) {
 		memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
 	}
-	mvx = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
-	mvy = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
-	fill_mvinfo(left, height, lx, mvx, mvy);
-	fill_mvinfo(top, width, lx, mvx, mvy);
+	mvxy[0] = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
+	mvxy[1] = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
 }
 
-static void fill_invalid_ref_idx(h265d_neighbour_t* neighbour, int len, int lx) {
+static void fill_mvinfo(h265d_neighbour_t* neighbour, int len, int lx, int mvx, int mvy) {
 	len >>= 2;
 	for (int i = 0; i < len; ++i) {
-		neighbour[i].pred.ref_idx[lx] = -1;
+		neighbour[i].intra = 0;
+		neighbour[i].skip = 0;
+		neighbour[i].pred.mvd[lx][0] = mvx;
+		neighbour[i].pred.mvd[lx][1] = mvy;
 	}
+}
+
+static void fill_pred(h265d_neighbour_t* neighbour, int len, int ref_idx0, int ref_idx1, const int16_t mvxy[][2]) {
+	neighbour[0].intra = 0;
+	neighbour[0].skip = 0;
+	neighbour[0].pred.ref_idx[0] = ref_idx0;
+	neighbour[0].pred.ref_idx[1] = ref_idx1;
+	neighbour[0].pred.mvd[0][0] = mvxy[0][0];
+	neighbour[0].pred.mvd[0][1] = mvxy[0][1];
+	neighbour[0].pred.mvd[1][0] = mvxy[1][0];
+	neighbour[0].pred.mvd[1][1] = mvxy[1][1];
+	len >>= 2;
+	for (int i = 1; i < len; ++i) {
+		neighbour[i] = neighbour[0];
+	}
+}
+
+static void fill_pred(h265d_neighbour_t* n0, int len0, h265d_neighbour_t* n1, int len1, int ref_idx0, int ref_idx1, const int16_t mvxy[][2]) {
+	fill_pred(n0, len0, ref_idx0, ref_idx1, mvxy);
+	fill_pred(n1, len1, ref_idx0, ref_idx1, mvxy);
+}
+
+static int pred_amvp_l0(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int16_t mvxy[]) {
+	int ref_idx = ref_idx_lx(ctu.cabac, st, 0, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
+	int16_t mvd[2];
+	mvd_coding(ctu.cabac, st, mvd);
+	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
+	calc_mv(ctu, unavail, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvxy);
+	if (pred_idc == 0) {
+		int stride = ctu.size->stride;
+		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvxy, 12, store_pix<1>());
+	} else {
+		inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvxy, 6, store_pix<0>());
+	}
+	return ref_idx;
+}
+
+static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int16_t mvxy[]) {
+	int ref_idx = ref_idx_lx(ctu.cabac, st, 1, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
+	int16_t mvd[2];
+	if ((pred_idc == 1) || !ctu.slice_header->body.mvd_l1_zero_flag) {
+		mvd_coding(ctu.cabac, st, mvd);
+	} else {
+		memset(mvd, 0, sizeof(mvd));
+	}
+	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
+	calc_mv(ctu, unavail, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvxy);
+	if (pred_idc == 1) {
+		int stride = ctu.size->stride;
+		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvxy, 12, store_pix<1>());
+	} else {
+		inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 1, ref_idx, mvxy, 6, add_store_pix());
+		int stride = ctu.size->stride;
+		writeback_bidir(bidir_buf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
+		writeback_bidir(bidir_buf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
+	}
+	return ref_idx;
 }
 
 static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, uint32_t pred_unavail = 0) {
@@ -3816,47 +3868,10 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 		} else {
 			pred_idc = 0;
 		}
-		if (pred_idc == 1) {
-			fill_invalid_ref_idx(left, height, 0);
-			fill_invalid_ref_idx(top, width, 0);
-		} else {
-			int ref_idx = ref_idx_lx(ctu.cabac, st, 0, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
-			int16_t mvd[2];
-			mvd_coding(ctu.cabac, st, mvd);
-			int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-			int mvx, mvy;
-			calc_mv(ctu, unavail, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvx, mvy);
-			if (pred_idc == 0) {
-				int stride = ctu.size->stride;
-				inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvx, mvy, 12, store_pix<1>());
-			} else {
-				inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 0, ref_idx, mvx, mvy, 6, store_pix<0>());
-			}
-		}
-		if (pred_idc == 0) {
-			fill_invalid_ref_idx(left, height, 1);
-			fill_invalid_ref_idx(top, width, 1);
-		} else {
-			int ref_idx = ref_idx_lx(ctu.cabac, st, 1, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
-			int16_t mvd[2];
-			if ((pred_idc == 1) || !ctu.slice_header->body.mvd_l1_zero_flag) {
-				mvd_coding(ctu.cabac, st, mvd);
-			} else {
-				memset(mvd, 0, sizeof(mvd));
-			}
-			int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-			int mvx, mvy;
-			calc_mv(ctu, unavail, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvx, mvy);
-			if (pred_idc == 1) {
-				int stride = ctu.size->stride;
-				inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvx, mvy, 12, store_pix<1>());
-			} else {
-				inter_pred_onedir(ctu, bidir_buf0, bidir_buf1, offset_x, offset_y, width, height, width, 1, ref_idx, mvx, mvy, 6, add_store_pix());
-				int stride = ctu.size->stride;
-				writeback_bidir(bidir_buf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
-				writeback_bidir(bidir_buf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
-			}
-		}
+		int16_t mvxy[2][2];
+		int ref_idx0 = (pred_idc == 1) ? -1 : pred_amvp_l0(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[0]);
+		int ref_idx1 = (pred_idc == 0) ? -1 : pred_amvp_l1(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[1]);
+		fill_pred(left, height, top, width, ref_idx0, ref_idx1, mvxy);
 		return false;
 	}
 }
