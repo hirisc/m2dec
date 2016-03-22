@@ -1981,7 +1981,7 @@ static void (* const transform_func[2][4][2][4])(uint8_t *dst, int16_t* coeff, i
 	{
 	{
 		{
-			NxNtransform_dconly<4, 7, 1, uint64_t>,
+			NxNtransform_dconly<4, 7, 1, uint32_t>,
 			NxNtransform_dconly<8, 7, 1, uint64_t>,
 			NxNtransform_dconly<16, 7, 1, uint64_t>,
 			NxNtransform_dconly<32, 7, 1, uint64_t>
@@ -3055,7 +3055,7 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 		pi += pinc;
 		transform_tree(dst, st, size_log2, unavail & ~2, depth, cbf, offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left, top + blen, 2, pi, is_intra);
 		pi += pinc;
-			transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + blen, top + blen, 3, pi, is_intra);
+		transform_tree(dst, st, size_log2, 0, depth, cbf, offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + blen, top + blen, 3, pi, is_intra);
 	} else {
 		if (is_intra) {
 			intra_prediction(dst, size_log2, offset_x, (unavail & 2) ? -1 : valid_x, offset_y, (unavail & 1) ? -1 : valid_y, pred_idx);
@@ -3176,7 +3176,7 @@ struct store_pix {
 
 struct add_store_pix {
 	void operator()(int16_t& dst, int val, int shift) const {
-		int v0 = (dst + (val >> 6) + (1 << shift)) >> (shift + 1);
+		int v0 = (dst + (val >> shift) + (1 << 6)) >> (6 + 1);
 		dst = CLAMPX(v0, 256);
 	}
 };
@@ -3207,7 +3207,7 @@ static void interpolate00_base(T0* dst, const T1* ref, int src_stride, int dst_s
 
 template <typename T0, typename T1, typename F0>
 static void interpolate00(T0* dst, int16_t tmp[], const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int shift, F0 Store) {
-	if (((unsigned)xmax <= (unsigned)xpos) || ((unsigned)ymax <= (unsigned)ypos)) {
+	if (((unsigned)xmax <= (unsigned)(xpos + width)) || ((unsigned)ymax <= (unsigned)(ypos + height))) {
 		interpolate00_base(dst, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, shift, address_umv(), Store);
 	} else {
 		interpolate00_base(dst, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, shift, address_noumv(), Store);
@@ -3622,7 +3622,7 @@ static void merge_zero_mv(const h265d_ctu_t& ctu, int idx, int num, h265d_neighb
 	memset(mv.pred.mvd, 0, sizeof(mv.pred.mvd));
 }
 
-static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop) {
 	int max = ctu.slice_header->body.max_num_merge_cand;
 	int idx = (1 < max) ? merge_idx(ctu.cabac, st) : 0;
 	int par_merge = ctu.pps->log2_parallel_merge_level_minus2 + 2;
@@ -3640,6 +3640,9 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 		}
 		if (!(unavail & 4)) {
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
+		}
+		if (num <= idx) {
+			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y - 1, par_merge, lefttop);
 		}
 	}
 	if ((num <= idx) && ctu.slice_header->body.slice_temporal_mvp_enabled_flag) {
@@ -3856,7 +3859,7 @@ static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* b
 
 static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, uint32_t pred_unavail = 0) {
 	if (merge_flag(ctu.cabac, st)) {
-		prediction_unit_merge(ctu, st, unavail | pred_unavail, offset_x, offset_y, width, height, left, top);
+		prediction_unit_merge(ctu, st, unavail | pred_unavail, offset_x, offset_y, width, height, left, top, lefttop);
 		return true;
 	} else {
 		int pred_idc;
@@ -3896,13 +3899,13 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxN:
 		len_s = len >> 1;
 		lefttops[0] = left[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, unavail & ((unavail | ~1) << 2), offset_x, offset_y, len, len_s, left, top, lefttop);
 		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top, lefttops[0], 2);
 		break;
 	case PART_Nx2N:
 		len_s = len >> 1;
 		lefttops[0] = top[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, unavail & ((unavail | ~2) << 2), offset_x, offset_y, len_s, len, left, top, lefttop);
 		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3), lefttops[0], 1);
 		break;
 	case PART_NxN:
@@ -3996,7 +3999,7 @@ static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t u
 	uint32_t skip = cu_skip_flag(dst.cabac, st, unavail, left, top);
 	if (skip) {
 		int len = 1 << size_log2;
-		prediction_unit_merge(dst, st, unavail, offset_x, offset_y, len, len, left, top);
+		prediction_unit_merge(dst, st, unavail, offset_x, offset_y, len, len, left, top, lefttop);
 		cu_inter_skip_mode_fill(left, top, 1, 1 << (size_log2 - 2));
 	} else {
 		if (pred_mode_flag(dst.cabac, st) != 0) {
