@@ -394,9 +394,11 @@ struct pred_info_t {
 };
 
 typedef struct {
-	uint16_t intra : 1;
+	uint16_t pu_intra : 1;
+	uint16_t pu_nonzero_coef : 1;
+	uint16_t tu_intra : 1;
+	uint16_t tu_nonzero_coef : 1;
 	uint16_t skip : 1;
-	uint16_t nonzero_coef : 1;
 	uint16_t pred_mode : 6;
 	uint16_t depth : 4;
 	pred_info_t pred;
@@ -442,6 +444,19 @@ typedef struct {
 	h265d_dpb_t dpb;
 } h265d_frame_info_t;
 
+struct h265d_deblock_dimension_t {
+	int8_t leftgap[2];
+	int8_t topgap[2];
+	int8_t edgemax;
+	void set(int log2size) {
+		edgemax = 1 << (log2size - 3);
+		leftgap[0] = 1;
+		leftgap[1] = edgemax;
+		topgap[0] = edgemax * 2 + 1;
+		topgap[1] = 1;
+	}
+};
+
 typedef struct h265d_ctu_t {
 	h265d_cabac_t cabac;
 	uint16_t pos_x, pos_y;
@@ -469,6 +484,7 @@ typedef struct h265d_ctu_t {
 	uint8_t* chroma;
 	h265d_frame_info_t frame_info;
 	h265d_cabac_context_t context;
+	h265d_deblock_dimension_t deb_dimension;
 	h265d_deblocking_strength_t deblock_boundary[2][8 * 17];
 	h265d_deblocking_strength_t* deblock_topedge;
 	h265d_deblocking_strength_t* deblock_topedgebase;
