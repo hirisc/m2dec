@@ -28,7 +28,7 @@
 #include <limits.h>
 #include <cstdlib>
 #include <algorithm>
-#include "h265.h"
+#include "h265modules.h"
 #include "m2d_macro.h"
 #include "h265tbl.h"
 
@@ -53,9 +53,6 @@ typedef enum {
 #define CHECK_RANGE(val, max, st) {if ((max) < (val)) error_report(st);}
 #define CHECK_RANGE2(val, min, max, st) {if (((val) < (min)) || ((max) < (val))) error_report(st);}
 #define NEGATE(val, sign) (((val) ^ (unsigned)-(signed)(sign)) + (sign))
-#define CLIP3(low, high, val) (((low) <= (val)) ? (((val) <= (high)) ? (val) : (high)) : (low))
-#define MINV(a, b) (((a) <= (b)) ? (a) : (b))
-#define MAXV(a, b) (((a) >= (b)) ? (a) : (b))
 
 int h265d_init(h265d_context *h2, int dpb_max, int (*header_callback)(void *, void *), void *arg) {
 	if (!h2) {
@@ -82,9 +79,9 @@ static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* p
 	}
 	next += sizeof(ctu->neighbour_top[0]) * H265D_NEIGHBOUR_NUM * col;
 	if (ctu) {
-		ctu->deblock_topedge = ctu->deblock_topedgebase = reinterpret_cast<h265d_deblocking_strength_t*>(next);
+		ctu->deblocking.init(next);
 	}
-	next += sizeof(ctu->deblock_topedge[0]) * (col << (sps.ctb_info.size_log2 - 3));
+	next += ctu->deblocking.allocate_size(sps.ctb_info.size_log2, col);
 	size_t sao_right_len = sizeof(ctu->sao_vlines.right[0][0][0]) << sps.ctb_info.size_log2;
 	size_t sao_line_len = (sizeof(ctu->sao_hlines[0][0].bottom[0]) * col) << sps.ctb_info.size_log2;
 	size_t sao_map_len = (sizeof(ctu->sao_hlines[0][0].reserved_flag[0]) * col + 7) >> 3;
@@ -122,10 +119,10 @@ static int set_second_frame(const h265d_sps_t& sps, h265d_ctu_t* ctu, uint8_t* p
 	}
 	next += sizeof(ctu->sao_map[0]) * col * sps.ctb_info.rows;
 	int frame_num = std::min(sps.num_long_term_ref_pics_sps + sps.num_short_term_ref_pic_sets, H265D_MAX_FRAME_NUM);
-	size_t col_size = sizeof(*ctu->frame_info.col[0]) * ((sps.pic_width_in_luma_samples + 15) >> 4) * ((sps.pic_height_in_luma_samples + 15) >> 4);
+	size_t col_size = ctu->colpics.colpic_size(sps.pic_width_in_luma_samples, sps.pic_height_in_luma_samples);
 	for (int i = 0; i < frame_num; ++i) {
 		if (ctu) {
-			ctu->frame_info.col[i] = reinterpret_cast<h265d_neighbour_t*>(next);
+			ctu->colpics.set_colpic(i, next);
 		}
 		next += col_size;
 	}
@@ -733,8 +730,7 @@ static void slice_header_short_term_ref_pic_set(h265d_short_term_ref_pic_set_t& 
 }
 
 static void init_pic_order_cnt(h265d_poc_t& poc) {
-	poc.lsb = 0;
-	poc.msb = 0;
+	memset(&poc, 0, sizeof(poc));
 }
 
 static void update_pic_order_cnt(h265d_slice_header_body_t& hdr, unsigned curr_lsb, const h265d_sps_t& sps) {
@@ -750,10 +746,7 @@ static void update_pic_order_cnt(h265d_slice_header_body_t& hdr, unsigned curr_l
 	} else if ((prev_lsb < curr_lsb) && (max_lsb_div2 < curr_lsb - prev_lsb)) {
 		poc.msb--;
 	}
-}
-
-static uint32_t pic_order_cnt(const h265d_poc_t& poc, const h265d_sps_t& sps) {
-	return ((16 * poc.msb) << sps.log2_max_pic_order_cnt_lsb_minus4) + poc.lsb;
+	poc.poc = ((16 * poc.msb) << sps.log2_max_pic_order_cnt_lsb_minus4) + poc.lsb;
 }
 
 static void slice_header_nonidr(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
@@ -789,7 +782,17 @@ static void pred_weight_table(h265d_slice_header_body_t& dst, const h265d_pps_t&
 	assert(0);
 }
 
-static int init_ref_pic_list_short_lx(h265d_ref_pic_list_elem_t list[], const h265d_short_term_ref_pic_elem_t& ref, int curr_poc, int rest) {
+static int find_frame_idx_from_dpb(const h265d_dpb_t& dpb, int poc) {
+	int len = dpb.size;
+	for (int i = 0; i < len; ++i) {
+		if (dpb.data[i].poc == poc) {
+			return dpb.data[i].frame_idx;
+		}
+	}
+	return len ? dpb.data[0].frame_idx : 0;
+}
+
+static int init_ref_pic_list_short_lx(h265d_ref_pic_list_elem_t list[], const h265d_short_term_ref_pic_elem_t& ref, const h265d_dpb_t& dpb, int curr_poc, int rest) {
 	unsigned used = ref.used_by_curr_pic_flag;
 	int i;
 	for (i = 0; (i < ref.num_pics) && (i < rest); ++i) {
@@ -798,24 +801,25 @@ static int init_ref_pic_list_short_lx(h265d_ref_pic_list_elem_t list[], const h2
 			list[i].poc = poc;
 			list[i].in_use = true;
 			list[i].is_longterm = false;
+			list[i].frame_idx = find_frame_idx_from_dpb(dpb, poc);
 		}
 		used >>= 1;
 	}
 	return i;
 }
 
-static void init_ref_pic_list(h265d_ref_pic_list_elem_t list[][16], const h265d_short_term_ref_pic_set_t& srps, const h265d_slice_header_body_t& hdr, int curr_poc) {
+static void init_ref_pic_list(h265d_ref_pic_list_elem_t list[][16], const h265d_short_term_ref_pic_set_t& srps, const h265d_slice_header_body_t& hdr, const h265d_dpb_t& dpb, int curr_poc) {
 	for (int lx = 0; lx < 2; ++lx) {
 		int num_tmp = MAXV(hdr.num_ref_idx_lx_active_minus1[lx] + 1, static_cast<int>(srps.total_curr));
 		int idx = 0;
 		while (idx < num_tmp) {
-			idx += init_ref_pic_list_short_lx(list[lx], srps.ref[lx], curr_poc, num_tmp - idx);
-			idx += init_ref_pic_list_short_lx(list[lx] + idx, srps.ref[lx ^ 1], curr_poc, num_tmp - idx);
+			idx += init_ref_pic_list_short_lx(list[lx], srps.ref[lx], dpb, curr_poc, num_tmp - idx);
+			idx += init_ref_pic_list_short_lx(list[lx] + idx, srps.ref[lx ^ 1], dpb, curr_poc, num_tmp - idx);
 		}
 	}
 }
 
-static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_dpb_t& dpb, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	if (get_onebit(&st)) {
 		READ_CHECK_RANGE(ue_golomb(&st), dst.num_ref_idx_lx_active_minus1[0], 14, st);
 		if (dst.slice_type == 0) {
@@ -827,7 +831,7 @@ static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pp
 	if (pps.lists_modification_present_flag && (1 < dst.short_term_ref_pic_set.total_curr)) {
 		assert(0);
 	}
-	init_ref_pic_list(dst.ref_list, dst.short_term_ref_pic_set, dst, pic_order_cnt(dst.slice_pic_order_cnt, sps));
+	init_ref_pic_list(dst.ref_list, dst.short_term_ref_pic_set, dst, dpb, dst.slice_pic_order_cnt.poc);
 	if (dst.slice_type == 0) {
 		dst.mvd_l1_zero_flag = get_onebit(&st);
 	}
@@ -851,7 +855,7 @@ static void slice_header_nonintra(h265d_slice_header_body_t& dst, const h265d_pp
 	dst.max_num_merge_cand = 5 - five_minus_max_num_merge_cand;
 }
 
-static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_dpb_t& dpb, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	if (pps.num_extra_slice_header_bits) {
 		skip_bits(&st, pps.num_extra_slice_header_bits);
 	}
@@ -870,7 +874,7 @@ static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t&
 		dst.slice_sao_chroma_flag = get_onebit(&st);
 	}
 	if (dst.slice_type != 2) {
-		slice_header_nonintra(dst, pps, sps, st);
+		slice_header_nonintra(dst, dpb, pps, sps, st);
 	}
 	int32_t qp_delta = se_golomb(&st);
 	dst.slice_qpy = pps.init_qp_minus26 + qp_delta + 26;
@@ -902,7 +906,7 @@ static void slice_header_body(h265d_slice_header_body_t& dst, const h265d_pps_t&
 	}
 }
 
-static void slice_header(h265d_slice_header_t& dst, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
+static void slice_header(h265d_slice_header_t& dst, const h265d_dpb_t& dpb, const h265d_pps_t& pps, const h265d_sps_t& sps, dec_bits& st) {
 	dst.dependent_slice_segment_flag = 0;
 	if (!dst.first_slice_segment_in_pic_flag) {
 		if (pps.dependent_slice_segments_enabled_flag) {
@@ -913,7 +917,7 @@ static void slice_header(h265d_slice_header_t& dst, const h265d_pps_t& pps, cons
 		dst.slice_segment_address = 0;
 	}
 	if (!dst.dependent_slice_segment_flag) {
-		slice_header_body(dst.body, pps, sps, st);
+		slice_header_body(dst.body, dpb, pps, sps, st);
 	}
 	if (pps.tiles_enabled_flag || pps.entropy_coding_sync_enabled_flag) {
 		entry_points(dst.entry_points, pps, sps, st);
@@ -939,69 +943,69 @@ static const m2d_cabac_init_mn_t cabac_initial_value[3][157] = {
 		{0, 56}, {15, 48}, {-5, 72}, {-5, 88}, {0, 88}, {0, 64}, {0, 0}, {0, 0},
 		{0, 0}, {0, 0}, {10, 48}, {0, 0}, {0, 0}, {0, 0}, {10, 48}, {-30, 104},
 		{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
-		{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 56}, {-5, 64},
-		{-5, 64}, {-15, 104}, {-5, 88}, {-20, 96}, {-5, 64}, {10, 32}, {0, 64}, {0, 0},
-		{0, 0}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-15, 96}, {-15, 96}, {-10, 80},
-		{-10, 88}, {-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104},
-		{-5, 104}, {-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-15, 96},
-		{-15, 96}, {-10, 80}, {-10, 88}, {-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80},
-		{-15, 88}, {-15, 104}, {-5, 104}, {-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72},
-		{-30, 104}, {-20, 72}, {5, 72}, {-5, 32}, {-5, 88}, {-15, 104}, {-15, 104}, {-10, 88},
-		{-15, 96}, {-15, 96}, {-20, 96}, {-10, 80}, {-15, 80}, {-10, 80}, {-15, 72}, {-10, 88},
-		{-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8},
-		{0, 56}, {-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88},
-		{-5, 80}, {-5, 72}, {10, 32}, {10, 32}, {0, 48}, {-5, 48}, {0, 48}, {-5, 48},
-		{0, 56}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 80},
-		{-20, 80}, {-5, 56}, {-5, 64}, {-5, 80}, {0, 48}, {-5, 64}, {-5, 72}, {0, 56},
-		{-25, 64}, {0, 24}, {-20, 80}, {-5, 72}, {-15, 72}, {-10, 64}, {0, 48}, {-5, 80},
-		{10, 8}, {5, 32}, {10, 32}, {-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64},
-		{0, 56}, {-5, 48}, {5, 40}, {0, 48}, {0, 48}
+		{0, 0}, {0, 0}, {0, 0}, {0, 56}, {-5, 64}, {-5, 64}, {-15, 104}, {-5, 88},
+		{-20, 96}, {-5, 64}, {10, 32}, {0, 64}, {0, 0}, {0, 0}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88}, {-5, 80}, {0, 56},
+		{-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104}, {-10, 104}, {-15, 104},
+		{-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-15, 96}, {-15, 96}, {-10, 80}, {-10, 88},
+		{-5, 80}, {0, 56}, {-10, 88}, {-10, 104}, {-5, 80}, {-15, 88}, {-15, 104}, {-5, 104},
+		{-10, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-30, 104}, {-20, 72}, {5, 72},
+		{-5, 32}, {-5, 88}, {-15, 104}, {-15, 104}, {-10, 88}, {-15, 96}, {-15, 96}, {-20, 96},
+		{-10, 80}, {-15, 80}, {-10, 80}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56},
+		{-10, 88}, {-15, 72}, {-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-15, 72},
+		{-10, 88}, {-5, 88}, {10, 8}, {0, 56}, {-10, 88}, {-5, 80}, {-5, 72}, {10, 32},
+		{10, 32}, {0, 48}, {-5, 48}, {0, 48}, {-5, 48}, {0, 56}, {-5, 48}, {-5, 72},
+		{-15, 104}, {-5, 48}, {-5, 72}, {-15, 104}, {-5, 80}, {-20, 80}, {-5, 56}, {-5, 64},
+		{-5, 80}, {0, 48}, {-5, 64}, {-5, 72}, {0, 56}, {-25, 64}, {0, 24}, {-20, 80},
+		{-5, 72}, {-15, 72}, {-10, 64}, {0, 48}, {-5, 80}, {10, 8}, {5, 32}, {10, 32},
+		{-5, 80}, {25, 8}, {-10, 64}, {15, 24}, {-5, 64}, {0, 56}, {-5, 48}, {5, 40},
+		{0, 48}, {0, 48}
 
 	},
 	{
 		{0, 56}, {10, 56}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
 		{15, 56}, {0, 24}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {0, 64}, {0, 48},
 		{-25, 104}, {-15, 96}, {-10, 64}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
-		{0, 56}, {0, 56}, {0, 56}, {0, 56}, {5, 48}, {5, 48}, {-10, 80}, {-5, 64},
-		{-20, 96}, {0, 56}, {-15, 104}, {0, 24}, {-15, 72}, {5, 40}, {0, 64}, {-5, 80},
-		{15, 32}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-20, 96},
-		{-15, 96}, {-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96},
-		{-15, 104}, {-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 88},
-		{-15, 96}, {-20, 96}, {-15, 96}, {-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96},
-		{-25, 96}, {-15, 96}, {-15, 104}, {-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72},
-		{-15, 80}, {-10, 56}, {-5, 80}, {-30, 88}, {0, 64}, {0, 72}, {0, 64}, {-5, 72},
-		{0, 56}, {-5, 72}, {-10, 72}, {-10, 72}, {-30, 104}, {0, 56}, {5, 32}, {10, 40},
-		{-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48},
-		{0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64},
-		{5, 64}, {0, 56}, {-10, 72}, {-10, 72}, {-15, 72}, {-10, 56}, {-15, 72}, {-10, 56},
-		{5, 40}, {0, 40}, {10, 40}, {-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64},
-		{15, 16}, {15, 16}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32},
-		{-5, 32}, {0, 24}, {-5, 48}, {0, 56}, {-10, 56}, {-5, 48}, {-5, 56}, {5, 56},
-		{15, 0}, {5, 32}, {5, 40}, {0, 64}, {5, 40}, {-5, 56}, {10, 32}, {-15, 72},
-		{5, 40}, {-20, 72}, {-10, 64}, {-15, 72}, {5, 40}
+		{0, 56}, {0, 56}, {5, 48}, {-10, 80}, {-5, 64}, {-20, 96}, {0, 56}, {-15, 104},
+		{0, 24}, {-15, 72}, {5, 40}, {0, 64}, {-5, 80}, {15, 32}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96}, {-20, 104}, {-25, 104},
+		{-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104}, {-15, 104}, {-20, 104},
+		{-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 88}, {-15, 96}, {-20, 96}, {-15, 96},
+		{-20, 104}, {-25, 104}, {-10, 88}, {-15, 104}, {-15, 96}, {-25, 96}, {-15, 96}, {-15, 104},
+		{-15, 104}, {-20, 104}, {-20, 96}, {-15, 80}, {-10, 72}, {-15, 80}, {-10, 56}, {-5, 80},
+		{-30, 88}, {0, 64}, {0, 72}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
+		{-10, 72}, {-30, 104}, {0, 56}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
+		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
+		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-10, 72},
+		{-10, 72}, {-15, 72}, {-10, 56}, {-15, 72}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
+		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {15, 16}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
+		{0, 56}, {-10, 56}, {-5, 48}, {-5, 56}, {5, 56}, {15, 0}, {5, 32}, {5, 40},
+		{0, 64}, {5, 40}, {-5, 56}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-10, 64},
+		{-15, 72}, {5, 40}
 
 	},
 	{
 		{0, 56}, {5, -16}, {-15, 72}, {-5, 72}, {-10, 96}, {0, 64}, {15, 24}, {10, 56},
 		{15, 56}, {-5, 32}, {0, 64}, {-5, 72}, {0, 64}, {0, 64}, {10, 40}, {0, 48},
 		{-25, 104}, {0, 64}, {-5, 56}, {-20, 104}, {-25, 104}, {-30, 104}, {-40, 104}, {-40, 104},
-		{0, 56}, {0, 56}, {0, 56}, {0, 56}, {5, 48}, {5, 48}, {25, -16}, {5, 40},
-		{-10, 64}, {0, 56}, {-15, 104}, {0, 24}, {-20, 80}, {5, 40}, {0, 64}, {5, 56},
-		{15, 32}, {0, 64}, {0, 64}, {-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-10, 80},
-		{-15, 96}, {-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88},
-		{-10, 96}, {-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 88},
-		{-15, 96}, {-10, 80}, {-15, 96}, {-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104},
-		{-25, 104}, {-10, 88}, {-10, 96}, {-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72},
-		{-20, 88}, {-10, 56}, {-5, 80}, {-30, 88}, {0, 64}, {5, 64}, {0, 64}, {-5, 72},
-		{0, 56}, {-5, 72}, {-10, 72}, {-10, 72}, {-30, 104}, {-10, 80}, {5, 32}, {10, 40},
-		{-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48},
-		{0, 56}, {0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64},
-		{5, 64}, {0, 56}, {-5, 64}, {-5, 64}, {-10, 64}, {-10, 56}, {-10, 64}, {-10, 56},
-		{5, 40}, {0, 40}, {10, 40}, {-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64},
-		{15, 16}, {5, 40}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32},
-		{-5, 32}, {0, 24}, {-5, 48}, {0, 56}, {-10, 56}, {-5, 48}, {-10, 64}, {5, 56},
-		{20, -16}, {5, 32}, {5, 40}, {0, 64}, {0, 48}, {5, 40}, {10, 32}, {-15, 72},
-		{5, 40}, {-20, 72}, {-15, 72}, {-15, 72}, {5, 40}
+		{0, 56}, {0, 56}, {5, 48}, {25, -16}, {5, 40}, {-10, 64}, {0, 56}, {-15, 104},
+		{0, 24}, {-20, 80}, {5, 40}, {0, 64}, {5, 56}, {15, 32}, {0, 64}, {0, 64},
+		{-5, 72}, {-5, 72}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96}, {-20, 104}, {-20, 96},
+		{-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96}, {-15, 104}, {-15, 104},
+		{-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 88}, {-15, 96}, {-10, 80}, {-15, 96},
+		{-20, 104}, {-20, 96}, {-10, 88}, {-15, 104}, {-15, 104}, {-25, 104}, {-10, 88}, {-10, 96},
+		{-15, 104}, {-15, 104}, {-25, 104}, {-15, 80}, {-10, 72}, {-20, 88}, {-10, 56}, {-5, 80},
+		{-30, 88}, {0, 64}, {5, 64}, {0, 64}, {-5, 72}, {0, 56}, {-5, 72}, {-10, 72},
+		{-10, 72}, {-30, 104}, {-10, 80}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56},
+		{0, 64}, {5, 32}, {10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 32},
+		{10, 40}, {-5, 80}, {-5, 48}, {0, 56}, {0, 64}, {5, 64}, {0, 56}, {-5, 64},
+		{-5, 64}, {-10, 64}, {-10, 56}, {-10, 64}, {-10, 56}, {5, 40}, {0, 40}, {10, 40},
+		{-5, 80}, {0, 40}, {10, 40}, {-5, 80}, {0, 64}, {15, 16}, {5, 40}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {10, 32}, {-5, 32}, {0, 24}, {-5, 48},
+		{0, 56}, {-10, 56}, {-5, 48}, {-10, 64}, {5, 56}, {20, -16}, {5, 32}, {5, 40},
+		{0, 64}, {0, 48}, {5, 40}, {10, 32}, {-15, 72}, {5, 40}, {-20, 72}, {-15, 72},
+		{-15, 72}, {5, 40}
 
 	}
 };
@@ -1205,12 +1209,12 @@ static inline int ref_idx_lx(h265d_cabac_t& cabac, dec_bits& st, int max, int8_t
 	int idx;
 	int max_tmp = MINV(max, 2);
 	for (idx = 0; idx < max_tmp; ++idx) {
-		if (cabac_decode_decision_raw(cabac, st, ctx + idx)) {
-			break;
+		if (!cabac_decode_decision_raw(cabac, st, ctx + idx)) {
+			return idx;
 		}
 	}
 	for (;idx < max; ++idx) {
-		if (cabac_decode_bypass(cabac, st)) {
+		if (!cabac_decode_bypass(cabac, st)) {
 			break;
 		}
 	}
@@ -1219,7 +1223,7 @@ static inline int ref_idx_lx(h265d_cabac_t& cabac, dec_bits& st, int max, int8_t
 
 static inline int ref_idx_lx(h265d_cabac_t& cabac, dec_bits& st, int lx, const uint8_t num_ref_idx_minus1[]) {
 	int num = num_ref_idx_minus1[lx];
-	return (0 < num) ? ref_idx_lx(cabac, st, num, cabac.context->ref_idx_lx[lx]) : 0;
+	return (0 < num) ? ref_idx_lx(cabac, st, num, cabac.context->ref_idx_lx) : 0;
 }
 
 static inline uint32_t abs_mvd_greater_flag(h265d_cabac_t& cabac, dec_bits& st, int idx) {
@@ -2986,140 +2990,6 @@ static inline void qpy_update(h265d_ctu_t& dst, uint8_t qp_left[], uint8_t qp_to
 	}
 }
 
-static h265d_deblocking_strength_t* boundary_to_fill(h265d_deblocking_strength_t* deb, int offset_x, int offset_y, int xgap, int ygap, int& org_y) {
-	int org_x = offset_x >> 3;
-	org_y = offset_y >> 2;
-	return deb + org_x * xgap + (org_y + 1) * ygap;
-}
-
-static void record_block_boundary_tu_intra_onedir(h265d_deblocking_strength_t deb[][8 * 17], const h265d_ctu_t& ctu, int dir, int offset_x, int offset_y, int unavail, int xgap, int ygap, int len, int edgemax) {
-	if ((offset_x & 7) || ((offset_x == 0) && ((unavail >> dir) & 1))) {
-		return;
-	}
-	int org_y;
-	h265d_deblocking_strength_t* boundary = boundary_to_fill(deb[dir], offset_x, offset_y, xgap, ygap, org_y);
-	int qp = ctu.qpy + 1;
-	const uint8_t* prev_qp = &ctu.qp_history[dir][org_y];
-	for (int n = 0; n < len; ++n) {
-		boundary[n * ygap].qp = (qp + prev_qp[n]) >> 1;
-		boundary[n * ygap].str = 2;
-	}
-}
-
-static void record_block_boundary_tu_intra(h265d_ctu_t& ctu, int size_log2, int offset_x, int offset_y, uint32_t unavail) {
-	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
-		return;
-	}
-	int len = 1 << (size_log2 - 2);
-	record_block_boundary_tu_intra_onedir(ctu.deblock_boundary, ctu, 0, offset_x, offset_y, unavail, ctu.deb_dimension.leftgap[0], ctu.deb_dimension.leftgap[1], len, ctu.deb_dimension.edgemax);
-	record_block_boundary_tu_intra_onedir(ctu.deblock_boundary, ctu, 1, offset_y, offset_x, unavail, ctu.deb_dimension.topgap[0], ctu.deb_dimension.topgap[1], len, ctu.deb_dimension.edgemax);
-}
-
-static int ref_idx_num(const pred_info_t& pred) {
-	return (pred.ref_idx[1] < 0) ? 1 : (1 + (0 <= pred.ref_idx[0]));
-}
-
-static int strength_tu(const h265d_neighbour_t& neighbour) {
-	return neighbour.tu_intra ? 2 : (neighbour.tu_nonzero_coef ? 1 : 0);
-}
-
-static void record_block_boundary_tu_onedir(h265d_deblocking_strength_t deb[][8 * 17], const h265d_ctu_t& ctu, int dir, int offset_x, int offset_y, int unavail, int xgap, int ygap, int len, int edgemax, int strength, const h265d_neighbour_t neighbour[]) {
-	if ((offset_x & 7) || ((offset_x == 0) && ((unavail >> dir) & 1))) {
-		return;
-	}
-	int org_y;
-	h265d_deblocking_strength_t* boundary = boundary_to_fill(deb[dir], offset_x, offset_y, xgap, ygap, org_y);
-	int qp = ctu.qpy + 1;
-	const uint8_t* prev_qp = &ctu.qp_history[dir][org_y];
-	int prev_str = -1;
-	for (int n = 0; n < len; ++n) {
-		boundary[n * ygap].qp = (qp + prev_qp[n]) >> 1;
-		int str_tu = MAXV(strength, strength_tu(neighbour[n]));
-		boundary[n * ygap].str = MAXV(boundary[n * ygap].str, str_tu);
-	}
-}
-
-static void record_block_boundary_tu(h265d_ctu_t& ctu, int size_log2, int offset_x, int offset_y, uint32_t unavail, int str, const h265d_neighbour_t* left, const h265d_neighbour_t* top) {
-	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
-		return;
-	}
-	int len = 1 << (size_log2 - 2);
-	record_block_boundary_tu_onedir(ctu.deblock_boundary, ctu, 0, offset_x, offset_y, unavail, ctu.deb_dimension.leftgap[0], ctu.deb_dimension.leftgap[1], len, ctu.deb_dimension.edgemax, str, left);
-	record_block_boundary_tu_onedir(ctu.deblock_boundary, ctu, 1, offset_y, offset_x, unavail, ctu.deb_dimension.topgap[0], ctu.deb_dimension.topgap[1], len, ctu.deb_dimension.edgemax, str, top);
-}
-
-static int refidx_to_frameidx(const h265d_ctu_t& ctu, int refidx, int lx) {
-	return (0 <= refidx) ? ctu.slice_header->body.ref_list[lx][refidx].frame_idx : -1;
-}
-
-static inline int DIF_SQUARE(int a, int b) {
-	int t = a - b;
-	return t * t;
-}
-
-static bool mv_diff_is_large(const int16_t mvxy_a[], const int16_t mvxy_b[]) {
-	return (16 <= DIF_SQUARE(mvxy_a[0], mvxy_b[0])) || (16 <= DIF_SQUARE(mvxy_a[1], mvxy_b[1]));
-}
-
-static int inter_strength(int nfrm0, int nfrm1, int cfrm0, int cfrm1, const int16_t n_mvxy[][2], const int16_t c_mvxy[][2], int n_swapped, int c_swapped) {
-	if ((nfrm0 != cfrm0) || (nfrm1 != cfrm1)) {
-		return 1;
-	} else {
-		if (nfrm0 == nfrm1) {
-			return (mv_diff_is_large(n_mvxy[0], c_mvxy[0]) || mv_diff_is_large(n_mvxy[1], c_mvxy[1])) && (mv_diff_is_large(n_mvxy[0], c_mvxy[1]) || mv_diff_is_large(n_mvxy[0], c_mvxy[1]));
-		} else {
-			return ((0 <= nfrm0) && mv_diff_is_large(n_mvxy[n_swapped], c_mvxy[c_swapped])) || ((0 <= nfrm1) && mv_diff_is_large(n_mvxy[n_swapped ^ 1], c_mvxy[c_swapped ^ 1]));
-		}
-	}
-}
-
-static int strength_inter_pu_onedir(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, const int16_t mvxy[][2], int frm0, int frm1, int c_swapped) {
-	if (neighbour.pu_intra) {
-		return 2;
-	} else if (neighbour.pu_nonzero_coef) {
-		return 1;
-	} else {
-		int nfrm0 = refidx_to_frameidx(ctu, neighbour.pred.ref_idx[0], 0);
-		int nfrm1 = refidx_to_frameidx(ctu, neighbour.pred.ref_idx[1], 1);
-		int n_swapped = 0;
-		if (nfrm0 < nfrm1) {
-			std::swap(nfrm0, nfrm1);
-			n_swapped = 1;
-		}
-		return inter_strength(nfrm0, nfrm1, frm0, frm1, neighbour.pred.mvd, mvxy, c_swapped, n_swapped);
-	}
-}
-
-static void record_block_boundary_pu_onedir(h265d_deblocking_strength_t deb[][8 * 17], const h265d_ctu_t& ctu, int dir, int offset_x, int offset_y, uint32_t unavail, int xgap, int ygap, int len, int edgemax, const h265d_neighbour_t* neighbour, int refidx0, int refidx1, const int16_t mvxy[][2]) {
-	if ((offset_x & 7) || ((offset_x == 0) && ((unavail >> dir) & 1))) {
-		return;
-	}
-	int frm0 = refidx_to_frameidx(ctu, refidx0, 0);
-	int frm1 = refidx_to_frameidx(ctu, refidx1, 1);
-	int c_swapped = 0;
-	if (frm0 < frm1) {
-		std::swap(frm0, frm1);
-		c_swapped = 1;
-	}
-	int org_y;
-	h265d_deblocking_strength_t* boundary = boundary_to_fill(deb[dir], offset_x, offset_y, xgap, ygap, org_y);
-	int qp = ctu.qpy + 1;
-	const uint8_t* prev_qp = &ctu.qp_history[dir][org_y];
-	len >>= 2;
-	for (int i = 0; i < len; ++i) {
-		boundary[i * ygap].qp = (qp + prev_qp[i]) >> 1;
-		boundary[i * ygap].str = strength_inter_pu_onedir(ctu, neighbour[i], mvxy, frm0, frm1, c_swapped);
-	}
-}
-
-static void record_block_boundary_pu(h265d_deblocking_strength_t deb[][8 * 17], const h265d_ctu_t& ctu, int width, int height, int offset_x, int offset_y, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top, int refidx0, int refidx1, const int16_t mvxy[][2]) {
-	if (ctu.slice_header->body.deblocking_filter_disabled_flag) {
-		return;
-	}
-	record_block_boundary_pu_onedir(deb, ctu, 0, offset_x, offset_y, unavail, ctu.deb_dimension.leftgap[0], ctu.deb_dimension.leftgap[1], height, ctu.deb_dimension.edgemax, left, refidx0, refidx1, mvxy);
-	record_block_boundary_pu_onedir(deb, ctu, 1, offset_y, offset_x, unavail, ctu.deb_dimension.topgap[0], ctu.deb_dimension.topgap[1], width, ctu.deb_dimension.edgemax, top, refidx0, refidx1, mvxy);
-}
-
 static inline uint32_t cbf_luma(h265d_cabac_t& cabac, dec_bits& st, uint32_t depth) {
 	return cabac_decode_decision_raw(cabac, st, cabac.context->cbf_luma + (depth == 0));
 }
@@ -3185,9 +3055,9 @@ static void transform_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32
 			transform_unit(dst, st, size_log2, cbf, idx, pred_idx, offset_x, offset_y, is_intra);
 		}
 		if (is_intra) {
-			record_block_boundary_tu_intra(dst, size_log2, offset_x, offset_y, unavail);
+			dst.deblocking.record_tu_intra(dst.qpy, size_log2, offset_x, offset_y, unavail);
 		} else {
-			record_block_boundary_tu(dst, size_log2, offset_x, offset_y, unavail, cbf & 1, left, top);
+			dst.deblocking.record_tu(dst.qpy, size_log2, offset_x, offset_y, unavail, cbf & 1, left, top);
 			cu_inter_tu_fill(left, top, cbf, 1 << (size_log2 - 2));
 		}
 		qpy_fill(&dst.qp_history[0][offset_y >> 2], &dst.qp_history[1][offset_x >> 2], dst.qpy, 1 << (size_log2 - 2));
@@ -3330,7 +3200,7 @@ static void interpolate00_base(T0* dst, const T1* ref, int src_stride, int dst_s
 
 template <typename T0, typename T1, typename F0>
 static void interpolate00(T0* dst, int16_t tmp[], const T1* ref, int src_stride, int dst_stride, int width, int height, int xpos, int ypos, int xmax, int ymax, int shift, F0 Store) {
-	if (((unsigned)xmax <= (unsigned)(xpos + width)) || ((unsigned)ymax <= (unsigned)(ypos + height))) {
+	if ((xpos < 0) || (ypos < 0) || ((unsigned)xmax <= (unsigned)(xpos + width)) || ((unsigned)ymax <= (unsigned)(ypos + height))) {
 		interpolate00_base(dst, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, shift, address_umv(), Store);
 	} else {
 		interpolate00_base(dst, ref, src_stride, dst_stride, width, height, xpos, ypos, xmax, ymax, shift, address_noumv(), Store);
@@ -3715,9 +3585,10 @@ static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t
 	} else {
 		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.pred.mvd[1], 12, store_pix<1>());
 	}
-	record_block_boundary_pu(ctu.deblock_boundary, ctu, width, height, offset_x, offset_y, unavail, left, top, ref0, no_bidir ? -1 : ref1, base.pred.mvd);
+	ctu.deblocking.record_pu(ctu.qpy, width, height, offset_x, offset_y, unavail, left, top, ref0, no_bidir ? -1 : ref1, base.pred.mvd);
 	copy_predinfo(left, height, base, no_bidir);
 	copy_predinfo(top, width, base, no_bidir);
+	ctu.colpics.fill(offset_x, offset_y, width, height, colpics_t::fill_inter(base.pred.mvd, base.pred.ref_idx[0], base.pred.ref_idx[1]));
 }
 
 static bool merge_available(int cx, int cy, int px, int py, int shift) {
@@ -3746,6 +3617,40 @@ static void merge_zero_mv(const h265d_ctu_t& ctu, int idx, int num, h265d_neighb
 	memset(mv.pred.mvd, 0, sizeof(mv.pred.mvd));
 }
 
+static int scale_mv(int mv, int scale) {
+	int v = mv * scale;
+	if (0 <= v) {
+		v = (v + 127) >> 8;
+		return (v <= 32767) ? v : 32767;
+	} else {
+		v = -((127 - v) >> 8);
+		return (-32768 <= v) ? v : -32768;
+	}
+}
+
+static bool add_colpic_candidate(const h265d_ctu_t& ctu, pred_info_t& pred, int offset_x, int offset_y, int width, int height) {
+	if (!ctu.slice_header->body.slice_temporal_mvp_enabled_flag) {
+		return false;
+	}
+	const h265d_neighbour_t* col = ctu.colpics.get_ref(ctu.pos_x, ctu.pos_y, offset_x, offset_y, width, height);
+	if (col->pu_intra) {
+		return false;
+	}
+	int refl = !ctu.slice_header->body.colocated_from_l0_flag;
+	int ref = col->pred.ref_idx[refl];
+	if (ref < 0) {
+		refl ^= 1;
+		ref = col->pred.ref_idx[refl];
+	}
+	for (int lx = 0; lx < 2; ++lx) {
+		pred.ref_idx[lx] = ref;
+		int scale = ctu.colpics.scale(lx, ref);
+		pred.mvd[lx][0] = scale_mv(col->pred.mvd[refl][0], scale);
+		pred.mvd[lx][1] = scale_mv(col->pred.mvd[refl][1], scale);
+	}
+	return true;
+}
+
 static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop) {
 	int max = ctu.slice_header->body.max_num_merge_cand;
 	int idx = (1 < max) ? merge_idx(ctu.cabac, st) : 0;
@@ -3769,14 +3674,14 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y - 1, par_merge, lefttop);
 		}
 	}
-	if ((num <= idx) && ctu.slice_header->body.slice_temporal_mvp_enabled_flag) {
-		int lx = ((ctu.slice_header->body.slice_type == 0) && !ctu.slice_header->body.colocated_from_l0_flag);
-		int ref_idx = ctu.slice_header->body.collocated_ref_idx;
-		const h265d_neighbour_t* col = ctu.frame_info.col[ctu.slice_header->body.ref_list[lx][ref_idx].frame_idx];
+	h265d_neighbour_t zmv;
+	if (num <= idx) {
+		if (add_colpic_candidate(ctu, zmv.pred, offset_x, offset_y, width, height)) {
+			list[num++] = &zmv;
+		}
 	}
 	if ((1 < num) && (num <= idx) && (ctu.slice_header->body.slice_type == 0)) {
 	}
-	h265d_neighbour_t zmv;
 	if (num <= idx) {
 		merge_zero_mv(ctu, idx, num, zmv);
 		list[idx] = &zmv;
@@ -3803,25 +3708,12 @@ static inline void mvd_coding(h265d_cabac_t& cabac, dec_bits& st, int16_t mvd[])
 	mvd[1] = mvd_coding_suffix(cabac, st, mvd1);
 }
 
-struct poc_from_reflist {
-	int operator()(const h265d_ref_pic_list_elem_t& ref) const {
-		return ref.poc;
-	}
-};
-
-struct longterm_from_reflist {
-	bool operator()(const h265d_ref_pic_list_elem_t& ref) const {
-		return ref.is_longterm;
-	}
-};
-
-template <typename T, typename F>
-static inline bool same_attribute(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, T value, F GetValue) {
+static bool is_valid_mv(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx) {
 	if (neighbour.pu_intra) {
 		return false;
 	}
 	int ref_idx = neighbour.pred.ref_idx[lx];
-	return (0 <= ref_idx) && (GetValue(ctu.slice_header->body.ref_list[lx][ref_idx]) == value);
+	return (0 <= ref_idx);
 }
 
 static void add_mvp(const int16_t mv[], int16_t mvp[][2], int& idx) {
@@ -3834,81 +3726,76 @@ static void add_mvp(const int16_t mv[], int16_t mvp[][2], int& idx) {
 	}
 	mvp[idx][0] = mvx;
 	mvp[idx][1] = mvy;
-	idx++;
+	idx += 1;
 }
 
-static bool mvp1st(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[][2], int& idx) {
-	if (!same_attribute(ctu, neighbour, lx, refpoc, poc_from_reflist())) {
+static void mvp2nd(int curr_poc, int curr_refpoc, int neighbour_refpoc, const int16_t mvp_src[], int16_t mvp_dst[2]) {
+	int neighbour_diffpoc = curr_poc - neighbour_refpoc;
+	int curr_diffpoc = curr_poc - curr_refpoc;
+	int scale = poc_list_t::scale(curr_diffpoc, neighbour_diffpoc); // FIXME: shall be LUT in advance
+	int16_t mv[2];
+	mvp_dst[0] = scale_mv(mvp_src[0], scale);
+	mvp_dst[1] = scale_mv(mvp_src[1], scale);
+}
+
+static bool add_mvp_if_possible(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[][2], int& idx, int16_t mvp2[], bool skip2nd, bool& match2nd) {
+	for (int li = 0; li < 2; ++li) {
+		if (is_valid_mv(ctu, neighbour, lx)) {
+			int neighbour_refpoc = ctu.slice_header->body.ref_list[lx][neighbour.pred.ref_idx[lx]].poc;
+			bool match1st = (neighbour_refpoc == refpoc);
+			if (match1st) {
+				add_mvp(neighbour.pred.mvd[lx], mvp, idx);
+				return true;
+			} else if (!skip2nd && !match2nd) {
+				mvp2nd(ctu.slice_header->body.slice_pic_order_cnt.poc, refpoc, neighbour_refpoc, neighbour.pred.mvd[lx], mvp2);
+				match2nd = true;
+			}
+		}
 		lx ^= 1;
-		if (!same_attribute(ctu, neighbour, lx, refpoc, poc_from_reflist())) {
-			return false;
-		}
 	}
-	add_mvp(neighbour.pred.mvd[lx], mvp, idx);
-	return true;
+	return false;
 }
 
-static bool mvp2nd(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, bool longterm, int16_t mvp[][2], int& idx) {
-	if (!same_attribute(ctu, neighbour, lx, longterm, longterm_from_reflist())) {
-		lx ^= 1;
-		if (!same_attribute(ctu, neighbour, lx, longterm, longterm_from_reflist())) {
-			return false;
-		}
-	}
-	if (!longterm) {
-		int poc = pic_order_cnt(ctu.slice_header->body.slice_pic_order_cnt, *ctu.sps);
-		int td = poc - ctu.slice_header->body.ref_list[lx][neighbour.pred.ref_idx[lx]].poc;
-		int tb = poc - refpoc;
-		td = CLIP3(-128, 127, td);
-		tb = CLIP3(-128, 127, tb);
-		int tx = (16384 + (abs(td) >> 1)) / td;
-		int scale = (tb * tx + 32) >> 6;
-		scale = CLIP3(-4096, 4095, scale);
-		for (int i = 0; i < 2; ++i) {
-			int mvx = neighbour.pred.mvd[lx][i] * scale;
-			int mvabs = (abs(mvx) + 127) >> 8;
-			int mv = (mvx < 0) ? -mvabs : mvabs;
-			mvp[idx][i] = CLIP3(-32768, 32767, mv);
-		}
-		idx++;
-	}
-	return true;
-}
-
-static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbour_t* neighbour, const h265d_neighbour_t* lefttop, int span, int lx, int ref_idx, int16_t mvp[][2], int& idx) {
+static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbour_t* neighbour, const h265d_neighbour_t* lefttop, int span, int lx, int ref_idx, int16_t mvp[][2], int& mvplist_idx, int idx_target) {
 	uint32_t dir_flag = lefttop ? (unavail >> 1) : unavail;
 	int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
-	bool matched = false;
+	bool match2nd = false;
+	bool skip2nd = lefttop && ((unavail & 5) != 5);
+	int16_t mvp2nd[2];
 	if (!(dir_flag & 4)) {
-		matched = mvp1st(ctu, neighbour[span], lx, refpoc, mvp, idx);
-	}
-	if (!matched && !(dir_flag & 1)) {
-		matched = mvp1st(ctu, neighbour[span - 1], lx, refpoc, mvp, idx);
-	}
-	if (!matched && lefttop && !(unavail & 3)) {
-		matched = mvp1st(ctu, *lefttop, lx, refpoc, mvp, idx);
-	}
-	if (!matched) {
-		bool longterm = ctu.slice_header->body.ref_list[lx][ref_idx].is_longterm;
-		if (!(dir_flag & 4)) {
-			matched = mvp2nd(ctu, neighbour[span], lx, refpoc, longterm, mvp, idx);
+		if (add_mvp_if_possible(ctu, neighbour[span], lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
+			return;
 		}
-		if (!matched && !(dir_flag & 1)) {
-			matched = mvp2nd(ctu, neighbour[span - 1], lx, refpoc, longterm, mvp, idx);
+	}
+	if (!(dir_flag & 1)) {
+		if (add_mvp_if_possible(ctu, neighbour[span - 1], lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
+			return;
 		}
-		if (!matched && lefttop && !(unavail & 3)) {
-			matched = mvp2nd(ctu, *lefttop, lx, refpoc, longterm, mvp, idx);
+	}
+	if (lefttop && !(unavail & 3)) {
+		if (add_mvp_if_possible(ctu, *lefttop, lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
+			return;
 		}
+	}
+	if (match2nd) {
+		add_mvp(mvp2nd, mvp, mvplist_idx);
 	}
 }
 
-static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int16_t mvxy[]) {
+static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int16_t mvxy[]) {
 	int16_t mvplist[2][2];
 	int mvp_num = 0;
-	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num);
-	mvp_one_dir(ctu, unavail, top, &lefttop, width >> 2, lx, ref_idx, mvplist, mvp_num);
+	pred_info_t pred;
+	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num, mvp_idx);
+	mvp_one_dir(ctu, unavail, top, &lefttop, width >> 2, lx, ref_idx, mvplist, mvp_num, mvp_idx);
 	if (mvp_num < 2) {
-		memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
+		if (add_colpic_candidate(ctu, pred, offset_x, offset_y, width, height)) {
+			int lxcol = (0 <= pred.ref_idx[lx]) ? lx : lx ^ 1;
+			add_mvp(pred.mvd[lxcol], mvplist, mvp_num);
+		}
+		if (mvp_num <= mvp_idx) {
+			memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
+		}
 	}
 	mvxy[0] = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
 	mvxy[1] = static_cast<int16_t>(mvd[1] + mvplist[mvp_idx][1]);
@@ -3946,7 +3833,7 @@ static int pred_amvp_l0(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* b
 	int16_t mvd[2];
 	mvd_coding(ctu.cabac, st, mvd);
 	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-	calc_mv(ctu, unavail, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvxy);
+	calc_mv(ctu, unavail, offset_x, offset_y, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvxy);
 	if (pred_idc == 0) {
 		int stride = ctu.size->stride;
 		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvxy, 12, store_pix<1>());
@@ -3965,7 +3852,7 @@ static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* b
 		memset(mvd, 0, sizeof(mvd));
 	}
 	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-	calc_mv(ctu, unavail, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvxy);
+	calc_mv(ctu, unavail, offset_x, offset_y, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvxy);
 	if (pred_idc == 1) {
 		int stride = ctu.size->stride;
 		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvxy, 12, store_pix<1>());
@@ -3995,8 +3882,9 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 		int16_t mvxy[2][2];
 		int ref_idx0 = (pred_idc == 1) ? -1 : pred_amvp_l0(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[0]);
 		int ref_idx1 = (pred_idc == 0) ? -1 : pred_amvp_l1(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[1]);
-		record_block_boundary_pu(ctu.deblock_boundary, ctu, width, height, offset_x, offset_y, unavail, left, top, ref_idx0, ref_idx1, mvxy);
+		ctu.deblocking.record_pu(ctu.qpy, width, height, offset_x, offset_y, unavail, left, top, ref_idx0, ref_idx1, mvxy);
 		fill_pred(left, height, top, width, ref_idx0, ref_idx1, mvxy);
+		ctu.colpics.fill(offset_x, offset_y, width, height, colpics_t::fill_inter(mvxy, ref_idx0, ref_idx1));
 		return false;
 	}
 }
@@ -4114,6 +4002,7 @@ static void cu_header_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, h265d
 
 static void pred_intra(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top) {
 	cu_header_intra(dst, st, size_log2, left, top);
+	dst.colpics.fill(offset_x, offset_y, 1 << size_log2, 1 << size_log2, colpics_t::fill_intra());
 	transform_tree(dst, st, size_log2, unavail, 0, 3, offset_x, valid_x, offset_y, valid_y, left, top, 0, 0, true);
 }
 
@@ -4398,31 +4287,6 @@ static void deblocking_horiz_edge_chroma_lines(const h265d_deblocking_strength_t
 	}
 }
 
-static void pre_deblocking_strength(h265d_ctu_t& ctu, int edgenum) {
-	memcpy(ctu.deblock_boundary[0], ctu.deblock_topedge, edgenum * sizeof(ctu.deblock_topedge[0]));
-}
-
-static inline void clear_deblocking_strength_left(h265d_ctu_t& ctu, int edgenum) {
-	h265d_deblocking_strength_t* left = &ctu.deblock_boundary[1][0];
-	int len = edgenum * 2;
-	for (int n = 0; n < edgenum; ++n) {
-		left[0] = left[len];
-		memset(left + 1, 0, len * sizeof(left[0]));
-		left = left + len + 1;
-	}
-}
-
-static void post_deblocking_strength(h265d_ctu_t& ctu, int edgenum) {
-	if (ctu.pos_x < ctu.size->columns - 1) {
-		clear_deblocking_strength_left(ctu, edgenum);
-	} else {
-		memset(ctu.deblock_boundary[1], 0, sizeof(ctu.deblock_boundary[1]));
-	}
-	int store_size = edgenum * sizeof(ctu.deblock_topedge[0]);
-	memcpy(ctu.deblock_topedge, ctu.deblock_boundary[0] + edgenum * edgenum * 2, store_size);
-	memset(ctu.deblock_boundary[0] + store_size, 0, sizeof(ctu.deblock_boundary[0]) - store_size);
-}
-
 static void sanityedge(const h265d_deblocking_strength_t* bound, int inc, int edgenum, int stride) {
 	for (int e = 0; e < edgenum; ++e) {
 		if ((bound[e * inc].str != 0) || (bound[e * inc + stride].str != 0)) {
@@ -4449,20 +4313,20 @@ static void deblock_ctu(h265d_ctu_t& ctu) {
 	}
 	int edgenum = 1 << (ctu.size->size_log2 - 3);
 	sanity(ctu);
-	pre_deblocking_strength(ctu, edgenum);
+	ctu.deblocking.pre_deblocking();
 	sanity(ctu);
 	int stride = ctu.size->stride;
 	int beta_offset = ctu.slice_header->body.slice_beta_offset_div2 * 2;
 	int tc_offset = ctu.slice_header->body.slice_tc_offset_div2 * 2;
 	uint8_t* luma = ctu.luma - stride * 4 - 4;
-	deblocking_vert_edge_luma_lines(ctu.deblock_boundary[0], beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_y == ctu.size->rows - 1), edgenum);
-	deblocking_horiz_edge_luma_lines(ctu.deblock_boundary[1], beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_x == ctu.size->columns - 1), edgenum);
+	deblocking_vert_edge_luma_lines(ctu.deblocking.boundary(0), beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_y == ctu.size->rows - 1), edgenum);
+	deblocking_horiz_edge_luma_lines(ctu.deblocking.boundary(1), beta_offset, tc_offset, luma, stride, edgenum * 2 + (ctu.pos_x == ctu.size->columns - 1), edgenum);
 	uint8_t* chroma = ctu.chroma - stride * 2 - 4;
 	int cb_offset = ctu.pps->pps_cb_qp_offset;
 	int cr_offset = ctu.pps->pps_cr_qp_offset;
-	deblocking_vert_edge_chroma_lines(ctu.deblock_boundary[0], cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_y == ctu.size->rows - 1), edgenum >> 1);
-	deblocking_horiz_edge_chroma_lines(ctu.deblock_boundary[1], cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_x == ctu.size->columns - 1), edgenum >> 1);
-	post_deblocking_strength(ctu, edgenum);
+	deblocking_vert_edge_chroma_lines(ctu.deblocking.boundary(0), cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_y == ctu.size->rows - 1), edgenum >> 1);
+	deblocking_horiz_edge_chroma_lines(ctu.deblocking.boundary(1), cb_offset, cr_offset, tc_offset, chroma, stride, edgenum * 2 + (ctu.pos_x == ctu.size->columns - 1), edgenum >> 1);
+	ctu.deblocking.post_deblocking(ctu.pos_x, ctu.size->columns);
 	VC_CHECK;
 }
 
@@ -4865,8 +4729,8 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	frm.crop[3] = sps.cropping[3] + frm.height - sps.pic_height_in_luma_samples;
 	dst.luma = frm.luma + luma_offset;
 	dst.chroma = frm.chroma + (luma_offset >> 1);
-	dst.deblock_topedge = dst.deblock_topedgebase + (dst.pos_x << (sps.ctb_info.size_log2 - 3));
-	dst.deb_dimension.set(sps.ctb_info.size_log2);
+	dst.colpics.init(header, dst.frame_info, sps.ctb_info.size_log2, sps.pic_width_in_luma_samples, sps.pic_height_in_luma_samples, dst.pos_x, dst.pos_y, header.slice_pic_order_cnt.poc);
+	dst.deblocking.set_ctu(hdr.body.deblocking_filter_disabled_flag, dst.qp_history, hdr.body.ref_list, sps.ctb_info.size_log2, sps.ctb_info.columns, dst.pos_x);
 	dst.pps = &pps;
 	dst.slice_header = &hdr;
 	if (dst.qpy != header.slice_qpy) {
@@ -4878,8 +4742,6 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	neighbour_init(dst.neighbour_left, NUM_ELEM(dst.neighbour_left));
 	neighbour_init(dst.neighbour_top, sps.ctb_info.columns * H265D_NEIGHBOUR_NUM);
 	memset(dst.qp_history[0], dst.qpy, sizeof(dst.qp_history));
-	memset(dst.deblock_boundary, 0, sizeof(dst.deblock_boundary));
-	memset(dst.deblock_topedgebase, 0, sizeof(dst.deblock_topedgebase[0]) * (sps.ctb_info.columns << (sps.ctb_info.size_log2 - 3)));
 }
 
 static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
@@ -4897,14 +4759,16 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 		uint32_t line_offset = dst.size->columns << size_log2;
 		dst.luma = dst.luma + y_offset - line_offset;
 		dst.chroma = dst.chroma + (y_offset >> 1) - line_offset;
+		dst.colpics.set_curr_pos(pos_x, dst.pos_y);
 	} else {
 		dst.valid_x -= 1 << size_log2;
+		dst.colpics.inc_curr_pos();
 	}
 	dst.neighbour_left[1] = dst.neighbour_left[0];
 	dst.neighbour_left[0] = dst.neighbour_top[(dst.pos_x << size_log2) - 1];
 	dst.luma += static_cast<ptrdiff_t>(1 << size_log2);
 	dst.chroma += static_cast<ptrdiff_t>(1 << size_log2);
-	dst.deblock_topedge = dst.deblock_topedgebase + (pos_x << (size_log2 - 3));
+	dst.deblocking.set_pos(size_log2, pos_x);
 	dst.pos_x = pos_x;
 	dst.idx_in_slice++;
 	h265d_neighbour_t* top = dst.neighbour_top + pos_x * H265D_NEIGHBOUR_NUM;
@@ -4928,19 +4792,6 @@ static void slice_data(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& p
 
 static void insert_dpb(h265d_dpb_t& dpb, int frame_idx, uint32_t poc, bool is_idr);
 
-static void sliding_window(h265d_slice_header_t& hdr, const h265d_frame_info_t& frame_info, h265d_nal_t current_nal, const h265d_sps_t& sps) {
-	if (current_nal == IDR_W_RADL) {
-		int lx = 0;
-		h265d_ref_pic_list_elem_t& pos = hdr.body.ref_list[lx][0];
-		pos.in_use = true;
-		pos.num = 0;
-		pos.frame_idx = frame_info.index;
-		pos.poc = pic_order_cnt(hdr.body.slice_pic_order_cnt, sps);
-		memset(&hdr.body.ref_list[lx][1], 0, sizeof(hdr.body.ref_list[lx]) - sizeof(hdr.body.ref_list[lx][1]));
-	} else {
-	}
-}
-
 static void slice_layer(h265d_data_t& h2d, dec_bits& st) {
 	h265d_slice_header_t& header = h2d.slice_header;
 	header.body.nal_type = h2d.current_nal;
@@ -4954,11 +4805,10 @@ static void slice_layer(h265d_data_t& h2d, dec_bits& st) {
 	const h265d_pps_t& pps = h2d.pps[header.pps_id];
 	const h265d_sps_t& sps = h2d.sps[pps.sps_id];
 	h2d.coding_tree_unit.size = &sps.ctb_info;
-	slice_header(header, pps, sps, st);
+	slice_header(header, h2d.coding_tree_unit.frame_info.dpb, pps, sps, st);
 	slice_data(h2d.coding_tree_unit, h2d, pps, sps, st);
 	sao_oneframe(h2d.coding_tree_unit);
-	sliding_window(header, h2d.coding_tree_unit.frame_info, h2d.current_nal, sps);
-	insert_dpb(h2d.coding_tree_unit.frame_info.dpb, h2d.coding_tree_unit.frame_info.index, pic_order_cnt(h2d.slice_header.body.slice_pic_order_cnt, sps), (header.body.nal_type == IDR_W_RADL) || (header.body.nal_type == IDR_N_LP));
+	insert_dpb(h2d.coding_tree_unit.frame_info.dpb, h2d.coding_tree_unit.frame_info.index, h2d.slice_header.body.slice_pic_order_cnt.poc, (header.body.nal_type == IDR_W_RADL) || (header.body.nal_type == IDR_N_LP));
 }
 
 static int dispatch_one_nal(h265d_data_t& h2d, uint32_t nalu_header) {

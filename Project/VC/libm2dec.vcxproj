@@ -94,6 +94,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\src\lib\h265.h" />
+    <ClInclude Include="..\..\src\lib\h265modules.h" />
     <ClInclude Include="..\..\src\lib\m2d_macro.h" />
     <ClInclude Include="..\..\src\lib\bitio.h" />
     <ClInclude Include="..\..\src\lib\config.h" />
