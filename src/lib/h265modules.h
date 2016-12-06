@@ -1,3 +1,27 @@
+/** Yet Another H.265 decoder
+ *  Copyright 2016 Takayuki Minegishi
+ *
+ *  Permission is hereby granted, free of charge, to any person
+ *  obtaining a copy of this software and associated documentation
+ *  files (the "Software"), to deal in the Software without
+ *  restriction, including without limitation the rights to use, copy,
+ *  modify, merge, publish, distribute, sublicense, and/or sell copies
+ *  of the Software, and to permit persons to whom the Software is
+ *  furnished to do so, subject to the following conditions:
+ *  
+ *  The above copyright notice and this permission notice shall be
+ *  included in all copies or substantial portions of the Software.
+ *  
+ *  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ *  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ *  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ *  NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ *  HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ *  WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ *  DEALINGS IN THE SOFTWARE.
+ */
+
 #ifndef __H265MODULES_H__
 #define __H265MODULES_H__
 
@@ -443,6 +467,7 @@ typedef struct {
 	uint8_t *curr_chroma;
 	int8_t num;
 	int8_t index;
+	int32_t poc[H265D_MAX_FRAME_NUM];
 	m2d_frame_t frames[H265D_MAX_FRAME_NUM];
 	int8_t lru[H265D_MAX_FRAME_NUM];
 	h265d_dpb_t dpb;
@@ -569,7 +594,7 @@ public:
 	void init(uint8_t* buf) {
 		topedge_ = topedge_base_ = reinterpret_cast<h265d_deblocking_strength_t*>(buf);
 	}
-	static size_t allocate_size(int log2size, int columns) {
+	size_t allocate_size(int log2size, int columns) {
 		return sizeof(topedge_[0]) * (columns << (log2size - 3));
 	}
 	void set_ctu(bool disable, const uint8_t qp_history[][16], const h265d_ref_pic_list_elem_t ref_list[][16], int log2size, int columns, int pos_x) {
@@ -636,45 +661,70 @@ public:
 	}
 };
 
-class poc_list_t {
-	uint64_t frameidx[2];
-	int get(int lx, int refidx) {
-		return (frameidx[lx] >> (refidx * 4)) & 7;
-	}
-	static int scale(int curr_poc, int curr_ref_poc, int col_poc, int col_ref_poc) {
-		int col_diffpoc = col_poc - col_ref_poc;
-		int curr_diffpoc = curr_poc - curr_ref_poc;
-		if (col_diffpoc == 0) {
-			return 4096;
-		}
-		return scale(curr_diffpoc, col_diffpoc);
-	}
+class frameidx_record_t {
+	uint64_t frameidx_[2];
 public:
-	static int scale(int curr_diffpoc, int ref_diffpoc) {
-		int td = CLIP3(-128, 127, ref_diffpoc);
-		int tb = CLIP3(-128, 127, curr_diffpoc);
-		int tx = (16384 + (std::abs(td) >> 1)) / td;
-		int scale = (tb * tx + 32) >> 6;
-		return CLIP3(-4096, 4095, scale);
+	int frameidx(int lx, int refidx) const {
+		return (frameidx_[lx] >> (refidx * 4)) & 7;
 	}
-	void create_lut(int16_t table[][16], const h265d_ref_pic_list_elem_t reflist[][16], int curr_poc, int col_poc) {
-		for (int i = 0; i < 16; ++i) {
-			int s0 = scale(curr_poc, reflist[0][i].poc, col_poc, get(0, i));
-			int s1 = scale(curr_poc, reflist[1][i].poc, col_poc, get(1, i));
-			table[0][i] = s0;
-			table[1][i] = s1;
-		}
-	}
-	const poc_list_t& operator=(const h265d_ref_pic_list_elem_t reflist[][16]) {
+
+	const frameidx_record_t& operator=(const h265d_ref_pic_list_elem_t reflist[][16]) {
 		uint64_t v0 = 0;
 		uint64_t v1 = 0;
 		for (int i = 0; i < 16; ++i) {
 			v0 |= reflist[0][i].frame_idx << (i * 4);
 			v1 |= reflist[1][i].frame_idx << (i * 4);
 		}
-		frameidx[0] = v0;
-		frameidx[1] = v1;
+		frameidx_[0] = v0;
+		frameidx_[1] = v1;
 		return *this;
+	}
+};
+
+class temporal_mvscale_t {
+	static int scale(int poc0, int refpoc0, int poc1, int refpoc1) {
+		int diff1 = poc1 - refpoc1;
+		int diff0 = poc0 - refpoc0;
+		if (diff1 == 0) {
+			return 4096;
+		}
+		int td = CLIP3(-128, 127, diff1);
+		int tb = CLIP3(-128, 127, diff0);
+		int tx = (16384 + (std::abs(td) >> 1)) / td;
+		int scale = (tb * tx + 32) >> 6;
+		return CLIP3(-4096, 4095, scale);
+	}
+public:
+	int16_t scales_[8][8];
+	void init(const h265d_frame_info_t& frm, int poc0, int poc1) {
+		for (int i = 0; i < 8; ++i) {
+			int refpoc0 = frm.poc[i];
+			for (int j = 0; j < 8; ++j) {
+				int refpoc1 = frm.poc[j];
+				scales_[i][j] = scale(poc0, refpoc0, poc1, refpoc1);
+			}
+		}
+	}
+};
+
+class temporal_mvscale_index_t {
+	const frameidx_record_t* ref_curr_;
+	const frameidx_record_t* ref_col_;
+	temporal_mvscale_t colmv_scale_, tmv_scale_;
+public:
+	void init(const h265d_frame_info_t& frm, const frameidx_record_t& ref0, const frameidx_record_t& ref1, int poc0, int poc1) {
+		ref_curr_ = &ref0;
+		ref_col_ = &ref1;
+		colmv_scale_.init(frm, poc0, poc1);
+		tmv_scale_.init(frm, poc0, poc0);
+	}
+
+	int colmv_scale(int lx_a, int refidx_a, int lx_b, int refidx_b) const {
+		return colmv_scale_.scales_[ref_curr_->frameidx(lx_a, refidx_a)][ref_col_->frameidx(lx_b, refidx_b)];
+	}
+
+	int tmv_scale(int lx_a, int refidx_a, int lx_b, int refidx_b) const {
+		return tmv_scale_.scales_[ref_curr_->frameidx(lx_a, refidx_a)][ref_curr_->frameidx(lx_b, refidx_b)];
 	}
 };
 
@@ -686,11 +736,11 @@ class colpics_t {
 	int16_t stride_;
 	int width_, height_;
 	h265d_neighbour_t* colpics[H265D_MAX_FRAME_NUM];
-	poc_list_t poc_list[H265D_MAX_FRAME_NUM];
-	int16_t scale_[2][16];
+	frameidx_record_t frame_indices[H265D_MAX_FRAME_NUM];
+	temporal_mvscale_index_t tmv_scale_;
 public:
 	void register_reflist(int frame_idx, const h265d_ref_pic_list_elem_t reflist[][16]) {
-		poc_list[frame_idx] = reflist;
+		frame_indices[frame_idx] = reflist;
 	}
 	size_t colpic_size(int width, int height) const {
 		return sizeof(*colpics[0]) * ((width + 15) >> 4) * ((height + 15) >> 4);
@@ -706,8 +756,9 @@ public:
 		width_ = width;
 		height_ = height;
 		set_curr_pos(pos_x, pos_y);
+		register_reflist(frm.index, header.ref_list);
 		if (header.slice_type < 2) {
-			poc_list[col_frmidx].create_lut(scale_, header.ref_list, poc, col_pic.poc);
+			tmv_scale_.init(frm, frame_indices[frm.index], frame_indices[col_frmidx], poc, col_pic.poc);
 		}
 	}
 	void set_colpic(int idx, uint8_t* buf) {
@@ -719,20 +770,29 @@ public:
 	void inc_curr_pos() {
 		curr_pos = curr_pos + ctu_size_;
 	}
+
+	int ref_offset(int base_x, int base_y, int offset_x, int offset_y) const {
+		return ((base_y + offset_y) >> 4) * stride_ + ((base_x + offset_x) >> 4);
+	}
+
 	const h265d_neighbour_t* get_ref(int pos_x, int pos_y, int offset_x, int offset_y, int width, int height) const {
 		int bottom_right_x = offset_x + width;
 		int bottom_right_y = offset_y + height;
 		int base_x = pos_x << ctu_log2size_;
 		int base_y = pos_y << ctu_log2size_;
-		if ((bottom_right_y >> ctu_log2size_) || (width_ <= base_x + bottom_right_x) || (height_ <= base_y + bottom_right_y)) {
-			bottom_right_x = offset_x + (width >> 1);
-			bottom_right_y = offset_y + (height >> 1);
+		if (!(bottom_right_y >> ctu_log2size_) && (base_x + bottom_right_x < width_) && (base_y + bottom_right_y < height_)) {
+			const h265d_neighbour_t* ref = ref_top + ref_offset(base_x, base_y, bottom_right_x, bottom_right_y);
+			if (!ref->pu_intra) {
+				return ref;
+			}
 		}
-		return ref_top + ((base_y + bottom_right_y) >> 4) * stride_ + ((base_x + bottom_right_x) >> 4);
+		bottom_right_x = offset_x + (width >> 1);
+		bottom_right_y = offset_y + (height >> 1);
+		return ref_top + ref_offset(base_x, base_y, bottom_right_x, bottom_right_y);
 	}
 
-	int scale(int lx, int refidx) const {
-		return scale_[lx][refidx];
+	const temporal_mvscale_index_t& tmv_scale() const {
+		return tmv_scale_;
 	}
 
 	class fill_intra {

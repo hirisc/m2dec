@@ -3628,7 +3628,21 @@ static int scale_mv(int mv, int scale) {
 	}
 }
 
-static bool add_colpic_candidate(const h265d_ctu_t& ctu, pred_info_t& pred, int offset_x, int offset_y, int width, int height) {
+static bool add_colpic_candidate(const h265d_ctu_t& ctu, pred_info_t& pred, const h265d_neighbour_t* col, int lx, int ref_idx) {
+	int col_lx = ctu.slice_header->body.colocated_from_l0_flag;
+	int col_refidx = col->pred.ref_idx[col_lx];
+	if (col_refidx < 0) {
+		col_lx ^= 1;
+		col_refidx = col->pred.ref_idx[col_lx];
+	}
+	pred.ref_idx[lx] = ref_idx;
+	int scale = ctu.colpics.tmv_scale().colmv_scale(lx, ref_idx, col_lx, col_refidx);
+	pred.mvd[lx][0] = scale_mv(col->pred.mvd[col_lx][0], scale);
+	pred.mvd[lx][1] = scale_mv(col->pred.mvd[col_lx][1], scale);
+	return true;
+}
+
+static bool add_colpic_candidate_merge(const h265d_ctu_t& ctu, pred_info_t& pred, int offset_x, int offset_y, int width, int height) {
 	if (!ctu.slice_header->body.slice_temporal_mvp_enabled_flag) {
 		return false;
 	}
@@ -3636,19 +3650,7 @@ static bool add_colpic_candidate(const h265d_ctu_t& ctu, pred_info_t& pred, int 
 	if (col->pu_intra) {
 		return false;
 	}
-	int refl = !ctu.slice_header->body.colocated_from_l0_flag;
-	int ref = col->pred.ref_idx[refl];
-	if (ref < 0) {
-		refl ^= 1;
-		ref = col->pred.ref_idx[refl];
-	}
-	for (int lx = 0; lx < 2; ++lx) {
-		pred.ref_idx[lx] = ref;
-		int scale = ctu.colpics.scale(lx, ref);
-		pred.mvd[lx][0] = scale_mv(col->pred.mvd[refl][0], scale);
-		pred.mvd[lx][1] = scale_mv(col->pred.mvd[refl][1], scale);
-	}
-	return true;
+	return add_colpic_candidate(ctu, pred, col, 0, 0) && ((ctu.slice_header->body.slice_type != 0) || add_colpic_candidate(ctu, pred, col, 1, 0));
 }
 
 static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop) {
@@ -3676,7 +3678,7 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 	}
 	h265d_neighbour_t zmv;
 	if (num <= idx) {
-		if (add_colpic_candidate(ctu, zmv.pred, offset_x, offset_y, width, height)) {
+		if (add_colpic_candidate_merge(ctu, zmv.pred, offset_x, offset_y, width, height)) {
 			list[num++] = &zmv;
 		}
 	}
@@ -3708,93 +3710,99 @@ static inline void mvd_coding(h265d_cabac_t& cabac, dec_bits& st, int16_t mvd[])
 	mvd[1] = mvd_coding_suffix(cabac, st, mvd1);
 }
 
-static bool is_valid_mv(const h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx) {
-	if (neighbour.pu_intra) {
-		return false;
-	}
-	int ref_idx = neighbour.pred.ref_idx[lx];
-	return (0 <= ref_idx);
-}
-
-static void add_mvp(const int16_t mv[], int16_t mvp[][2], int& idx) {
+static bool add_mvp(const int16_t mv[], int16_t mvp[][2], int mvp_idx, int& curr_idx) {
 	int mvx = mv[0];
 	int mvy = mv[1];
-	for (int i = 0; i < idx; ++i) {
+	for (int i = 0; i < curr_idx; ++i) {
 		if ((mvp[i][0] == mvx) && (mvp[i][1] == mvy)) {
-			return;
+			return false;
 		}
 	}
-	mvp[idx][0] = mvx;
-	mvp[idx][1] = mvy;
-	idx += 1;
+	mvp[curr_idx][0] = mvx;
+	mvp[curr_idx][1] = mvy;
+	return (mvp_idx < ++curr_idx);
 }
 
-static void mvp2nd(int curr_poc, int curr_refpoc, int neighbour_refpoc, const int16_t mvp_src[], int16_t mvp_dst[2]) {
-	int neighbour_diffpoc = curr_poc - neighbour_refpoc;
-	int curr_diffpoc = curr_poc - curr_refpoc;
-	int scale = poc_list_t::scale(curr_diffpoc, neighbour_diffpoc); // FIXME: shall be LUT in advance
-	int16_t mv[2];
-	mvp_dst[0] = scale_mv(mvp_src[0], scale);
-	mvp_dst[1] = scale_mv(mvp_src[1], scale);
+static void mvp2nd(const h265d_ctu_t& ctu, int lx, int refidx, const pred_info_t& neighbour, int16_t mvp_dst[2]) {
+	int lx_i = lx;
+	for (int l = 0; l < 2; ++l) {
+		int neighbour_refidx = neighbour.ref_idx[lx_i];
+		if (0 <= neighbour_refidx) {
+			int scale = ctu.colpics.tmv_scale().tmv_scale(lx, refidx, lx_i, neighbour_refidx);
+			mvp_dst[0] = scale_mv(neighbour.mvd[lx_i][0], scale);
+			mvp_dst[1] = scale_mv(neighbour.mvd[lx_i][1], scale);
+			break;
+		}
+		lx_i ^= 1;
+	}
 }
 
-static bool add_mvp_if_possible(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int16_t mvp[][2], int& idx, int16_t mvp2[], bool skip2nd, bool& match2nd) {
+static const int16_t* find_spatial_mvp(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int ref_idx, int16_t mvp[][2], int mvp_idx, int16_t mvp2[], bool& skip2nd, bool& match2nd) {
+	if (neighbour.pu_intra) {
+		return 0;
+	}
+	int lx_i = lx;
 	for (int li = 0; li < 2; ++li) {
-		if (is_valid_mv(ctu, neighbour, lx)) {
-			int neighbour_refpoc = ctu.slice_header->body.ref_list[lx][neighbour.pred.ref_idx[lx]].poc;
+		if (0 <= neighbour.pred.ref_idx[lx_i]) {
+			int neighbour_refpoc = ctu.slice_header->body.ref_list[lx_i][neighbour.pred.ref_idx[lx_i]].poc;
 			bool match1st = (neighbour_refpoc == refpoc);
 			if (match1st) {
-				add_mvp(neighbour.pred.mvd[lx], mvp, idx);
-				return true;
+				skip2nd = true;
+				return neighbour.pred.mvd[lx_i];
 			} else if (!skip2nd && !match2nd) {
-				mvp2nd(ctu.slice_header->body.slice_pic_order_cnt.poc, refpoc, neighbour_refpoc, neighbour.pred.mvd[lx], mvp2);
+				mvp2nd(ctu, lx, ref_idx, neighbour.pred, mvp2);
 				match2nd = true;
 			}
 		}
-		lx ^= 1;
+		lx_i ^= 1;
 	}
-	return false;
+	skip2nd = true;
+	return 0;
 }
 
-static void mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbour_t* neighbour, const h265d_neighbour_t* lefttop, int span, int lx, int ref_idx, int16_t mvp[][2], int& mvplist_idx, int idx_target) {
+static const int16_t* mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbour_t* neighbour, const h265d_neighbour_t* lefttop, int span, int lx, int ref_idx, int16_t mvp[][2], int16_t mvp2nd[], int& mvplist_idx, bool& skip2nd) {
 	uint32_t dir_flag = lefttop ? (unavail >> 1) : unavail;
 	int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
 	bool match2nd = false;
-	bool skip2nd = lefttop && ((unavail & 5) != 5);
-	int16_t mvp2nd[2];
+	span >>= 2;
 	if (!(dir_flag & 4)) {
-		if (add_mvp_if_possible(ctu, neighbour[span], lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
-			return;
+		const int16_t* mv = find_spatial_mvp(ctu, neighbour[span], lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
+		if (mv) {
+			return mv;
 		}
 	}
 	if (!(dir_flag & 1)) {
-		if (add_mvp_if_possible(ctu, neighbour[span - 1], lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
-			return;
+		const int16_t* mv = find_spatial_mvp(ctu, neighbour[span - 1], lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
+		if (mv) {
+			return mv;
 		}
 	}
 	if (lefttop && !(unavail & 3)) {
-		if (add_mvp_if_possible(ctu, *lefttop, lx, refpoc, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd)) {
-			return;
+		const int16_t* mv = find_spatial_mvp(ctu, *lefttop, lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
+		if (mv) {
+			return mv;
 		}
 	}
 	if (match2nd) {
-		add_mvp(mvp2nd, mvp, mvplist_idx);
+		return mvp2nd;
 	}
+	return 0;
 }
 
-static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], int16_t mvxy[]) {
+static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], const h265d_neighbour_t* col, int16_t mvxy[]) {
 	int16_t mvplist[2][2];
+	int16_t mvp2nd[2];
 	int mvp_num = 0;
 	pred_info_t pred;
-	mvp_one_dir(ctu, unavail, left, 0, height >> 2, lx, ref_idx, mvplist, mvp_num, mvp_idx);
-	mvp_one_dir(ctu, unavail, top, &lefttop, width >> 2, lx, ref_idx, mvplist, mvp_num, mvp_idx);
-	if (mvp_num < 2) {
-		if (add_colpic_candidate(ctu, pred, offset_x, offset_y, width, height)) {
-			int lxcol = (0 <= pred.ref_idx[lx]) ? lx : lx ^ 1;
-			add_mvp(pred.mvd[lxcol], mvplist, mvp_num);
-		}
-		if (mvp_num <= mvp_idx) {
-			memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
+	bool skip2nd = false;
+	const int16_t* mvp;
+	mvp = mvp_one_dir(ctu, unavail, left, 0, height, lx, ref_idx, mvplist, mvp2nd, mvp_num, skip2nd);
+	if (!mvp || !add_mvp(mvp, mvplist, mvp_idx, mvp_num)) {
+		mvp = mvp_one_dir(ctu, unavail, top, &lefttop, width, lx, ref_idx, mvplist, mvp2nd, mvp_num, skip2nd);
+		if (!mvp || !add_mvp(mvp, mvplist, mvp_idx, mvp_num)) {
+			if (!col || !add_colpic_candidate(ctu, pred, col, lx, ref_idx) || !add_mvp(pred.mvd[(0 <= pred.ref_idx[lx]) ? lx : lx ^ 1], mvplist, mvp_idx, mvp_num)) {
+				memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
+			}
 		}
 	}
 	mvxy[0] = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
@@ -3828,12 +3836,12 @@ static void fill_pred(h265d_neighbour_t* n0, int len0, h265d_neighbour_t* n1, in
 	fill_pred(n1, len1, ref_idx0, ref_idx1, mvxy);
 }
 
-static int pred_amvp_l0(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int16_t mvxy[]) {
+static int pred_amvp_l0(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, const h265d_neighbour_t* col, int16_t mvxy[]) {
 	int ref_idx = ref_idx_lx(ctu.cabac, st, 0, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
 	int16_t mvd[2];
 	mvd_coding(ctu.cabac, st, mvd);
 	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-	calc_mv(ctu, unavail, offset_x, offset_y, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, mvxy);
+	calc_mv(ctu, unavail, width, height, left, top, lefttop, 0, ref_idx, mvp_idx, mvd, col, mvxy);
 	if (pred_idc == 0) {
 		int stride = ctu.size->stride;
 		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref_idx, mvxy, 12, store_pix<1>());
@@ -3843,7 +3851,7 @@ static int pred_amvp_l0(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* b
 	return ref_idx;
 }
 
-static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int16_t mvxy[]) {
+static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* bidir_buf0, int16_t* bidir_buf1, uint32_t unavail, int offset_x, int offset_y, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, const h265d_neighbour_t* col, int16_t mvxy[]) {
 	int ref_idx = ref_idx_lx(ctu.cabac, st, 1, ctu.slice_header->body.num_ref_idx_lx_active_minus1);
 	int16_t mvd[2];
 	if ((pred_idc == 1) || !ctu.slice_header->body.mvd_l1_zero_flag) {
@@ -3852,7 +3860,7 @@ static int pred_amvp_l1(h265d_ctu_t& ctu, dec_bits& st, int pred_idc, int16_t* b
 		memset(mvd, 0, sizeof(mvd));
 	}
 	int mvp_idx = mvp_lx_flag(ctu.cabac, st);
-	calc_mv(ctu, unavail, offset_x, offset_y, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, mvxy);
+	calc_mv(ctu, unavail, width, height, left, top, lefttop, 1, ref_idx, mvp_idx, mvd, col, mvxy);
 	if (pred_idc == 1) {
 		int stride = ctu.size->stride;
 		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref_idx, mvxy, 12, store_pix<1>());
@@ -3879,9 +3887,13 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 		} else {
 			pred_idc = 0;
 		}
+		const h265d_neighbour_t* col = ctu.slice_header->body.slice_temporal_mvp_enabled_flag ? ctu.colpics.get_ref(ctu.pos_x, ctu.pos_y, offset_x, offset_y, width, height) : 0;
+		if (col->pu_intra) {
+			col = 0;
+		}
 		int16_t mvxy[2][2];
-		int ref_idx0 = (pred_idc == 1) ? -1 : pred_amvp_l0(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[0]);
-		int ref_idx1 = (pred_idc == 0) ? -1 : pred_amvp_l1(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, mvxy[1]);
+		int ref_idx0 = (pred_idc == 1) ? -1 : pred_amvp_l0(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, col, mvxy[0]);
+		int ref_idx1 = (pred_idc == 0) ? -1 : pred_amvp_l1(ctu, st, pred_idc, bidir_buf0, bidir_buf1, unavail, offset_x, offset_y, width, height, left, top, lefttop, col, mvxy[1]);
 		ctu.deblocking.record_pu(ctu.qpy, width, height, offset_x, offset_y, unavail, left, top, ref_idx0, ref_idx1, mvxy);
 		fill_pred(left, height, top, width, ref_idx0, ref_idx1, mvxy);
 		ctu.colpics.fill(offset_x, offset_y, width, height, colpics_t::fill_inter(mvxy, ref_idx0, ref_idx1));
@@ -3893,6 +3905,12 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 #define DIV4ADJ1(inv) (((inv) & ~1) | 4)
 #define DIV4ADJ2(inv) ((inv) & ~10)
 #define DIV4ADJ3(inv) (12)
+
+#define DIV2NxN0(inv) ((inv) & (((inv) << 2) | ~4))
+#define DIV2NxN1(inv) (((inv) & ~2) | 8)
+
+#define DIVNx2N0(inv) ((inv) & (((inv) << 2) | ~8))
+#define DIVNx2N1(inv) (((inv) & ~1) | 4)
 
 static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, bool& rqt_root_cbf_inferred) {
 	h265d_inter_part_mode_t mode = part_mode_inter(dst.cabac, st, size_log2, dst.size->size_log2_min, dst.sps->amp_enabled_flag);
@@ -3909,14 +3927,14 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxN:
 		len_s = len >> 1;
 		lefttops[0] = left[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, unavail & ((unavail << 2) | ~4), offset_x, offset_y, len, len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top, lefttops[0], 2);
+		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top, lefttops[0], 2);
 		break;
 	case PART_Nx2N:
 		len_s = len >> 1;
 		lefttops[0] = top[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, unavail & ((unavail << 2) | ~8), offset_x, offset_y, len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3), lefttops[0], 1);
+		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3), lefttops[0], 1);
 		break;
 	case PART_NxN:
 		len_s = len >> 1;
@@ -3931,26 +3949,26 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxnU:
 		len_s = len >> 2;
 		lefttops[0] = left[(len >> 4) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0]);
 		break;
 	case PART_2NxnD:
 		len_s = len >> 2;
 		lefttops[0] = left[((len - len_s) >> 2) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len, len - len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~2) | 8, offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len - len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0]);
 		break;
 	case PART_nLx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[(len >> 4) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], true);
 		break;
 	case PART_nRx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[((len - len_s) >> 2) - 1];
-		prediction_unit(dst, st, size_log2, unavail, offset_x, offset_y, len - len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, (unavail & ~1) | 4, offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len - len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], true);
 		break;
 	}
 	return mode;
@@ -4012,6 +4030,7 @@ static void pred_inter(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t u
 		int len = 1 << size_log2;
 		prediction_unit_merge(dst, st, unavail, offset_x, offset_y, len, len, left, top, lefttop);
 		cu_inter_skip_mode_fill(left, top, 1, 1 << (size_log2 - 2));
+		cu_inter_zerocoef_fill(left, top, 1 << (size_log2 - 2));
 	} else {
 		if (pred_mode_flag(dst.cabac, st) != 0) {
 			pred_intra(dst, st, size_log2, unavail, offset_x, offset_y, valid_x, valid_y, left, top);
@@ -4721,6 +4740,7 @@ static void ctu_init(h265d_ctu_t& dst, h265d_data_t& h2d, const h265d_pps_t& pps
 	dst.valid_y = MINV(sps.pic_height_in_luma_samples - (dst.pos_y << sps.ctb_info.size_log2), 1U << sps.ctb_info.size_log2);
 	uint32_t luma_offset = ((y_offset << sps.ctb_info.size_log2) + dst.pos_x) << sps.ctb_info.size_log2;
 	m2d_frame_t& frm = dst.frame_info.frames[dst.frame_info.index];
+	dst.frame_info.poc[dst.frame_info.index] = header.slice_pic_order_cnt.poc;
 	frm.width = sps.ctb_info.stride;
 	frm.height = sps.ctb_info.rows << sps.ctb_info.size_log2;
 	frm.crop[0] = sps.cropping[0];
@@ -4748,7 +4768,7 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	uint32_t pos_x = dst.pos_x + 1;
 	int size_log2 = dst.size->size_log2;
 	if (dst.size->columns <= pos_x) {
-		neighbour_init(dst.neighbour_left, NUM_ELEM(dst.neighbour_left));
+		neighbour_init(dst.neighbour_left + 1, NUM_ELEM(dst.neighbour_left) - 1);
 		dst.pos_y++;
 		dst.valid_x = dst.sps->pic_width_in_luma_samples;
 		if (dst.pos_y == dst.size->rows - 1) {
@@ -4763,9 +4783,9 @@ static uint32_t ctu_pos_increment(h265d_ctu_t& dst) {
 	} else {
 		dst.valid_x -= 1 << size_log2;
 		dst.colpics.inc_curr_pos();
+		dst.neighbour_left[1] = dst.neighbour_left[0];
 	}
-	dst.neighbour_left[1] = dst.neighbour_left[0];
-	dst.neighbour_left[0] = dst.neighbour_top[(dst.pos_x << size_log2) - 1];
+	dst.neighbour_left[0] = dst.neighbour_top[((pos_x + 1) << (size_log2 - 2)) - 1];
 	dst.luma += static_cast<ptrdiff_t>(1 << size_log2);
 	dst.chroma += static_cast<ptrdiff_t>(1 << size_log2);
 	dst.deblocking.set_pos(size_log2, pos_x);
