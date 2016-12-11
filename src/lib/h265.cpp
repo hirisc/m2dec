@@ -1140,8 +1140,18 @@ static inline uint32_t cu_skip_flag(h265d_cabac_t& cabac, dec_bits& st, uint32_t
 	return cabac_decode_decision_raw(cabac, st, cabac.context->cu_skip_flag + idx);
 }
 
-static inline uint32_t merge_idx(h265d_cabac_t& cabac, dec_bits& st) {
-	return cabac_decode_multibypass(cabac, st, 3);
+static inline uint32_t merge_idx(h265d_cabac_t& cabac, dec_bits& st, int max) {
+	if ((max <= 1) || !cabac_decode_decision_raw(cabac, st, cabac.context->merge_idx)) {
+		return 0;
+	}
+	int idx;
+	max -= 1;
+	for (idx = 1; idx < max; ++idx) {
+		if (!cabac_decode_bypass(cabac, st)) {
+			break;
+		}
+	}
+	return idx;
 }
 
 static inline uint32_t merge_flag(h265d_cabac_t& cabac, dec_bits& st) {
@@ -3106,28 +3116,21 @@ static inline void intra_depth_fill(h265d_neighbour_t dst0[], h265d_neighbour_t 
 	}
 }
 
-static void copy_predinfo(h265d_neighbour_t* neighbour, int len, const h265d_neighbour_t& pred, bool no_bidir) {
+static void copy_predinfo(h265d_neighbour_t* neighbour, int len, const pred_info_t& pred, bool no_bidir) {
 	len >>= 2;
 	for (int i = 0; i < len; ++i) {
-//		neighbour[i] = pred;
 		neighbour[i].pu_nonzero_coef = 0;
 		neighbour[i].pu_intra = 0;
 		neighbour[i].skip = 1;
-		neighbour[i].pred = pred.pred;
+		neighbour[i].pred = pred;
 		if (no_bidir) {
 			neighbour[i].pred.ref_idx[1] = -1;
 		}
 	}
 }
 
-#if 1
 #define INTER7(a0, a1, a2, a3, a4, a5, a6) (((a1) + (a4) * 4) * 4 + (a3) * 58 + (a4) + (a6) - ((a2) * 2 + (a5)) * 5 - (a0))
-#else
-static inline int INTER7(int a0, int a1, int a2, int a3, int a4, int a5, int a6) {
-//	return a1 * 4 - a2 * 10 + a3 * 58 + a4 * 17 - a5 * 5 + a6 - a0;
-	return (a1 + a4 * 4) * 4 + a3 * 58 + a4 + a6 - (a2 * 2 + a5) * 5 - a0;
-}
-#endif
+
 struct inter_luma_fir1 {
 	int operator()(int a0, int a1, int a2, int a3, int a4, int a5, int a6) const {
 		return INTER7(a0, a1, a2, a3, a4, a5, a6);
@@ -3566,55 +3569,54 @@ static void writeback_bidir(const int16_t src[], uint8_t dst[], int stride, int 
 	}
 }
 
-static void merge_pred(h265d_ctu_t& ctu, const h265d_neighbour_t& base, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
-	int ref0 = base.pred.ref_idx[0];
-	int ref1 = base.pred.ref_idx[1];
+static void merge_pred(h265d_ctu_t& ctu, const pred_info_t& base, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top) {
+	int ref0 = base.ref_idx[0];
+	int ref1 = base.ref_idx[1];
 	int stride = ctu.size->stride;
 	bool no_bidir = false;
 	if (0 <= ref0) {
 		if ((0 <= ref1) && !(no_bidir = (width + height == 12))) {
 			int16_t dstbuf0[64 * 64];
 			int16_t dstbuf1[64 * 32];
-			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.pred.mvd[0], 6, store_pix<0>());
-			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.pred.mvd[1], 6, add_store_pix());
+			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 0, ref0, base.mvd[0], 6, store_pix<0>());
+			inter_pred_onedir(ctu, dstbuf0, dstbuf1, offset_x, offset_y, width, height, width, 1, ref1, base.mvd[1], 6, add_store_pix());
 			writeback_bidir(dstbuf0, ctu.luma + stride * offset_y + offset_x, stride, width, height);
 			writeback_bidir(dstbuf1, ctu.chroma + stride * (offset_y >> 1) + offset_x, stride, width, height >> 1);
 		} else {
-			inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref0, base.pred.mvd[0], 12, store_pix<1>());
+			inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 0, ref0, base.mvd[0], 12, store_pix<1>());
 		}
 	} else {
-		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.pred.mvd[1], 12, store_pix<1>());
+		inter_pred_onedir(ctu, ctu.luma + stride * offset_y + offset_x, ctu.chroma + stride * (offset_y >> 1) + offset_x, offset_x, offset_y, width, height, stride, 1, ref1, base.mvd[1], 12, store_pix<1>());
 	}
-	ctu.deblocking.record_pu(ctu.qpy, width, height, offset_x, offset_y, unavail, left, top, ref0, no_bidir ? -1 : ref1, base.pred.mvd);
+	ctu.deblocking.record_pu(ctu.qpy, width, height, offset_x, offset_y, unavail, left, top, ref0, no_bidir ? -1 : ref1, base.mvd);
 	copy_predinfo(left, height, base, no_bidir);
 	copy_predinfo(top, width, base, no_bidir);
-	ctu.colpics.fill(offset_x, offset_y, width, height, colpics_t::fill_inter(base.pred.mvd, base.pred.ref_idx[0], base.pred.ref_idx[1]));
+	ctu.colpics.fill(offset_x, offset_y, width, height, colpics_t::fill_inter(base.mvd, base.ref_idx[0], base.ref_idx[1]));
 }
 
 static bool merge_available(int cx, int cy, int px, int py, int shift) {
 	return ((cx >> shift) != (px >> shift)) || ((cy >> shift) != (py >> shift));
 }
 
-static void add_merge_candidate(const h265d_neighbour_t* list[], int& idx, int curr_x, int curr_y, int neighbour_x, int neighbour_y, int par_merge, const h265d_neighbour_t& neighbour) {
+static void add_merge_candidate(pred_info_t list[], int& idx, int curr_x, int curr_y, int neighbour_x, int neighbour_y, int par_merge, const h265d_neighbour_t& neighbour) {
 	if (!neighbour.pu_intra && merge_available(curr_x, curr_y, neighbour_x, neighbour_y, par_merge)) {
 		for (int i = 0; i < idx; ++i) {
-			if (!memcmp(&neighbour.pred, list[i], sizeof(*list[0]))) {
+			if (!memcmp(&neighbour.pred, &list[i], sizeof(list[0]))) {
 				return;
 			}
 		}
-		list[idx++] = &neighbour;
+		list[idx++] = neighbour.pred;
 	}
 }
 
-static void merge_zero_mv(const h265d_ctu_t& ctu, int idx, int num, h265d_neighbour_t& mv) {
+static void merge_zero_mv(const h265d_ctu_t& ctu, int idx, int num, pred_info_t& pred) {
 	bool p_slice = 0 < ctu.slice_header->body.slice_type;
 	int num_ref_idx = (p_slice ? ctu.slice_header->body.num_ref_idx_lx_active_minus1[0] : std::min(ctu.slice_header->body.num_ref_idx_lx_active_minus1[0], ctu.slice_header->body.num_ref_idx_lx_active_minus1[1])) + 1;
 	int m = idx - num;
 	int ref_idx = (m < num_ref_idx) ? m : 0;
-	mv.pred.ref_idx[0] = ref_idx;
-	mv.pred.ref_idx[1] = p_slice ? -1 : ref_idx;
-	mv.pu_intra = 0;
-	memset(mv.pred.mvd, 0, sizeof(mv.pred.mvd));
+	pred.ref_idx[0] = ref_idx;
+	pred.ref_idx[1] = p_slice ? -1 : ref_idx;
+	memset(pred.mvd, 0, sizeof(pred.mvd));
 }
 
 static int scale_mv(int mv, int scale) {
@@ -3629,7 +3631,7 @@ static int scale_mv(int mv, int scale) {
 }
 
 static bool add_colpic_candidate(const h265d_ctu_t& ctu, pred_info_t& pred, const h265d_neighbour_t* col, int lx, int ref_idx) {
-	int col_lx = ctu.slice_header->body.colocated_from_l0_flag;
+	int col_lx = ctu.colpics.lowdelay() ? lx : ctu.slice_header->body.colocated_from_l0_flag;
 	int col_refidx = col->pred.ref_idx[col_lx];
 	if (col_refidx < 0) {
 		col_lx ^= 1;
@@ -3655,9 +3657,9 @@ static bool add_colpic_candidate_merge(const h265d_ctu_t& ctu, pred_info_t& pred
 
 static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop) {
 	int max = ctu.slice_header->body.max_num_merge_cand;
-	int idx = (1 < max) ? merge_idx(ctu.cabac, st) : 0;
+	int idx = merge_idx(ctu.cabac, st, max);
 	int par_merge = ctu.pps->log2_parallel_merge_level_minus2 + 2;
-	const h265d_neighbour_t* list[5];
+	pred_info_t list[5];
 	int num = 0;
 	if (!(unavail & 1)) {
 		add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height - 1, par_merge, left[(height >> 2) - 1]);
@@ -3676,19 +3678,18 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y - 1, par_merge, lefttop);
 		}
 	}
-	h265d_neighbour_t zmv;
 	if (num <= idx) {
-		if (add_colpic_candidate_merge(ctu, zmv.pred, offset_x, offset_y, width, height)) {
-			list[num++] = &zmv;
+		if (add_colpic_candidate_merge(ctu, list[num], offset_x, offset_y, width, height)) {
+			num++;
 		}
 	}
 	if ((1 < num) && (num <= idx) && (ctu.slice_header->body.slice_type == 0)) {
 	}
-	if (num <= idx) {
-		merge_zero_mv(ctu, idx, num, zmv);
-		list[idx] = &zmv;
+	while (num <= idx) {
+		merge_zero_mv(ctu, idx, num, list[num]);
+		num++;
 	}
-	merge_pred(ctu, *list[idx], unavail, offset_x, offset_y, width, height, left, top);
+	merge_pred(ctu, list[idx], unavail, offset_x, offset_y, width, height, left, top);
 }
 
 static inline int mvd_coding_suffix(h265d_cabac_t& cabac, dec_bits& st, int mvd) {
@@ -3901,16 +3902,21 @@ static bool prediction_unit(h265d_ctu_t& ctu, dec_bits& st, int size_log2, uint3
 	}
 }
 
-#define DIV4ADJ0(inv) (((inv) & 3) | (((inv) & 3) << 2))
-#define DIV4ADJ1(inv) (((inv) & ~1) | 4)
-#define DIV4ADJ2(inv) ((inv) & ~10)
-#define DIV4ADJ3(inv) (12)
-
-#define DIV2NxN0(inv) ((inv) & (((inv) << 2) | ~4))
-#define DIV2NxN1(inv) (((inv) & ~2) | 8)
-
-#define DIVNx2N0(inv) ((inv) & (((inv) << 2) | ~8))
-#define DIVNx2N1(inv) (((inv) & ~1) | 4)
+static const int8_t avail4x4idx0_lut[] = {0, 5, 10, 15, 0, 5, 10, 15, 0, 5, 10, 15, 0, 5, 10, 15};
+static const int8_t avail4x4idx1_lut[] = {4, 4, 6, 6, 4, 4, 6, 6, 12, 12, 14, 14, 12, 12, 14, 14};
+static const int8_t avail4x4idx2_lut[] = {0, 1, 0, 1, 4, 5, 4, 5, 0, 1, 0, 1, 4, 5, 4, 5};
+static const int8_t avail2x1idx0_lut[] = {0, 1, 2, 3, 0, 5, 2, 7, 8, 9, 10, 11, 8, 13, 10, 15};
+static const int8_t avail2x1idx1_lut[] = {8, 9, 8, 9, 12, 13, 12, 13, 8, 9, 8, 9, 12, 13, 12, 13};
+static const int8_t avail1x2idx0_lut[] = {0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 10, 11, 4, 5, 14, 15};
+static const int8_t avail1x2idx1_lut[] = {4, 4, 6, 6, 4, 4, 6, 6, 12, 12, 14, 14, 12, 12, 14, 14};
+#define avail4x4idx0(inv) avail4x4idx0_lut[inv]
+#define avail4x4idx1(inv) avail4x4idx1_lut[inv]
+#define avail4x4idx2(inv) avail4x4idx2_lut[inv]
+#define avail4x4idx3(inv) (12)
+#define avail2x1idx0(inv) avail2x1idx0_lut[inv]
+#define avail2x1idx1(inv) avail2x1idx1_lut[inv]
+#define avail1x2idx0(inv) avail1x2idx0_lut[inv]
+#define avail1x2idx1(inv) avail1x2idx1_lut[inv]
 
 static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t unavail, int offset_x, int offset_y, int valid_x, int valid_y, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, bool& rqt_root_cbf_inferred) {
 	h265d_inter_part_mode_t mode = part_mode_inter(dst.cabac, st, size_log2, dst.size->size_log2_min, dst.sps->amp_enabled_flag);
@@ -3927,48 +3933,48 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 	case PART_2NxN:
 		len_s = len >> 1;
 		lefttops[0] = left[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top, lefttops[0], 2);
+		prediction_unit(dst, st, size_log2, avail2x1idx0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len_s, len, len_s, left + (len >> 3), top, lefttops[0], 2);
 		break;
 	case PART_Nx2N:
 		len_s = len >> 1;
 		lefttops[0] = top[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3), lefttops[0], 1);
+		prediction_unit(dst, st, size_log2, avail1x2idx0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len_s, offset_y, len_s, len, left, top + (len >> 3), lefttops[0], 1);
 		break;
 	case PART_NxN:
 		len_s = len >> 1;
 		lefttops[0] = top[(len >> 3) - 1];
 		lefttops[1] = left[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, DIV4ADJ0(unavail), offset_x, offset_y, len_s, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail4x4idx0(unavail), offset_x, offset_y, len_s, len_s, left, top, lefttop);
 		lefttops[0] = top[(len >> 3) - 1];
-		prediction_unit(dst, st, size_log2, DIV4ADJ1(unavail), offset_x + len_s, offset_y, len_s, len_s, left, top + (len >> 3), lefttops[0]);
-		prediction_unit(dst, st, size_log2, DIV4ADJ2(unavail), offset_x, offset_y + len_s, len_s, len_s, left + (len >> 3), top, lefttops[1]);
-		prediction_unit(dst, st, size_log2, DIV4ADJ3(unavail), offset_x + len_s, offset_y + len_s, len_s, len_s, left + (len >> 3), top + (len >> 3), lefttops[2]);
+		prediction_unit(dst, st, size_log2, avail4x4idx1(unavail), offset_x + len_s, offset_y, len_s, len_s, left, top + (len >> 3), lefttops[0]);
+		prediction_unit(dst, st, size_log2, avail4x4idx2(unavail), offset_x, offset_y + len_s, len_s, len_s, left + (len >> 3), top, lefttops[1]);
+		prediction_unit(dst, st, size_log2, avail4x4idx3(unavail), offset_x + len_s, offset_y + len_s, len_s, len_s, left + (len >> 3), top + (len >> 3), lefttops[2]);
 		break;
 	case PART_2NxnU:
 		len_s = len >> 2;
 		lefttops[0] = left[(len >> 4) - 1];
-		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, avail2x1idx0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0]);
 		break;
 	case PART_2NxnD:
 		len_s = len >> 2;
 		lefttops[0] = left[((len - len_s) >> 2) - 1];
-		prediction_unit(dst, st, size_log2, DIV2NxN0(unavail), offset_x, offset_y, len, len - len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIV2NxN1(unavail), offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, avail2x1idx0(unavail), offset_x, offset_y, len, len - len_s, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0]);
 		break;
 	case PART_nLx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[(len >> 4) - 1];
-		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, avail1x2idx0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], true);
 		break;
 	case PART_nRx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[((len - len_s) >> 2) - 1];
-		prediction_unit(dst, st, size_log2, DIVNx2N0(unavail), offset_x, offset_y, len - len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, DIVNx2N1(unavail), offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, avail1x2idx0(unavail), offset_x, offset_y, len - len_s, len, left, top, lefttop);
+		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], true);
 		break;
 	}
 	return mode;
@@ -4073,11 +4079,11 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 		uint32_t info_offset = 1 << (size_log2 - 2);
 		h265d_neighbour_t lefttop1 = top[info_offset - 1];
 		h265d_neighbour_t lefttop2 = left[info_offset - 1];
-		quad_tree(dst, st, size_log2, DIV4ADJ0(unavail), offset_x, valid_x, offset_y, valid_y, left, top, lefttop);
+		quad_tree(dst, st, size_log2, avail4x4idx0(unavail), offset_x, valid_x, offset_y, valid_y, left, top, lefttop);
 		h265d_neighbour_t lefttop3 = left[info_offset - 1];
-		quad_tree(dst, st, size_log2, DIV4ADJ1(unavail), offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset, lefttop1);
-		quad_tree(dst, st, size_log2, DIV4ADJ2(unavail), offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top, lefttop2);
-		quad_tree(dst, st, size_log2, DIV4ADJ3(unavail), offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset, lefttop3);
+		quad_tree(dst, st, size_log2, avail4x4idx1(unavail), offset_x + block_len, valid_x - block_len, offset_y, MINV(static_cast<uint32_t>(valid_y), block_len), left, top + info_offset, lefttop1);
+		quad_tree(dst, st, size_log2, avail4x4idx2(unavail), offset_x, MINV(static_cast<uint32_t>(valid_x), block_len * 2), offset_y + block_len, valid_y - block_len, left + info_offset, top, lefttop2);
+		quad_tree(dst, st, size_log2, avail4x4idx3(unavail), offset_x + block_len, MINV(static_cast<uint32_t>(valid_x - block_len), block_len), offset_y + block_len, MINV(static_cast<uint32_t>(valid_y - block_len), block_len), left + info_offset, top + info_offset, lefttop3);
 	} else {
 		coding_unit_header(dst, st, size_log2, unavail, left, top);
 		if (dst.slice_header->body.slice_type < 2) {

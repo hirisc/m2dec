@@ -534,7 +534,7 @@ class h265d_deblocking_t {
 			return 1;
 		} else {
 			if (nfrm0 == nfrm1) {
-				return (mv_diff_is_large(n_mvxy[0], c_mvxy[0]) || mv_diff_is_large(n_mvxy[1], c_mvxy[1])) && (mv_diff_is_large(n_mvxy[0], c_mvxy[1]) || mv_diff_is_large(n_mvxy[0], c_mvxy[1]));
+				return (mv_diff_is_large(n_mvxy[0], c_mvxy[0]) || mv_diff_is_large(n_mvxy[1], c_mvxy[1])) && (mv_diff_is_large(n_mvxy[0], c_mvxy[1]) || mv_diff_is_large(n_mvxy[1], c_mvxy[0]));
 			} else {
 				return ((0 <= nfrm0) && mv_diff_is_large(n_mvxy[n_swapped], c_mvxy[c_swapped])) || ((0 <= nfrm1) && mv_diff_is_large(n_mvxy[n_swapped ^ 1], c_mvxy[c_swapped ^ 1]));
 			}
@@ -732,12 +732,22 @@ class colpics_t {
 	h265d_neighbour_t* curr_top;
 	const h265d_neighbour_t* ref_top;
 	h265d_neighbour_t* curr_pos;
+	bool lowdelay_;
 	int8_t ctu_log2size_, ctu_size_;
 	int16_t stride_;
 	int width_, height_;
 	h265d_neighbour_t* colpics[H265D_MAX_FRAME_NUM];
 	frameidx_record_t frame_indices[H265D_MAX_FRAME_NUM];
 	temporal_mvscale_index_t tmv_scale_;
+	void update_lowdelay(const h265d_frame_info_t& frm, int poc) {
+		for (int i = 0; i < 8; ++i) {
+			if (poc < frm.poc[i]) {
+				lowdelay_ = false;
+				return;
+			}
+		}
+		lowdelay_ = true;
+	}
 public:
 	void register_reflist(int frame_idx, const h265d_ref_pic_list_elem_t reflist[][16]) {
 		frame_indices[frame_idx] = reflist;
@@ -759,6 +769,7 @@ public:
 		register_reflist(frm.index, header.ref_list);
 		if (header.slice_type < 2) {
 			tmv_scale_.init(frm, frame_indices[frm.index], frame_indices[col_frmidx], poc, col_pic.poc);
+			update_lowdelay(frm, poc);
 		}
 	}
 	void set_colpic(int idx, uint8_t* buf) {
@@ -773,6 +784,10 @@ public:
 
 	int ref_offset(int base_x, int base_y, int offset_x, int offset_y) const {
 		return ((base_y + offset_y) >> 4) * stride_ + ((base_x + offset_x) >> 4);
+	}
+
+	bool lowdelay() const {
+		return lowdelay_;
 	}
 
 	const h265d_neighbour_t* get_ref(int pos_x, int pos_y, int offset_x, int offset_y, int width, int height) const {
