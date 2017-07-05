@@ -3655,6 +3655,33 @@ static bool add_colpic_candidate_merge(const h265d_ctu_t& ctu, pred_info_t& pred
 	return add_colpic_candidate(ctu, pred, col, 0, 0) && ((ctu.slice_header->body.slice_type != 0) || add_colpic_candidate(ctu, pred, col, 1, 0));
 }
 
+static void add_merge_combind_candidate(const h265d_ctu_t& ctu, pred_info_t list[], int& idx, int idx_max) {
+	static const int8_t l0_cand_idx[12] = {
+		0, 1, 0, 2, 1, 2, 0, 3, 1, 3, 2, 3
+	};
+	int cutoff = idx * (idx - 1);
+	for (int comb_idx = 0; comb_idx < cutoff; ++comb_idx) {
+		int l0_idx = l0_cand_idx[comb_idx];
+		int l1_idx = l0_cand_idx[comb_idx ^ 1];
+		if ((idx_max <= l0_idx) || (idx_max <= l1_idx)) {
+			break;
+		}
+		pred_info_t l0_cand = list[l0_idx];
+		pred_info_t l1_cand = list[l1_idx];
+		if ((0 <= l0_cand.ref_idx[0]) && (0 <= l1_cand.ref_idx[1])) {
+			if (memcmp(l0_cand.mvd[0], l1_cand.mvd[1], sizeof(l0_cand.mvd[0])) || (ctu.slice_header->body.ref_list[0][l0_cand.ref_idx[0]].poc != ctu.slice_header->body.ref_list[1][l1_cand.ref_idx[1]].poc)) {
+				memcpy(list[idx].mvd[0], l0_cand.mvd[0], sizeof(l0_cand.mvd[0]));
+				memcpy(list[idx].mvd[1], l1_cand.mvd[1], sizeof(l0_cand.mvd[0]));
+				list[idx].ref_idx[0] = l0_cand.ref_idx[0];
+				list[idx].ref_idx[1] = l1_cand.ref_idx[1];
+				if (idx_max < ++idx) {
+					break;
+				}
+			}
+		}
+	}
+}
+
 static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unavail, int offset_x, int offset_y, int width, int height, h265d_neighbour_t* left, h265d_neighbour_t* top, const h265d_neighbour_t& lefttop) {
 	int max = ctu.slice_header->body.max_num_merge_cand;
 	int idx = merge_idx(ctu.cabac, st, max);
@@ -3674,7 +3701,7 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 		if (!(unavail & 4)) {
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y + height, par_merge, left[height >> 2]);
 		}
-		if (num <= idx) {
+		if ((num <= idx) && (num < 4)) {
 			add_merge_candidate(list, num, offset_x, offset_y, offset_x - 1, offset_y - 1, par_merge, lefttop);
 		}
 	}
@@ -3684,6 +3711,7 @@ static void prediction_unit_merge(h265d_ctu_t& ctu, dec_bits& st, uint32_t unava
 		}
 	}
 	if ((1 < num) && (num <= idx) && (ctu.slice_header->body.slice_type == 0)) {
+		add_merge_combind_candidate(ctu, list, num, idx);
 	}
 	while (num <= idx) {
 		merge_zero_mv(ctu, idx, num, list[num]);
@@ -3956,25 +3984,25 @@ static h265d_inter_part_mode_t prediction_unit_cases(h265d_ctu_t& dst, dec_bits&
 		len_s = len >> 2;
 		lefttops[0] = left[(len >> 4) - 1];
 		prediction_unit(dst, st, size_log2, avail2x1idx0(unavail), offset_x, offset_y, len, len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len_s, len, len - len_s, left + (len >> 4), top, lefttops[0], 2);
 		break;
 	case PART_2NxnD:
 		len_s = len >> 2;
 		lefttops[0] = left[((len - len_s) >> 2) - 1];
 		prediction_unit(dst, st, size_log2, avail2x1idx0(unavail), offset_x, offset_y, len, len - len_s, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0]);
+		prediction_unit(dst, st, size_log2, avail2x1idx1(unavail), offset_x, offset_y + len - len_s, len, len_s, left + ((len - len_s) >> 2), top, lefttops[0], 2);
 		break;
 	case PART_nLx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[(len >> 4) - 1];
 		prediction_unit(dst, st, size_log2, avail1x2idx0(unavail), offset_x, offset_y, len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len_s, offset_y, len - len_s, len, left, top + (len >> 4), lefttops[0], 1);
 		break;
 	case PART_nRx2N:
 		len_s = len >> 2;
 		lefttops[0] = top[((len - len_s) >> 2) - 1];
 		prediction_unit(dst, st, size_log2, avail1x2idx0(unavail), offset_x, offset_y, len - len_s, len, left, top, lefttop);
-		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], true);
+		prediction_unit(dst, st, size_log2, avail1x2idx1(unavail), offset_x + len - len_s, offset_y, len_s, len, left, top + ((len - len_s) >> 2), lefttops[0], 1);
 		break;
 	}
 	return mode;
