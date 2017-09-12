@@ -4122,9 +4122,7 @@ static void quad_tree(h265d_ctu_t& dst, dec_bits& st, int size_log2, uint32_t un
 	}
 }
 
-static inline int clip2(int val, int lim) {
-	return (val < 0) ? 0 : ((lim < val) ? lim : val);
-}
+#define clip2(val, lim) (((val) < 0) ? 0 : (((lim) < (val)) ? (lim) : (val)))
 
 static inline bool dsam0(int dpq0, int p3, int p0, int q0, int q3, int beta, int tc) {
 	int dpq = dpq0 * 2;
@@ -4147,9 +4145,7 @@ static inline int deblock_weakpq1flag(int dp0, int dp3, int dq0, int dq3, int be
 	return (dp < beta2) * 2 + (dq < beta2);
 }
 
-static inline int clip3delta(int dif, int lim) {
-	return (-lim <= dif) ? ((dif <= lim) ? dif : lim) : -lim;
-}
+#define clip3delta(dif, lim) ((-(lim) <= (dif)) ? (((dif) <= (lim)) ? (dif) : (lim)) : -(lim))
 
 static inline int clip3tc(int src, int dst, int tc) {
 	return src + clip3delta(dst - src, tc);
