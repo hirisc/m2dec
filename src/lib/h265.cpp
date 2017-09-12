@@ -3752,70 +3752,76 @@ static bool add_mvp(const int16_t mv[], int16_t mvp[][2], int mvp_idx, int& curr
 	return (mvp_idx < ++curr_idx);
 }
 
-static void mvp2nd(const h265d_ctu_t& ctu, int lx, int refidx, const pred_info_t& neighbour, int16_t mvp_dst[2]) {
-	int lx_i = lx;
-	for (int l = 0; l < 2; ++l) {
-		int neighbour_refidx = neighbour.ref_idx[lx_i];
-		if (0 <= neighbour_refidx) {
-			int scale = ctu.colpics.tmv_scale().tmv_scale(lx, refidx, lx_i, neighbour_refidx);
-			mvp_dst[0] = scale_mv(neighbour.mvd[lx_i][0], scale);
-			mvp_dst[1] = scale_mv(neighbour.mvd[lx_i][1], scale);
-			break;
-		}
-		lx_i ^= 1;
-	}
+static void put_mvp(const int16_t mv[], int16_t mvp[][2], int& mvplist_idx) {
+	mvp[mvplist_idx][0] = mv[0];
+	mvp[mvplist_idx][1] = mv[1];
+	mvplist_idx += 1;
 }
 
-static const int16_t* find_spatial_mvp(h265d_ctu_t& ctu, const h265d_neighbour_t& neighbour, int lx, int refpoc, int ref_idx, int16_t mvp[][2], int mvp_idx, int16_t mvp2[], bool& skip2nd, bool& match2nd) {
-	if (neighbour.pu_intra) {
-		return 0;
+static bool find_spatial_mvp_scale(const h265d_ref_pic_list_elem_t ref_list[][16], const temporal_mvscale_index_t& tmvscale, const h265d_neighbour_t& neighbour, int lx, int ref_idx, int16_t mvp[][2], int& mvplist_idx) {
+	if (!neighbour.pu_intra) {
+		int lx_i = lx;
+		for (int l = 0; l < 2; ++l) {
+			int neighbour_refidx = neighbour.pred.ref_idx[lx_i];
+			if (0 <= neighbour_refidx) {
+				int scale = tmvscale.tmv_scale(lx, ref_idx, lx_i, neighbour_refidx);
+				mvp[mvplist_idx][0] = scale_mv(neighbour.pred.mvd[lx_i][0], scale);
+				mvp[mvplist_idx][1] = scale_mv(neighbour.pred.mvd[lx_i][1], scale);
+				mvplist_idx += 1;
+				return true;
+			}
+			lx_i ^= 1;
+		}
 	}
-	int lx_i = lx;
-	for (int li = 0; li < 2; ++li) {
-		if (0 <= neighbour.pred.ref_idx[lx_i]) {
-			int neighbour_refpoc = ctu.slice_header->body.ref_list[lx_i][neighbour.pred.ref_idx[lx_i]].poc;
-			bool match1st = (neighbour_refpoc == refpoc);
-			if (match1st) {
-				skip2nd = true;
-				return neighbour.pred.mvd[lx_i];
-			} else if (!skip2nd && !match2nd) {
-				mvp2nd(ctu, lx, ref_idx, neighbour.pred, mvp2);
-				match2nd = true;
+	return false;
+}
+
+static const int16_t* find_spatial_mvp(const h265d_ref_pic_list_elem_t ref_list[][16], const h265d_neighbour_t& neighbour, int lx, int refpoc) {
+	if (!neighbour.pu_intra) {
+		for (int l = 0; l < 2; ++l) {
+			if ((0 <= neighbour.pred.ref_idx[lx]) && (refpoc == ref_list[lx][neighbour.pred.ref_idx[lx]].poc)) {
+				return neighbour.pred.mvd[lx];
+			}
+			lx ^= 1;
+		}
+	}
+	return 0;
+}
+
+static bool mvp_spatial(const h265d_ref_pic_list_elem_t ref_list[][16], const temporal_mvscale_index_t& tmvscale, uint32_t unavail, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int width, int height, int lx, int ref_idx, int16_t mvp[][2], int& mvplist_idx) {
+	int refpoc = ref_list[lx][ref_idx].poc;
+	const int16_t* mv;
+	width >>= 2;
+	height >>= 2;
+	if (!(unavail & 4) && (mv = find_spatial_mvp(ref_list, left[height], lx, refpoc))) {
+		put_mvp(mv, mvp, mvplist_idx);
+	} else if (!(unavail & 1) && (mv = find_spatial_mvp(ref_list, left[height - 1], lx, refpoc))) {
+		put_mvp(mv, mvp, mvplist_idx);
+	} else {
+		if ((unavail & 4) || !find_spatial_mvp_scale(ref_list, tmvscale, left[height], lx, ref_idx, mvp, mvplist_idx)) {
+			if ((unavail & 1) || find_spatial_mvp_scale(ref_list, tmvscale, left[height - 1], lx, ref_idx, mvp, mvplist_idx)) {
 			}
 		}
-		lx_i ^= 1;
 	}
-	skip2nd = true;
-	return 0;
-}
-
-static const int16_t* mvp_one_dir(h265d_ctu_t& ctu, uint32_t unavail, const h265d_neighbour_t* neighbour, const h265d_neighbour_t* lefttop, int span, int lx, int ref_idx, int16_t mvp[][2], int16_t mvp2nd[], int& mvplist_idx, bool& skip2nd) {
-	uint32_t dir_flag = lefttop ? (unavail >> 1) : unavail;
-	int refpoc = ctu.slice_header->body.ref_list[lx][ref_idx].poc;
-	bool match2nd = false;
-	span >>= 2;
-	if (!(dir_flag & 4)) {
-		const int16_t* mv = find_spatial_mvp(ctu, neighbour[span], lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
-		if (mv) {
-			return mv;
+	if (!(unavail & 8) && (mv = find_spatial_mvp(ref_list, top[width], lx, refpoc))) {
+		put_mvp(mv, mvp, mvplist_idx);
+	} else if (!(unavail & 2) && (mv = find_spatial_mvp(ref_list, top[width - 1], lx, refpoc))) {
+		put_mvp(mv, mvp, mvplist_idx);
+	} else if (!(unavail & 3) && (mv = find_spatial_mvp(ref_list, lefttop, lx, refpoc))) {
+		put_mvp(mv, mvp, mvplist_idx);
+	}
+	if (((unavail & 4) || (left[height].pu_intra)) && ((unavail & 1) || (left[height - 1].pu_intra))) {
+		if ((unavail & 8) || !find_spatial_mvp_scale(ref_list, tmvscale, top[width], lx, ref_idx, mvp, mvplist_idx)) {
+			if ((unavail & 2) || !find_spatial_mvp_scale(ref_list, tmvscale, top[width - 1], lx, ref_idx, mvp, mvplist_idx)) {
+				if ((unavail & 3) || find_spatial_mvp_scale(ref_list, tmvscale, lefttop, lx, ref_idx, mvp, mvplist_idx)) {
+				}
+			}
 		}
 	}
-	if (!(dir_flag & 1)) {
-		const int16_t* mv = find_spatial_mvp(ctu, neighbour[span - 1], lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
-		if (mv) {
-			return mv;
-		}
+	if ((mvplist_idx == 2) && (memcmp(mvp[0], mvp[1], sizeof(mvp[0])) == 0)) {
+		mvplist_idx = 1;
 	}
-	if (lefttop && !(unavail & 3)) {
-		const int16_t* mv = find_spatial_mvp(ctu, *lefttop, lx, refpoc, ref_idx, mvp, mvplist_idx, mvp2nd, skip2nd, match2nd);
-		if (mv) {
-			return mv;
-		}
-	}
-	if (match2nd) {
-		return mvp2nd;
-	}
-	return 0;
+	return false;
 }
 
 static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, const h265d_neighbour_t* left, const h265d_neighbour_t* top, const h265d_neighbour_t& lefttop, int lx, int ref_idx, int mvp_idx, const int16_t mvd[], const h265d_neighbour_t* col, int16_t mvxy[]) {
@@ -3825,13 +3831,10 @@ static void calc_mv(h265d_ctu_t& ctu, uint32_t unavail, int width, int height, c
 	pred_info_t pred;
 	bool skip2nd = false;
 	const int16_t* mvp;
-	mvp = mvp_one_dir(ctu, unavail, left, 0, height, lx, ref_idx, mvplist, mvp2nd, mvp_num, skip2nd);
-	if (!mvp || !add_mvp(mvp, mvplist, mvp_idx, mvp_num)) {
-		mvp = mvp_one_dir(ctu, unavail, top, &lefttop, width, lx, ref_idx, mvplist, mvp2nd, mvp_num, skip2nd);
-		if (!mvp || !add_mvp(mvp, mvplist, mvp_idx, mvp_num)) {
-			if (!col || !add_colpic_candidate(ctu, pred, col, lx, ref_idx) || !add_mvp(pred.mvd[(0 <= pred.ref_idx[lx]) ? lx : lx ^ 1], mvplist, mvp_idx, mvp_num)) {
-				memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
-			}
+	mvp_spatial(ctu.slice_header->body.ref_list, ctu.colpics.tmv_scale(), unavail, left, top, lefttop, width, height, lx, ref_idx, mvplist, mvp_num);
+	if (mvp_num <= mvp_idx) {
+		if (!col || !add_colpic_candidate(ctu, pred, col, lx, ref_idx) || !add_mvp(pred.mvd[(0 <= pred.ref_idx[lx]) ? lx : lx ^ 1], mvplist, mvp_idx, mvp_num)) {
+			memset(mvplist[mvp_num], 0, sizeof(mvplist[mvp_num]) * (2 - mvp_num));
 		}
 	}
 	mvxy[0] = static_cast<int16_t>(mvd[0] + mvplist[mvp_idx][0]);
