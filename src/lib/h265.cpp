@@ -4969,7 +4969,7 @@ static int force_peek_decoded_frame(h265d_dpb_t& dpb) {
 static void force_pop_dpb(h265d_dpb_t& dpb) {
 	int size = dpb.size;
 	if (0 < size) {
-		memmove(&dpb.data[0], &dpb.data[1], sizeof(dpb.data[0]) * size);
+		memmove(&dpb.data[0], &dpb.data[1], sizeof(dpb.data[0]) * (size - 1));
 		dpb.size = size - 1;
 		dpb.output = -1;
 	}
