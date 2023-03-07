@@ -88,9 +88,17 @@ static inline unsigned long long gettimer() {
 
 #elif defined(__GNUC__)
 
-static inline unsigned long long gettimer() {
-	unsigned long long ret;
+static inline uint64_t gettimer() {
+	uint64_t ret;
+#if defined(__x86_64__) || defined(__amd64__)
+	uint64_t low, high;
+	__asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+	ret = (high << 32) | low;
+#elif defined(__i386__)
 	__asm__ volatile ("rdtsc" : "=A" (ret));
+#elif defined(__aarch64__)
+	asm volatile("mrs %0, cntvct_el0" : "=r"(ret));
+#endif
 	return ret;
 }
 

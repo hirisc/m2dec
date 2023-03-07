@@ -34,7 +34,7 @@ public:
 		WRITE_RAW
 	} write_type;
 	FileWriter() : fo_(0) {}
-	~FileWriter() {
+	virtual ~FileWriter() {
 		if (fo_) {
 			fclose(fo_);
 		}

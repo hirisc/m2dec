@@ -16,6 +16,7 @@ extern const m2d_func_table_t * const h265d_func;
 
 #include "mpeg_demux.h"
 #include <deque>
+#include <exception>
 
 typedef m2d_frame_t Frame;
 

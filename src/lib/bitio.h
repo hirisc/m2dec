@@ -30,9 +30,6 @@ extern "C" {
 #endif
 
 #include <setjmp.h>
-#ifdef __GNUC__
-#include "config.h"
-#endif
 #include "m2types.h"
 
 typedef uintptr_t cache_t;

@@ -15,7 +15,7 @@
 #ifdef __GNUC__
 #include <stdint.h>
 #endif
-
+#include "config.h"
 #include "unithread.h"
 
 #define NELEM(a) (sizeof(a) / sizeof(a[0]))
@@ -362,6 +362,7 @@ private:
 	}
 };
 
+#if defined(__i386__) || defined(__x86_64__) || defined(__amd64__)
 #include <emmintrin.h>
 
 void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int width, int height) {
@@ -386,20 +387,33 @@ void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int width, int h
 		dst1 += width;
 	} while (--height);
 }
+#else
+void deinterleave(const uint8_t *src, uint8_t *dst, int stride, int width, int height) {
+	const int8_t* s0 = reinterpret_cast<const int8_t*>(src);
+	int dst_width = width >> 1;
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < dst_width; ++x) {
+			dst[width * y + x] = s0[stride * y + x * 2];
+			dst[width * y + x + dst_width] = s0[stride * y + x * 2 + 1];
+		}
+	}
+}
+#endif
 
 const int FILE_READ_SIZE = 65536 * 2;
 const int IBUFNUM = 3;
 
-static void BlameUser() {
+static void BlameUser(const char arg0[]) {
 	fprintf(stderr,
-		"Usage: srview [-m] [-o] [-r] [-t interval] infile [infile ...]\n"
+		"Usage: %s [-m] [-o] [-r] [-t interval] infile [infile ...]\n"
 		"\t-m : outfile(MD5)\n"
 		"\t-o : outfile(Raw)\n"
 		"\t-r : repeat\n"
 		"\t-l : log dump\n"
 		"\t-f frame_num(3-256) : specify number of frames before display.\n"
 		"\t-e : DPB emptify mode\n"
-		"\t-t interval : specify interval of each frame in ms unit\n");
+		"\t-t interval : specify interval of each frame in ms unit\n",
+		arg0);
 	exit(1);
 }
 
@@ -483,7 +497,7 @@ struct Options {
 			case 'f':
 				outbuf_ = strtoul(optarg, 0, 0);
 				if (253U < (unsigned)(outbuf_ - 3)) {
-					BlameUser();
+					BlameUser(argv[0]);
 				}
 				break;
 			case 'l':
@@ -505,12 +519,12 @@ struct Options {
 				}
 				break;
 			default:
-				BlameUser();
+				BlameUser(argv[0]);
 				/* NOTREACHED */
 			}
 		}
 		if (argc <= optind) {
-			BlameUser();
+			BlameUser(argv[0]);
 			/* NOTREACHED */
 		}
 		do {
